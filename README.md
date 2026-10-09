@@ -1,59 +1,53 @@
-# Skillforge
+# ARC-AGI-3 Model
 
-A reusable GitHub repository template for skill-driven agentic software development.
+Research workspace for **agents that learn to act in previously unseen ARC-AGI-3 games**. The central question is whether an action-conditioned world model can be adapted from a few real interactions, then used for inexpensive imagined rollouts, planning, or policy improvement.
 
-Skillforge separates responsibilities deliberately: `AGENTS.md` owns repository-wide invariants/routing; `skills/` owns reusable procedure; project documentation owns durable project knowledge; `wiki/` is optional derived non-normative memory; and GitHub issues own bounded execution contracts/actionable findings.
+This is an **early-stage research repository**, not yet a trained model, a working agent, or a Kaggle-ready submission. Architecture choices and performance claims remain hypotheses until supported by tests.
 
-## Starting a project
+## Research objective
 
-A repository created from this template runs `skills/repository-bootstrap/SKILL.md` once before normal non-trivial work. Bootstrap verifies the required workflow labels (including `queued` for epic children), replaces this template README with the actual project's README, adapts project-specific AGENTS invariants, hard-checks its narrow publication boundary, commits initialization atomically to default branch, and removes itself. Local runner setup is opt-in and happens only as a separate post-bootstrap handoff.
+1. Pretrain reusable visual/state representations and action-conditioned dynamics on public and/or procedurally generated games.
+2. For a new game, collect allowed `(observation, action, next_observation)` transitions and adapt a **per-game** model without privileged access to that game's rules.
+3. Evaluate candidate actions by planning or training policies on imagined trajectories, execute real actions conservatively, and correct the model using new observations.
+4. Compare against identical-information baselines without online updates or without imagination. Measure solved levels, action efficiency, generalization to held-out games, prediction error, and compute time.
 
-The canonical `murillo128/skillforge` template retains bootstrap and must never bootstrap or provision a repository runner against itself.
+JEPA-style representations, Dreamer-style latent dynamics, planning algorithms, and model-update strategies are **candidates to compare**, not assumptions about implemented code. In particular, do not train the world model on its own unverified predictions as though they were real transitions.
 
-## Issue workflow automation
+## Official dependencies and external references
 
-Skillforge uses one public issue-state dispatcher: `.github/workflows/codex-issue-state.yml`. It is the only workflow that reacts to `issues:labeled` and routes state transitions to reusable internal workflows:
+- [ARC-AGI Python SDK](https://github.com/arcprize/ARC-AGI) — game API, offline/local environment execution, scoring semantics.
+- [ARC-AGI-3 Agents](https://github.com/arcprize/ARC-AGI-3-Agents) — reference agent interfaces and execution utilities.
+- [ARC-AGI-3 Kaggle Starter](https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter) — reference notebook packaging and competition submission workflow.
+- [ARC-AGI-3 Kaggle competition](https://www.kaggle.com/competitions/arc-prize-2026-arc-agi-3) — canonical submission rules and evaluation constraints.
 
-- `execution-ready` launches/resumes the controlling issue through `.github/workflows/codex-execute-ready.yml` for native/explicit Codex, or `.github/workflows/devin-execute-ready.yml` for explicitly selected local Devin;
-- `review-ready` launches an isolated exact-head Codex PR audit through `.github/workflows/codex-review-ready.yml`, regardless of implementation executor;
-- `completed` or deliberately restored `queued` on an epic child wakes the unique active parent whose canonical DAG contains that child.
+Prefer the SDK as a **versioned dependency** rather than vendoring a Starter repository into the research code. Keep Kaggle-specific code at the submission boundary.
 
-Both executors and the auditor use the repository self-hosted runner labeled `codex`; this is a physical host label, not an executor selection. Codex uses the App Server already shared with Desktop Remote Control; local Devin uses its installed CLI in isolated tmux sessions. The dispatcher itself may run on GitHub-hosted infrastructure for control-plane routing.
+## Current repository state
 
-Local runner infrastructure is optional. Without a matching self-hosted runner, the template remains valid but execution/audit jobs cannot run locally. `skills/codex-local-runner/SKILL.md` installs or repairs the repository-scoped runner only when explicitly requested; it never creates API keys or exposes inbound services. Local Devin prerequisites belong to `skills/devin-local-runner/SKILL.md`.
+The repository was initialized from **Skillforge** and retains its issue/PR/review workflow infrastructure (see [AGENTS.md](AGENTS.md) and [skills/](skills/)). There is **no agent implementation or experiment runner yet**. Do not interpret planned module names as existing source files.
 
-The same dispatcher handles issue closure by removing only the closed issue's registered implementation worktree and its associated detached PR-review worktrees, after active audit locks release. Branch refs are retained. This local cleanup is skipped in canonical SkillForge, which has no provisioned local runner; initialized repositories retain it.
+The first implementation milestone should deliver a minimal, deterministic local agent and environment adapter before introducing a trainable world model:
 
-## Epic DAG execution
+- Package/setup for Python 3.12 and the official `arc-agi` SDK, with local game setup documented.
+- A small adapter that exposes observations, legal actions, level state, and transition recording without using private game implementation details.
+- An executable baseline agent and a reproducible smoke test on public games, with fixed seeds and action budgets.
+- Unit and integration checks, plus a clear split between public training games and held-out validation games.
+- Only then: online dynamics adaptation, imagined planning/policy learning, performance benchmarks, and Kaggle notebook generation.
 
-An epic is designed as a small parent seed plus self-contained child issues. The parent seed declares `execution_mode: epic-dag`, a child issue list, a parallelism limit, and optionally an integration branch. **The DAG is not pre-generated during design.**
+Each milestone should be tracked as a bounded GitHub issue and integrated via the existing Skillforge review process.
 
-On the parent's first scheduler execution, `skills/codex-epic-scheduler/SKILL.md` reads all child contracts, derives the minimal direct dependency graph and serialization mutexes, validates it, initializes the integration branch when needed, and persists one canonical `codex-epic-dag:v1` parent comment. The parent then becomes `in-progress` and the scheduler activates the first deterministic dependency-ready wave.
+## Local development prerequisites
 
-Later wake-ups reconstruct state from GitHub labels plus that canonical graph. Selected children receive canonical execution context (epic, integration branch, exact base SHA) before moving from `queued` to `execution-ready`.
+Use **Python 3.12**, a virtual environment, and the official [`arc-agi` package](https://pypi.org/project/arc-agi/) for SDK experiments. CUDA/PyTorch and GPU acceleration are optional until an actual trainable model is added. Development should remain testable on a CPU, RTX 4070 Ti (12 GB), or RTX A4500 (20 GB); future Kaggle hardware should not be hard-coded into model logic.
 
-When every declared child is `completed`, the scheduler no longer stops with an indefinitely `in-progress` parent. It preserves the canonical epic integration branch, uses the ordinary parent branch `codex/issue-<parent>` as a finalization/staging branch, combines the current default branch with the completed epic result, creates or reuses one PR from that branch to the default branch, and hands the parent to `review-ready`. The scheduler still does not perform independent review or merge.
+Local games can be exercised through the SDK, after downloading the publicly available environment files according to its documentation. This repository does not yet provide its own `make play` or `train` command.
 
-## Review and completion
+## Evaluation and reproducibility
 
-Ordinary executors stop at a ready PR plus `review-ready`. The final review is performed in a fresh isolated audit context through `codex-pr-audit`/`codex-independent-review`. A positive final-capable exact-head audit has standing authority to merge that exact head, expose `completed`, and close the controlling issue. Audit failure returns the issue to execution; integration drift returns it for reconciliation without fabricating a technical failure.
+Separate **real environment steps** (scarce and potentially scored) from **imagined model steps** (compute-limited). Keep a per-game state and replay buffer, and explicitly define reset semantics for offline experiments versus competition runs. Maintain fixed seeds, SDK versions, recorded configuration, action counts, total wall-clock time, and evidence for comparative claims.
 
-The same audit path closes an epic's final aggregate PR. Because the finalization branch follows the normal `codex/issue-N` convention, no special auditor or separate merge mechanism is required.
+Do not use private/hidden games for training, do not inspect source code as an agent shortcut, and do not commit game caches, credentials, model weights, large generated datasets, or notebooks created for submission. Recheck official Kaggle rules before each submission, as competition constraints can change.
 
-## Optional derived wiki
+## Repository workflow
 
-`skills/repository-wiki-curation/SKILL.md` maintains optional `wiki/**` derived from repository/GitHub evidence. The wiki is non-normative. The curator may publish only `wiki/**` directly to default branch after adversarial review and a fail-closed path boundary; actionable discrepancies go to GitHub issues labeled `curator-detected`.
-
-The core template remains generic. Project truth belongs in each repository created from it.
-
-## Execution runners and regression checks
-
-Epic/issue execution supports native Codex selection and explicitly selected local Devin, with independent fresh Codex audit. See [execution runners](docs/execution-runners.md) and [Codex operating policy](docs/codex-operations.md). Runner provisioning is opt-in and is never performed inside canonical SkillForge.
-
-Run offline regressions with Python 3.11+ and tmux:
-
-```sh
-REQUIRE_TMUX_TEST=1 python3 -m unittest discover -s .github/scripts -p "test_*.py" -v
-```
-
-These tests use temporary Git worktrees and fake model clients, not paid model calls or production runners. Import provenance is recorded in `.github/epic-sync-provenance.json`; the README also updates existing routing descriptions for both executors.
+Read [AGENTS.md](AGENTS.md) for repository-wide invariants and the issue-driven implementation/review process. Local runner provisioning is optional and is **not part of this initialization**.

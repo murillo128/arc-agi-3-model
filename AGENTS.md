@@ -8,16 +8,6 @@ The project's durable mission and product/domain scope belong in `README.md` and
 
 This file owns repository-wide agent invariants and routes work to reusable skills. Skills define reusable procedure, issues define bounded task contracts, and repository documents define durable project knowledge.
 
-## One-time template bootstrap
-
-This section exists only in the canonical Skillforge template and repositories not yet initialized.
-
-- Never execute `repository-bootstrap` inside canonical `murillo128/skillforge` itself.
-- In a repository created from this template, presence of `skills/repository-bootstrap/SKILL.md` means initialization is incomplete.
-- Before normal non-trivial project work, run that skill once with actual mission/scope/established constraints.
-- Successful bootstrap creates/verifies required labels, makes README project-specific, adapts project invariants, deletes bootstrap skill, and removes this section/routing entry.
-- Local Codex runner provisioning is optional and is a separate post-bootstrap capability.
-
 ## Load context progressively
 
 For non-trivial work start with `AGENTS.md` and the controlling issue. Then load only accepted decisions/spec sections, source/tests/config/evidence, and the one workflow skill needed by the current role/action. Do not preload every document, skill, issue/PR history, result directory, or derived wiki.
@@ -43,7 +33,6 @@ Do not promote `OPEN`, `SPECULATIVE`, exploratory, or wiki-derived statements in
 
 Load skills lazily by role:
 
-- one-time initialization: `skills/repository-bootstrap/SKILL.md`;
 - optional local runner provisioning/repair: `skills/codex-local-runner/SKILL.md`;
 - design authority: `skills/design-github-issue/SKILL.md`;
 - ordinary issue executor: `skills/spec-driven-codex-loop/SKILL.md`;
@@ -117,9 +106,15 @@ Keep evidence proportional. Commit source, tests, configuration, small determini
 - Replacing `in-progress` with `review-ready` is the executor's final GitHub mutation. Afterward only local teardown/bookkeeping/response composition is allowed until another controller returns it to execution.
 - Outside the positive `codex-pr-audit` path, merge requires a later explicit user-facing instruction after review finds no material blocker.
 
-## Project-specific additions
+## Project-specific invariants
 
-Repositories created from the template should add only genuine domain-specific repository-wide invariants: language/runtime/coding constraints, ownership/lifetime/concurrency/security invariants, required validation paths, dependency/licensing constraints, hardware requirements, correctness/performance hard failures, or explicit planning authority. Keep reusable procedure in skills and task detail in issues.
+- The project studies model-based agents for **ARC-AGI-3**, especially learning the dynamics of previously unseen interactive games from a small number of real actions. World-model architectures (including JEPA-like representation learning, Dreamer-like imagination, online adaptation, and planning) are research hypotheses rather than implemented features or mandatory design decisions.
+- Use the official `arc-agi` SDK as the source of truth for game observations, actions, game/level lifetime, scoring, and competition restrictions. Preserve a thin boundary between the environment adapter and the learning/planning code. Pin and test the SDK interface before relying on it.
+- Protect evaluation integrity: distinguish public games, synthetic training games, and held-out games. Do not use private/hidden evaluation data or privileged internal game rules to inform an evaluated agent. The agent must infer unknown rules from observations and allowed interactions, not read environment implementation code at evaluation time.
+- Real environment transitions are ground truth for updating a world model. Model-generated imagined trajectories may support planning or policy learning, but must not be silently treated as verified real transitions. Report world-model prediction quality separately from game completion, action efficiency, compute cost, and wall-clock limits.
+- Keep research code, experiments, and tests in conventional versioned Python source. Kaggle notebooks are generated deployment artifacts, not the primary source of business logic. Competition mode must never depend on internet access or local-only files; test the packaging boundary before submitting.
+- Target Python 3.12 for SDK/Kaggle compatibility unless a verified official dependency update changes that requirement. Any GPU-specific optimization must offer a testable CPU/smaller-GPU path; do not assume access to Kaggle accelerators during development.
+- Do not commit game caches, third-party restricted game sources, training recordings containing sensitive material, model checkpoints, Kaggle tokens, credentials, large datasets, generated notebooks, or other bulky runtime artifacts. Keep them in ignored local paths or approved artifact storage and honor upstream licenses.
 ## Executor selection and terminal worktree cleanup
 
 Use `skills/execution-runner-selection/SKILL.md` for executor selection and `docs/execution-runners.md` for its contract. Native Codex remains the default; optional local Devin prerequisites belong to `skills/devin-local-runner/SKILL.md`. `docs/codex-operations.md` owns Codex model/effort/profile selection. Each parent/child selects independently. Configuration edits do not activate issues, release holds or migrate active sessions; final audit remains fresh independent Codex.
