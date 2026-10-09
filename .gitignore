@@ -27,3 +27,7 @@ datasets/
 kernel-metadata.json
 *.arc3
 .*arc3-*.tmp
+viewer/node_modules/
+viewer/.fixtures/
+viewer/test-results/
+viewer/playwright-report/
