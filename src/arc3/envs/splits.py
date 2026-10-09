@@ -16,14 +16,13 @@ def load_split(path: str | Path) -> GameSplit:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("Split configuration must be an object")
-    training = data.get("training")
-    evaluation = data.get("evaluation")
-    if not isinstance(training, dict) or not isinstance(evaluation, list):
-        raise ValueError("Split needs a training game-to-level-cap object and evaluation list")
+    training = data.get("training_games")
+    evaluation = data.get("evaluation_games")
+    caps = data.get("training_level_caps")
+    if not isinstance(training, list) or not isinstance(evaluation, list) or not isinstance(caps, dict):
+        raise ValueError("Split needs training_games, evaluation_games and training_level_caps")
     if not training or not evaluation:
         raise ValueError("Both game splits must be nonempty")
-    if any(type(cap) is not int or cap <= 0 for cap in training.values()):
-        raise ValueError("Every training game needs a positive integer level cap")
     seen = set()
     for game_id in [*training, *evaluation]:
         if not isinstance(game_id, str) or not re.fullmatch(r"[a-z0-9]{4}(?:-[a-z0-9]+)?", game_id):
@@ -32,4 +31,6 @@ def load_split(path: str | Path) -> GameSplit:
         if base_id in seen:
             raise ValueError(f"Game split overlap or duplicate: {base_id}")
         seen.add(base_id)
-    return GameSplit(training, tuple(evaluation))
+    if any(type(caps.get(game_id)) is not int or caps[game_id] <= 0 for game_id in training):
+        raise ValueError("Every training game needs a positive integer level cap")
+    return GameSplit({game_id: caps[game_id] for game_id in training}, tuple(evaluation))

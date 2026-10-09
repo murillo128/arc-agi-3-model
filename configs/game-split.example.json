@@ -1,4 +1,0 @@
-{
-  "training": {"ls20": 1},
-  "evaluation": ["ft09", "vc33"]
-}

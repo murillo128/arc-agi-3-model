@@ -11,6 +11,12 @@ from arc3.envs.sdk import SDK_VERSION
 
 COMPETITION = "arc-prize-2026-arc-agi-3"
 INPUT_ROOT = f"/kaggle/input/competitions/{COMPETITION}"
+ACCELERATORS = {
+    "cpu": ("none", False),
+    "t4": ("nvidiaTeslaT4", True),
+    "p100": ("nvidiaTeslaP100", True),
+    "rtx6000": ("nvidiaRtx6000", True),
+}
 
 
 def code_cell(source: str) -> dict:
@@ -18,9 +24,12 @@ def code_cell(source: str) -> dict:
             "outputs": [], "source": source}
 
 
-def build_notebook(seed: int = 0, max_actions: int = 80) -> dict:
+def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu") -> dict:
     if max_actions <= 0:
         raise ValueError("max_actions must be positive")
+    if accelerator not in ACCELERATORS:
+        raise ValueError(f"Unsupported accelerator: {accelerator}")
+    accelerator_name, uses_gpu = ACCELERATORS[accelerator]
     sources = {
         "arc3/__init__.py": "",
         "arc3/core/__init__.py": "",
@@ -104,8 +113,8 @@ def build_notebook(seed: int = 0, max_actions: int = 80) -> dict:
         "metadata": {
             "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
             "language_info": {"name": "python", "version": "3.12"},
-            "kaggle": {"isInternetEnabled": False, "isGpuEnabled": False,
-                       "accelerator": "none", "language": "python", "sourceType": "notebook"},
+            "kaggle": {"isInternetEnabled": False, "isGpuEnabled": uses_gpu,
+                       "accelerator": accelerator_name, "language": "python", "sourceType": "notebook"},
         },
         "cells": [
             {"cell_type": "markdown", "metadata": {}, "source": (
@@ -123,6 +132,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default="artifacts/submission.ipynb")
     parser.add_argument("--username", help="Explicit Kaggle handle; enables kernel metadata generation")
+    parser.add_argument("--accelerator", choices=sorted(ACCELERATORS), default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-actions", type=int, default=80)
     args = parser.parse_args()
@@ -133,14 +143,14 @@ def main() -> None:
         parser.error("--username must be a nonempty Kaggle handle without a slash")
     if args.max_actions <= 0:
         parser.error("--max-actions must be positive")
-    notebook = build_notebook(args.seed, args.max_actions)
+    notebook = build_notebook(args.seed, args.max_actions, accelerator=args.accelerator)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
     if args.username is not None:
         metadata = {
             "id": f"{args.username}/arc3-random-baseline", "title": "ARC-AGI-3 random baseline",
             "code_file": output.name, "language": "python", "kernel_type": "notebook",
-            "is_private": True, "enable_gpu": False, "enable_tpu": False,
+            "is_private": True, "enable_gpu": ACCELERATORS[args.accelerator][1], "enable_tpu": False,
             "enable_internet": False, "dataset_sources": [], "kernel_sources": [],
             "competition_sources": [COMPETITION], "model_sources": [],
         }

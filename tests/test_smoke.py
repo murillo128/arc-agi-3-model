@@ -8,12 +8,15 @@ import importlib.util
 import inspect
 import io
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from importlib.metadata import version
+from importlib.resources import files
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -91,16 +94,20 @@ class SmokeTests(unittest.TestCase):
 
     def test_split_rejects_overlap_version_aliases_and_missing_caps(self):
         cases = [
-            ({"training": {"ls20": 1}, "evaluation": ["ft09"]}, True),
-            ({"training": {"ls20": 1}, "evaluation": ["ls20"]}, False),
-            ({"training": {"ls20-abc": 1}, "evaluation": ["ls20-def"]}, False),
-            ({"training": {"ls20": 0}, "evaluation": ["ft09"]}, False),
-            ({"training": {"ls20": True}, "evaluation": ["ft09"]}, False),
-            ({"training": ["ls20"], "evaluation": ["ft09"]}, False),
+            (["ls20"], ["ft09"], {"ls20": 1}, True),
+            (["ls20"], ["ls20"], {"ls20": 1}, False),
+            (["ls20"], ["ls20-9607627b"], {"ls20": 1}, False),
+            (["ls20-9607627b"], ["ls20"], {"ls20-9607627b": 1}, False),
+            (["ls20-abc"], ["ls20-def"], {"ls20-abc": 1}, False),
+            (["ls20"], ["ft09"], {"ls20": 0}, False),
+            (["ls20"], ["ft09"], {"ls20": True}, False),
+            (["ls20"], ["ft09"], {}, False),
         ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "split.json"
-            for config, valid in cases:
+            for training, evaluation, caps, valid in cases:
+                config = {"training_games": training, "evaluation_games": evaluation,
+                          "training_level_caps": caps}
                 with self.subTest(config=config):
                     path.write_text(json.dumps(config))
                     if valid:
@@ -132,7 +139,8 @@ class SmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             split = root / "split.json"
-            split.write_text(json.dumps({"training": {"ls20": 1}, "evaluation": ["ft09"]}))
+            split.write_text(json.dumps({"training_games": ["ls20"], "evaluation_games": ["ft09"],
+                                         "training_level_caps": {"ls20": 1}}))
             recording = root / "train.jsonl"
             train_arcade = ScriptedArcade({"ls20": [public_frame(), public_frame(pixel=2),
                                                     public_frame(levels=1, pixel=9)]})
@@ -233,6 +241,26 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(settings["id"], "example-user/arc3-random-baseline")
             self.assertEqual(settings["competition_sources"], ["arc-prize-2026-arc-agi-3"])
             self.assertFalse(settings["enable_gpu"] or settings["enable_internet"])
+
+    def test_notebook_cli_from_installed_package_layout(self):
+        # Exercise relocation and the default output without build tools/network.
+        # A separate built-wheel check verifies actual distribution contents.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            installation = root / "site-packages"
+            shutil.copytree(Path(files("arc3")), installation / "arc3",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            working = root / "working"
+            working.mkdir()
+            process = subprocess.run(
+                [sys.executable, "-m", "arc3.kaggle.build", "--accelerator", "cpu"],
+                cwd=working, env={**os.environ, "PYTHONPATH": str(installation)},
+                capture_output=True, text=True, check=True,
+            )
+            output = working / "artifacts/submission.ipynb"
+            self.assertIn("artifacts/submission.ipynb", process.stdout)
+            self.assertEqual(json.loads(output.read_text())["nbformat"], 4)
+            self.assertFalse(output.with_name("kernel-metadata.json").exists())
 
 
 if __name__ == "__main__":

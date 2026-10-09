@@ -36,23 +36,26 @@ python3.12 -m venv .venv
 python -m pip install -e .
 ```
 
+Installation also provides `arc3-collect`, `arc3-evaluate`, and `arc3-build-kaggle` as equivalents of the module commands below. The optional `.[kaggle]` extra installs the Kaggle CLI for later manual use; generation does not require it.
+
 Local execution defaults to `--mode offline`, using public games previously provisioned in `environment_files/`. Obtain these through the [official SDK setup](https://github.com/arcprize/ARC-AGI#quick-start), honoring its license and access rules. With network access, `--mode normal` lets the SDK download and execute public games locally. The policy only sees public frame pixels, available actions, game state and level counts. Game caches remain ignored; do not use private games or inspect game rules to train/evaluate the agent.
 
 ## Game splits and transition collection
 
-Copy [configs/game-split.example.json](configs/game-split.example.json) and assign only authorized public games. The example holds out `ft09` and `vc33` from collection; these are public local evaluation games, not the competition's hidden set.
+Copy [configs/splits.example.json](configs/splits.example.json) and assign only authorized public games. The example holds out `ft09` and `vc33` from collection; these are public local evaluation games, not the competition's hidden set.
 
 ```json
 {
-  "training": {"ls20": 1},
-  "evaluation": ["ft09", "vc33"]
+  "training_games": ["ls20"],
+  "evaluation_games": ["ft09", "vc33"],
+  "training_level_caps": {"ls20": 1}
 }
 ```
 
-Both splits must be nonempty and disjoint, including version aliases such as `ls20` and `ls20-abc`. Each training value is a positive count of allowed levels, starting at level 1. Collection always reserves the game's last level as reported by public `win_levels`. Its effective cap is the smaller of the configured cap and `win_levels - 1`; an unknown count or a one-level game fails closed.
+Both splits must be nonempty and disjoint, including version aliases such as `ls20` and `ls20-abc`. Each `training_level_caps` value is a positive count of allowed levels, starting at level 1. Collection always reserves the game's last level as reported by public `win_levels`. Its effective cap is the smaller of the configured cap and `win_levels - 1`; an unknown count or a one-level game fails closed.
 
 ```sh
-python -m arc3.training.collect --split configs/game-split.example.json \
+python -m arc3.training.collect --split configs/splits.example.json \
   --seed 0 --max-actions 80 --output recordings/train.jsonl
 ```
 
@@ -63,7 +66,7 @@ This entrypoint collects data; it does not train weights. It prints a JSON run s
 ## Local evaluation without training
 
 ```sh
-python -m arc3.evaluation.run --split configs/game-split.example.json \
+python -m arc3.evaluation.run --split configs/splits.example.json \
   --seed 0 --max-actions 80 --output results/evaluation.json
 ```
 
@@ -78,7 +81,7 @@ python -m arc3.kaggle.build --seed 0 --max-actions 80 \
 
 The generated notebook embeds the actual `core/policy.py` source and the [official Agents interface](https://github.com/arcprize/ARC-AGI-3-Agents/blob/4743e7d0aaae0ded0d98a89a7e282e63564cd58b/agents/agent.py) adapter. It needs no repository checkout, local game cache or network dependency installation during competition execution. Following the [official Starter pattern](https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter/blob/eeb1535404f321d280a8f9194bbc1d7aca5f05fc/scripts/build_notebook.py), it installs from the competition's offline wheels, waits for the internal gateway on a competition rerun, and runs the supplied Agents framework. The gateway enforces competition restrictions and produces `submission.parquet`. During save-and-run, the notebook creates the starter's dummy parquet artifact; that artifact is not a measured score.
 
-The notebook uses CPU and disables internet. Attach the official `arc-prize-2026-arc-agi-3` competition input, which must provide the pinned `arc-agi==0.9.9` wheel and its dependencies plus the Agents framework at the starter's paths. Compatibility with Kaggle's current wheel bundle and gateway must be checked there before any submission; the local smoke suite does not validate those services. Per-game online adaptation is a future extension at `kaggle/agent.py`, with no updates in the baseline.
+The notebook defaults to CPU and disables internet. `--accelerator` can select `cpu`, `t4`, `p100`, or `rtx6000` without changing the shared policy. Attach the official `arc-prize-2026-arc-agi-3` competition input, which must provide the pinned `arc-agi==0.9.9` wheel and its dependencies plus the Agents framework at the starter's paths. Compatibility with Kaggle's current wheel bundle and gateway must be checked there before any submission; the local smoke suite does not validate those services. Per-game online adaptation is a future extension at `kaggle/agent.py`, with no updates in the baseline.
 
 Kernel metadata is generated **only** when a username is explicitly supplied:
 
@@ -98,7 +101,13 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 python -m compileall -q src tests
 ```
 
-The suite uses concrete pinned SDK frame/action types with scripted public responses to check action counts, real transitions, game splits, the reserved-level recording boundary, lifecycle output separation, notebook policy execution, and explicit-username metadata. It downloads no games, makes no network requests and requires no credentials. It does not establish live-game performance, framework/gateway integration, or end-to-end Kaggle success. The inherited `.github` workflows are unchanged; there is no new automatic application CI workflow.
+The suite uses concrete pinned SDK frame/action types with scripted public responses to check action counts, real transitions, game splits, the reserved-level recording boundary, lifecycle output separation, notebook policy execution, explicit-username metadata, and notebook generation from an isolated installed-package layout. It downloads no games, makes no network requests and requires no credentials. It does not establish live-game performance, framework/gateway integration, or end-to-end Kaggle success. The inherited `.github` workflows are unchanged; there is no new automatic application CI workflow.
+
+## Training-policy alignment
+
+The accepted [two-phase training policy](docs/training-policy.md) reserves five complete public games for local evaluation using seed 42, plus the last level of each of the other 20 games. Final training must start from new random weights and use all 25 public games before independent Kaggle assessment.
+
+This scaffold accepts an explicit split and protects collection boundaries. It does not yet generate the complete 20/5 split, evaluate only reserved last levels, train a world model, or implement Phase 2 retraining from scratch. The example configuration is illustrative rather than the adopted full split.
 
 ## Evaluation and reproducibility
 
