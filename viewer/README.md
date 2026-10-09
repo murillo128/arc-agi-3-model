@@ -1,18 +1,61 @@
-# Browser .arc3 attempt loader
+# Browser .arc3 replay console
 
 This static Vite/TypeScript entry point loads the frozen [v1 format](../docs/arc3-format-v1.md)
 through a local file dialog, drag/drop, a submitted HTTP(S) URL, or an explicit
 `?file=<encoded-https-url>` deep-link. It requires no application backend, SDK,
 game execution, Python process, account, database, or proxy at runtime.
 
-The initial screen shows loading progress and recoverable errors. A validated
-attempt shows source/provenance, summary, action IDs/parameters and every recorded
-observation/frame. Pixels are presented as exact palette indices, including
-unknown values. The compact pixel preview displays at most 32 × 32 indices;
-the decoder retains complete BIN data and all frames. Observation 0 is the initial
-observation; observation 1 is step 0's result. Frame indices are zero-based.
-Long text previews are marked as truncated; decoded text remains intact.
-This entry point is a loader, rather than a full diagnostic replay interface.
+The English replay console uses original magenta/purple arcade styling. A validated
+file supplies the game, attempt/session, step/action counts, terminal reason, SDK
+and model identifiers, source provenance and summary. The public completed-level
+counter is shown as recorded; it is not a hidden level ID. Summary counters may
+differ from the last persisted observation when an executed result was unavailable
+or intentionally excluded at a training boundary.
+
+`REAL OBSERVATION` renders the entire selected frame with Canvas 2D, using its
+actual height and width, nearest-neighbor display and the bundled SDK display
+palette. The adjacent thumbnail shows the **last frame of the pre-action
+observation**, not a prepended result frame. Unknown palette values use an explicitly
+labelled cyan fallback with their exact indices; raw bytes are preserved. A text
+readout exposes up to 32 × 32 exact indices. Empty sequences show an unavailable
+state and clear the old bitmap; they never borrow a previous image. Frames larger
+than 16,384 on either axis or 16 Mi pixels are explicitly refused by the bitmap
+renderer, without cropping; decode and the bounded text readout still work.
+Browser allocation failure is also reported.
+
+The timeline distinguishes **position 0** (initial observation), **position n**
+(result of action step `n − 1`) and a closing RESET boundary, when present.
+Action steps and frame indices are zero-based. Level/status markers use public
+counters and states. Scrub, jump, select an action, or use Previous/Next/Restart.
+The scrollable action history includes every recorded action with its actual
+`ACTION1`–`ACTION7` name, exact coordinate parameters and observation/terminal
+changes. Future recorded actions are dimmed, and the selection is highlighted.
+A closing executed RESET is labelled separately: its result belongs to the next
+attempt and is never fabricated in this file. A requested but unexecuted RESET
+has no action row. Counted actions without persisted results are explicitly noted.
+
+Episode playback visits each observation's ordered frames before moving to the
+next action, preserving repeated animation frames. Default pacing holds each
+last frame for one second; intermediate frames use the selected frame speed,
+scaled by episode playback speed. These are viewer settings, not measured SDK
+latencies. Play frames/Pause frames animates only the current observation and
+stops at its last frame. Seeking or manually selecting a frame pauses playback.
+Opening another file and hiding the browser tab also stop playback.
+
+With focus on the observation display or outside interactive controls, use
+Left/Right for previous/next, Space for play/pause, Home for restart and End for
+the final position. Native inputs, buttons and other interactive controls retain
+their normal keyboard behavior, with visible focus rings. The desktop layout
+stacks at narrow widths. Optional prediction, decision, learning, timing and notes
+panels show recorded fields for the selected action, or an unavailable state;
+no reward, diagnostics or synthetic game data are supplied by the production UI.
+
+The palette is the only reused SDK visual material, from
+[`COLOR_MAP` at the pinned SDK revision](https://github.com/arcprize/ARC-AGI/blob/f12822c4d550121c35a275008d964afbbed47d2f/arc_agi/rendering.py).
+Its MIT attribution/license is included in
+[`public/third-party-notices.txt`](public/third-party-notices.txt), which ships
+with the static build. CSS and icons are original; no game assets or mockup
+screenshots ship as renderers.
 
 ## Run and build
 
@@ -76,7 +119,7 @@ buffer, WASM heap and parsed objects also take space. Smaller files may be neede
 on memory-constrained devices. Each load uses a fresh worker, terminated on
 success, failure, cancellation, supersession or deadline, releasing its WASM heap.
 
-The sole runtime dependency is pinned `@bokuweb/zstd-wasm@0.0.27`, a WASM build of
+The sole package runtime dependency is pinned `@bokuweb/zstd-wasm@0.0.27`, a WASM build of
 upstream libzstd. Its [wrapper source](https://github.com/bokuweb/zstd-wasm/blob/87277ab93c2861d6c265a2ff43c7e7fb14d9a8c5/lib/simple/decompress.ts)
 and [build recipe](https://github.com/bokuweb/zstd-wasm/blob/87277ab93c2861d6c265a2ff43c7e7fb14d9a8c5/build.sh)
 were inspected for allocation, output-capacity, error handling and checksum use;
@@ -117,7 +160,7 @@ with Python before emitting ignored `.fixtures/` files. It does not regenerate
 the repository's independent golden. An undersized output buffer is rejected by
 libzstd; decoder error wording is not part of the wire contract.
 
-Playwright owns the real built browser/worker/WASM boundary: local file dialog,
+Playwright owns the real built browser/worker/WASM and Canvas boundary: local file dialog,
 drag/drop, sequence preservation, literal hostile text, user-gated URL success,
 HTTPS deep-link, actual CORS refusal, mocked network/HTTP/size failures,
 cancellation, supersession, empty frames and recovery. Its only server is Python's
@@ -126,3 +169,25 @@ success is a CORS-authorized mock fixture, not evidence that arbitrary remote
 hosts allow requests. No CI or push/PR test trigger is added. Run these focused
 tests when relevant format, codec, fixture or viewer files change, and for integrated
 acceptance; unrelated changes do not require viewer validation.
+
+`tests/replay.test.ts` owns replay chronology, separate action/frame indices,
+pre-action selection, frame playback and RESET accounting. `tests/replay.browser.ts`
+owns real Canvas RGBA assertions against literal SDK palette values, native frame
+sizes, empty results, selected-action synchronization, level/terminal markers,
+keyboard/focus behavior, playback timing/speed/pause and replacing a loaded file.
+The fixture generator produces only test-owned synthetic observations through
+the production Python v1 encoder. It never reads game implementation code.
+
+Two small committed Playwright PNG baselines in
+`tests/replay.browser.ts-snapshots/` capture the complete desktop (1440 × 1100
+viewport) and narrow (390 × 844 viewport) layouts. They were visually inspected
+for readable hierarchy, correct current/pre-action panels, selected history row,
+responsive wrapping, focus ring, timeline and unavailable model panels. Screenshot
+comparison runs alongside behavioral checks, with a fixed 100-pixel mismatch limit.
+The Linux baselines use Playwright 1.61.1's Chromium 149 headless shell and
+Liberation Mono. Other platforms/fonts may need a separately inspected baseline.
+Do not update snapshots simply to make a failed test pass. For an intentional
+visual change, generate candidates with `npm run test:browser -- --update-snapshots`,
+inspect the changed images, then run `npm run test:browser` **without** updating.
+Generated `.fixtures/`, `dist/`, browser binaries and test-result logs remain ignored
+or outside Git; the two compact visual fixtures are deliberate acceptance evidence.

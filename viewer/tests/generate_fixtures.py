@@ -196,7 +196,45 @@ add("extension-tag", raw_wire(b"\x81\xa1x\xd4\x01\x00"), error="extension")
 add("non-str-key", raw_wire(b"\x81\x01\xc0"), error="keys")
 change("nonfinite-number", ["summary", "wall_seconds"], float("inf"), "nonfinite")
 
+# Replay interaction fixtures are original synthetic public observations, not game assets.
+zero = deepcopy(baseline)
+zero["steps"] = []
+zero["summary"]["real_actions"] = 0
+zero["summary"]["wall_seconds"] = 0.0
+empty_result = deepcopy(baseline)
+empty_result["steps"][0]["observation"]["frames"] = {"dtype": "u8", "shape": [0, 0, 0], "data": b""}
+unexecuted_reset = deepcopy(zero)
+unexecuted_reset["termination"] = {"reason": "reset", "final_state": "NOT_FINISHED"}
+reset = deepcopy(multi)
+reset["termination"] = {"reason": "reset", "final_state": "NOT_FINISHED", "reset_action": {"id": 0, "data": {}}}
+reset["summary"]["real_actions"] = 2
+
+def scene(height, width, phase):
+    # Test-owned colored grid with a border and changing tiles; no privileged rules.
+    return bytes(5 if x in (0, width - 1) or y in (0, height - 1) else
+                 9 if (x + phase) % 4 == 0 else 11 if (x, y) == (phase + 2, 3) else
+                 15 if y % 3 == 0 else 1 for y in range(height) for x in range(width))
+
+replay = deepcopy(baseline)
+replay["initial_observation"]["frames"] = {"dtype": "u8", "shape": [1, 8, 12], "data": scene(8, 12, 0)}
+replay["steps"] = []
+for index, (action, level, state, count, height, width) in enumerate([
+    ({"id": 1, "data": {}}, 0, "NOT_FINISHED", 2, 8, 12),
+    ({"id": 6, "data": {"x": 9, "y": 4}}, 1, "NOT_FINISHED", 3, 6, 10),
+    ({"id": 7, "data": {}}, 2, "WIN", 1, 6, 10),
+]):
+    observation = deepcopy(baseline["initial_observation"])
+    observation.update({"levels_completed": level, "state": state, "available_actions": [] if state == "WIN" else [1, 6, 7]})
+    observation["frames"] = {"dtype": "u8", "shape": [count, height, width], "data": b"".join(scene(height, width, index + frame + 1) for frame in range(count))}
+    replay["steps"].append({"index": index, "action": action, "observation": observation})
+replay["termination"] = {"reason": "win", "final_state": "WIN"}
+replay["summary"].update({"real_actions": 3, "levels_completed": 2, "wall_seconds": 1.5})
+for name, payload in (("empty-result", empty_result), ("zero-step", zero), ("unexecuted-reset", unexecuted_reset), ("closing-reset", reset), ("replay-levels", replay)):
+    encoded = encode_attempt(payload)
+    decode_attempt(encoded)
+    (OUTPUT / f"{name}.arc3").write_bytes(encoded)
+
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)
-print(f"Generated {len(vectors)} Python-checked vectors and 3 synthetic .arc3 files in {OUTPUT}")
+print(f"Generated {len(vectors)} Python-checked vectors and 8 synthetic .arc3 files in {OUTPUT}")
