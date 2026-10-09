@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,22 @@ class Observation:
 class Action:
     id: int
     data: dict[str, int]
+
+
+class Policy(Protocol):
+    def choose_action(self, observation: Observation) -> Action: ...
+
+
+class DiagnosticPolicy(Policy, Protocol):
+    """Optional read-only trace hook, called after selection, before execution.
+
+    Return available .arc3 step groups (decision, prediction, learning, timing,
+    notes) as plain wire values. Do not update weights or invent diagnostics.
+    Prediction errors are computed from the real result by the recorder.
+    The random baseline deliberately does not implement this hook.
+    """
+
+    def trace_diagnostics(self, observation: Observation, action: Action) -> dict[str, Any]: ...
 
 
 class RandomPolicy:

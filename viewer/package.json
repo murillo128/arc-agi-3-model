@@ -1,0 +1,23 @@
+{
+  "name": "arc3-viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "fixtures": "\"${PYTHON:-python3.12}\" tests/generate_fixtures.py",
+    "test": "vitest run",
+    "test:browser": "playwright test"
+  },
+  "dependencies": { "@bokuweb/zstd-wasm": "0.0.27" },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@types/node": "22.19.15",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  }
+}

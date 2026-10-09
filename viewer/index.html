@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" /><title>ARC3 · Replay console</title>
+  </head>
+  <body>
+    <main>
+      <header class="masthead"><div><span class="eyebrow">ARC-AGI-3 / Recorded attempts</span><h1><span class="brand-mark" aria-hidden="true">▦</span> Replay console<span class="cursor" aria-hidden="true">_</span></h1></div><span class="badge">STATIC / LOCAL FIRST</span></header>
+      <section aria-label="Load an attempt" class="input-panel">
+        <div id="drop-zone" tabindex="0" role="button" aria-label="Drop a recording or choose a file">
+          <strong>Open a recording</strong><span>Drop a .arc3 file here</span>
+          <label class="file-button" for="file-input">Choose file</label><input id="file-input" type="file" accept=".arc3" />
+        </div>
+        <div class="url-loader"><form id="url-form"><label for="url-input">Recording URL</label><div class="url-row"><input id="url-input" type="url" placeholder="https://example.org/attempt.arc3" required /><button type="submit">Load URL</button></div></form>
+          <p class="hint">Local files stay on your device. Remote URLs require network access and CORS permission.</p></div>
+        <div class="load-state"><p id="status" role="status" aria-live="polite">Ready to open a recording.</p><button id="cancel" type="button" hidden>Cancel</button></div>
+        <progress id="progress" aria-label="File loading progress" hidden></progress><p id="error" role="alert" hidden></p>
+      </section>
+      <section id="result" aria-label="Validated attempt" hidden>
+        <header class="attempt-heading"><div><span class="eyebrow">Loaded attempt</span><h2 id="game-id"></h2><p id="attempt-identity"></p></div><div class="attempt-badges"><span id="version" class="badge"></span><span id="termination" class="badge"></span><span id="current-level" class="badge"></span></div></header>
+        <div id="attempt-summary" class="summary-strip"></div>
+        <details class="metadata-panel"><summary>File, SDK &amp; model identifiers</summary><dl id="metadata"></dl></details>
+        <div class="replay-layout">
+          <section class="panel observation-panel" aria-labelledby="real-title"><div class="panel-heading"><h3 id="real-title">REAL OBSERVATION</h3><span id="position-label"></span></div>
+            <div class="screen" tabindex="0" aria-label="Observation display. Arrow keys navigate; Space plays or pauses."><canvas id="observation-canvas" role="img" aria-label="Current real observation"></canvas></div><p id="canvas-message" class="empty-state"></p>
+            <p id="observation-info"></p>
+            <div class="frame-controls"><label for="frame-select">Frame (zero-based)</label><input id="frame-select" type="number" min="0" value="0" step="1" /><span id="frame-count"></span><button id="animate" type="button" aria-pressed="false">Play frames</button><label for="frame-speed">Frame speed</label><select id="frame-speed"><option value="2">2 fps</option><option value="6" selected>6 fps</option><option value="12">12 fps</option></select></div>
+            <div class="pre-action"><div class="thumbnail"><canvas id="previous-canvas" role="img" aria-label="Pre-action observation last frame"></canvas><p id="previous-message"></p></div><div><h4>PRE-ACTION OBSERVATION</h4><p id="previous-info"></p><p id="previous-palette-info" hidden></p><p id="action-info"></p></div></div>
+            <details class="raw-panel"><summary>Exact palette indices &amp; observation details</summary><pre id="pixels" aria-label="Exact palette indices"></pre></details>
+          </section>
+          <section class="panel history-panel" aria-labelledby="history-title"><div class="panel-heading"><h3 id="history-title">ACTION HISTORY</h3><span id="history-count"></span></div><p class="panel-hint">Select an action to inspect its recorded result.</p><ol id="action-history" aria-label="Recorded actions"></ol><p id="history-empty" class="empty-state" hidden>No actions were recorded. The initial observation is available.</p><p id="boundary-info" class="boundary-info"></p></section>
+        </div>
+        <section class="panel timeline-panel" aria-labelledby="timeline-title"><div class="panel-heading"><h3 id="timeline-title">EPISODE TIMELINE</h3><span id="timeline-position" aria-live="polite"></span></div>
+          <p id="sequence-info" class="panel-hint"></p><label class="sr-only" for="timeline">Timeline position</label><input id="timeline" type="range" min="0" max="0" step="1" value="0" /><div id="timeline-markers" aria-label="Step, level and status markers"></div>
+          <div class="transport"><button id="restart" type="button">↺ Restart</button><button id="previous" type="button">← Previous</button><button id="play" class="primary" type="button" aria-pressed="false">▶ Play episode</button><button id="next" type="button">Next →</button><label for="episode-speed">Playback speed</label><select id="episode-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select><label for="observation-select">Jump to position</label><input id="observation-select" type="number" min="0" value="0" step="1" /></div>
+          <p class="keyboard-hint">← / → previous / next · Space play / pause · Home restart · End last position. Interactive controls keep their own keys.</p>
+        </section>
+        <div class="diagnostics-grid">
+          <section class="panel"><h3>MODEL PREDICTION</h3><div class="diagnostic-screen"><canvas id="prediction-canvas" role="img" aria-label="Aligned model prediction" hidden></canvas></div><pre id="prediction-info"></pre><details><summary>Decoded predicted values</summary><pre id="prediction-values"></pre></details></section>
+          <section class="panel"><h3>DIFFERENCE MAP</h3><div class="diagnostic-screen"><canvas id="difference-canvas" role="img" aria-label="Pixel disagreement map" hidden></canvas></div><pre id="difference-info"></pre><details><summary>Recorded target errors</summary><pre id="recorded-errors"></pre></details></section>
+          <section class="panel"><h3>CHOSEN ACTION</h3><p id="chosen-action"></p><p id="selected-value"></p><h4>LEVEL PROGRESS</h4><p id="level-progress-info"></p><progress id="level-progress" aria-label="Public level progress"></progress></section>
+          <section class="panel"><h3>ACTION SCORES</h3><p id="score-info"></p><div class="table-scroll"><table id="score-table" hidden><thead><tr><th>Candidate action</th><th id="score-heading">Score</th></tr></thead><tbody id="score-rows"></tbody></table></div></section>
+          <section class="panel"><h3>UNCERTAINTY</h3><pre id="uncertainty-info"></pre><h4>LATENT TENSOR</h4><pre id="latent-info"></pre></section>
+          <section class="panel"><h3>ONLINE LEARNING &amp; TIMING</h3><pre id="learning-info"></pre><pre id="timing-info"></pre><h4>NOTES &amp; EVENTS</h4><pre id="rationale-info"></pre><p id="inferred-event"></p></section>
+        </div>
+        <section class="panel chart-panel" aria-labelledby="chart-title"><div class="panel-heading"><h3 id="chart-title">DIAGNOSTICS ACROSS STEPS</h3><span>Recorded samples only</span></div>
+          <div class="chart-controls"><label for="metric-select">Metric</label><select id="metric-select"></select><label for="chart-from">From step</label><input id="chart-from" type="number" min="0" step="1" value="0" /><label for="chart-to">Through step</label><input id="chart-to" type="number" min="0" step="1" value="0" /></div>
+          <p id="chart-info"></p><svg id="diagnostic-chart" viewBox="0 0 560 215" role="img" aria-label="Recorded diagnostic chart"></svg>
+          <details><summary>Exact chart values (including missing samples)</summary><div class="table-scroll"><table><thead><tr><th>Step (zero-based)</th><th>Recorded value</th></tr></thead><tbody id="chart-values"></tbody></table></div></details>
+        </section>
+        <details class="metadata-panel"><summary>Public recorded model config (estimator units / loss objective)</summary><pre id="public-config"></pre></details>
+        <details class="metadata-panel"><summary>Recorded termination &amp; summary</summary><pre id="recorded-fields"></pre></details>
+      </section>
+      <footer><span>ARC3 / REPLAY CONSOLE</span><span>Recorded observations and actions only · <a href="./third-party-notices.txt">License notices</a></span></footer>
+    </main><script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
