@@ -103,6 +103,33 @@ python -m compileall -q src tests
 
 The suite uses concrete pinned SDK frame/action types with scripted public responses to check action counts, real transitions, game splits, the reserved-level recording boundary, lifecycle output separation, notebook policy execution, explicit-username metadata, and notebook generation from an isolated installed-package layout. It downloads no games, makes no network requests and requires no credentials. It does not establish live-game performance, framework/gateway integration, or end-to-end Kaggle success. The inherited `.github` workflows are unchanged; there is no new automatic application CI workflow.
 
+The standalone `arc3.traces` codec implements the frozen
+[`.arc3` v1 contract](docs/arc3-format-v1.md). Its typed `Attempt` uses plain
+maps/lists and tensor `bytes` (row-major u8 or little-endian f16/f32).
+`encode_attempt(attempt)` / `decode_attempt(data)` handle complete file bytes;
+`write_attempt(path, attempt)` validates before atomically replacing a file, and
+`read_attempt(path)` validates before exposing the attempt. Invalid traces raise
+`Arc3Error`; lower reader caps and file-memory refusals raise
+`Arc3ResourceLimitError`. I/O failures remain `OSError`. The caller owns public
+provenance, sanitization and capturing predictions before an action.
+
+Validate an existing file or run just the offline codec conformance tests:
+
+```sh
+arc3-validate-trace artifacts/attempt.arc3
+# Equivalent callable/module path: python -m arc3.traces artifacts/attempt.arc3
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_arc3_codec.py' -v
+```
+
+Readers accept later v1 minor versions while validating all known fields and
+preserving unknown optional keys. `max_uncompressed_bytes` (also a CLI option)
+may lower the 512 MiB uncompressed/window cap. The convenience file reader also
+limits compressed bytes to that cap plus 1 MiB; unusual valid files with more
+framing overhead receive a resource refusal. Callers managing such input memory
+can use `decode_attempt` directly. Generated `.arc3` attempts are ignored.
+This codec is independent of the existing collection/evaluation lifecycles;
+recorder integration is separate work.
+
 ## Training-policy alignment
 
 The accepted [two-phase training policy](docs/training-policy.md) reserves five complete public games for local evaluation using seed 42, plus the last level of each of the other 20 games. Final training must start from new random weights and use all 25 public games before independent Kaggle assessment.
