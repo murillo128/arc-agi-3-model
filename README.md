@@ -181,6 +181,25 @@ Run its focused acceptance suite with:
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_evaluation_recorder.py' -v
 ```
 
+Three tiny [deterministic recorder fixtures](tests/fixtures/README.md) exercise
+the Python writer → stored attempt → TypeScript reader → replay UI path. Their
+literal expectations and SHA-256 hashes cover multiple frames, click coordinates,
+level changes, terminal RESET/new-attempt boundaries, a no-model baseline and a
+clearly synthetic prediction mismatch. Generate fresh files and run their checks:
+
+```sh
+PYTHONPATH=src python tests/fixtures/generate_arc3.py --output artifacts/recorder-local
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_arc3_fixtures.py' -v
+```
+
+Follow the [manual browser acceptance](viewer/README.md#manual-recorder-to-browser-acceptance)
+for drag/drop, actual CORS-served URLs, failure recovery and screenshot evidence,
+or run the focused Playwright commands there after building the static viewer.
+The provenance README also records a seed-42 public offline SDK run and an opt-in
+command that extracts public structure into fresh synthetic pixels without
+retaining game frames or reserved-level transitions. Default tests use SDK doubles,
+need no game files or network, and add no CI triggers or deployment pipeline.
+
 ## Training-policy alignment
 
 The accepted [two-phase training policy](docs/training-policy.md) reserves five complete public games for local evaluation using seed 42, plus the last level of each of the other 20 games. Final training must start from new random weights and use all 25 public games before independent Kaggle assessment.

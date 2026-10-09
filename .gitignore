@@ -26,6 +26,9 @@ datasets/
 *.ipynb
 kernel-metadata.json
 *.arc3
+!tests/fixtures/recorder-baseline-0.arc3
+!tests/fixtures/recorder-baseline-1.arc3
+!tests/fixtures/recorder-prediction.arc3
 .*arc3-*.tmp
 viewer/node_modules/
 viewer/.fixtures/

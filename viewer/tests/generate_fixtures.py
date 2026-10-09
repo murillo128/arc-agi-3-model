@@ -11,16 +11,26 @@ import json
 from pathlib import Path
 import struct
 import sys
+import shutil
+import tempfile
 
 import msgpack
 import pyzstd
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tests"))
+from fixtures.generate_arc3 import generate  # noqa: E402
 from arc3.traces import Arc3Error, decode_attempt, encode_attempt  # noqa: E402
 
 OUTPUT = ROOT / "viewer" / ".fixtures"
 OUTPUT.mkdir(exist_ok=True)
+with tempfile.TemporaryDirectory() as directory:
+    for path in generate(Path(directory)):
+        checked_in = ROOT / "tests" / "fixtures" / path.name
+        if decode_attempt(path.read_bytes()) != decode_attempt(checked_in.read_bytes()):
+            raise AssertionError(f"Recorder semantics differ from golden {checked_in}; inspect before updating")
+        shutil.copyfile(checked_in, OUTPUT / path.name)
 golden = bytes.fromhex((ROOT / "tests/fixtures/arc3-v1-baseline.hex").read_text())
 baseline = decode_attempt(golden)
 vectors = []
@@ -276,4 +286,4 @@ for name, payload in (("diagnostics", diagnostics), ("latent-only", latent_only)
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)
-print(f"Generated {len(vectors)} Python-checked vectors and 11 synthetic .arc3 files in {OUTPUT}")
+print(f"Generated {len(vectors)} Python-checked vectors, 11 codec/UI samples and 3 verified recorder goldens in {OUTPUT}")
