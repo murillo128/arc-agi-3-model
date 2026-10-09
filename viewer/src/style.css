@@ -85,6 +85,29 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
 .diagnostics-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .diagnostics-grid .panel { padding: 16px; }
 .diagnostics-grid pre { color: var(--muted); margin-bottom: 0; }
+.diagnostics-grid p, .chart-panel p { font-size: 0.7rem; line-height: 1.7; color: var(--muted); overflow-wrap: anywhere; }
+.diagnostics-grid h4 { margin: 22px 0 10px; font-size: 0.7rem; color: var(--pink); }
+.diagnostics-grid details { margin-top: 14px; font-size: 0.7rem; }
+.diagnostic-screen { height: 180px; margin-top: 16px; background: #09070d; border: 1px solid #503260; padding: 10px; }
+.diagnostic-screen:has(canvas[hidden]) { display: none; }
+#level-progress { width: 100%; accent-color: var(--pink); }
+.table-scroll { overflow: auto; max-height: 250px; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.7rem; line-height: 1.6; }
+th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+th { color: var(--pink); }
+.chart-panel { margin-top: 18px; }
+.chart-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 16px; }
+.chart-controls input { width: 90px; }
+.chart-controls select { max-width: 100%; }
+.chart-panel p, .chart-panel details { margin: 0 16px 16px; }
+.chart-panel details { font-size: 0.7rem; }
+#diagnostic-chart { display: block; width: calc(100% - 32px); max-width: 900px; max-height: 300px; margin: 0 16px 16px; background: #09070d; }
+#diagnostic-chart:empty { display: none; }
+#diagnostic-chart text { fill: var(--muted); font-size: 10px; }
+.chart-axis { fill: none; stroke: var(--muted); }
+.chart-line { fill: none; stroke: var(--pink); stroke-width: 2; }
+.chart-point { fill: var(--pink); }
+.chart-selected { fill: #ffdc00; }
 footer { display: flex; justify-content: space-between; gap: 16px; margin: 26px 0 0; font-size: 0.6rem; line-height: 1.7; color: var(--muted); }
 a { color: var(--pink); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

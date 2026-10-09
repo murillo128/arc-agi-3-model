@@ -46,9 +46,59 @@ With focus on the observation display or outside interactive controls, use
 Left/Right for previous/next, Space for play/pause, Home for restart and End for
 the final position. Native inputs, buttons and other interactive controls retain
 their normal keyboard behavior, with visible focus rings. The desktop layout
-stacks at narrow widths. Optional prediction, decision, learning, timing and notes
-panels show recorded fields for the selected action, or an unavailable state;
-no reward, diagnostics or synthetic game data are supplied by the production UI.
+stacks at narrow widths. Optional diagnostic panels consume the frozen v1 fields
+described below. Missing groups and samples show `Not recorded`.
+
+## Optional agent and model diagnostics
+
+`MODEL PREDICTION` and `DIFFERENCE MAP` refer to the same step result and selected
+frame as `REAL OBSERVATION`; the pre-action thumbnail remains the preceding
+observation's last frame. A `post_action_sequence` prediction aligns frame `i`
+with real result frame `i`, requiring the full `[F, H, W]` shape to match. A
+`post_action_last_frame` prediction aligns only with the last real result frame;
+earlier frames show `Not recorded` rather than reuse that prediction. Empty real
+sequences and unequal spatial or sequence shapes have no comparable prediction.
+Latents cannot supply a visual prediction without a model-specific decoder.
+
+The frozen format records predicted palette-index values in `u8`, little-endian
+`f16` or `f32`. The viewer decodes all three. Float estimates are rounded to the
+nearest integer **for palette display only**; unknown/out-of-range display indices
+use the labelled cyan fallback. A bounded text preview preserves exact decoded
+values. Pixel disagreement compares exact decoded values with actual indices,
+before display rounding, and reports the fraction/count for the **selected frame**.
+The red/black map means disagree/equal; it does not measure game success. Recorded
+MAE/MSE retain their own target-wide semantics and units in a separate detail.
+Visual diagnostic work is limited to **65,536 pixels per selected frame**;
+larger valid frames show an explicit refusal without a partial metric.
+
+`CHOSEN ACTION` uses the executed action even when absent from the candidate set.
+`ACTION SCORES` preserves writer order and labels raw logits, probabilities or
+values without normalization. Candidate subsets need not sum to one. Tables
+preview at most 256 candidates and disclose truncation. The optional selected
+value is labelled as a value estimate. `UNCERTAINTY` shows the recorded estimator
+value and action entropy in nats, including zero; it does not derive entropy from
+candidate scores. Public recorded model config is available in a detail for
+estimator units/loss objectives. `LEVEL PROGRESS` uses the selected observation's
+public `levels_completed / win_levels` counters. A zero target is labelled
+unavailable; no game reward is fabricated.
+
+`ONLINE LEARNING & TIMING` displays recorded optimizer updates, loss, replay-entry
+counts and millisecond timings. Notes are plain text, with a bounded preview;
+the separate `Inferred by viewer` event uses only public observation changes,
+level counters and states. Neither is represented as unlogged model reasoning.
+`LATENT TENSOR` shows dtype, shape, element count and an L2 norm in model-specific
+units. Norm computation is limited to **65,536 elements**; no projection or t-SNE
+is claimed. Both tensor calculations are bounded and run locally.
+
+The diagnostics chart selects recorded uncertainty, entropy, loss, updates,
+replay size or standard decision/environment/learning timings. An inclusive
+zero-based step range filters up to **2,048 steps** per plot; larger traces start
+with that first range and can be filtered further. Missing samples remain gaps,
+including in the exact-value table. Zero and negative loss/value samples are
+preserved. The selected step is highlighted when its sample is in the range.
+Unknown timing keys remain visible in the timing panel. Charts, notes and tensor
+diagnostics initiate no requests after opening a trace and need no ML library,
+analytics service or backend.
 
 The palette is the only reused SDK visual material, from
 [`COLOR_MAP` at the pinned SDK revision](https://github.com/arcprize/ARC-AGI/blob/f12822c4d550121c35a275008d964afbbed47d2f/arc_agi/rendering.py).
@@ -178,11 +228,21 @@ keyboard/focus behavior, playback timing/speed/pause and replacing a loaded file
 The fixture generator produces only test-owned synthetic observations through
 the production Python v1 encoder. It never reads game implementation code.
 
-Two small committed Playwright PNG baselines in
-`tests/replay.browser.ts-snapshots/` capture the complete desktop (1440 × 1100
-viewport) and narrow (390 × 844 viewport) layouts. They were visually inspected
+`tests/diagnostics.test.ts` owns independent tiny-matrix comparison/alignment,
+float decoding, bounded latent norms and sparse chart filtering. The pixel oracle
+uses literal 2 × 2 examples with exactly 0/4 and 2/4 disagreements; fractional
+estimates exercise comparison before rounding. `tests/diagnostics.browser.ts`
+owns actual predicted/difference Canvas pixels, all score-type labels, entropy,
+public level changes, hostile plain-text notes, partial/latent-only/mismatched
+predictions, metric selection/filtering, replacing a loaded trace and absence of
+network requests during diagnostic interactions.
+
+Four compact committed Playwright PNG baselines in
+`tests/replay.browser.ts-snapshots/` and `tests/diagnostics.browser.ts-snapshots/`
+capture complete baseline and populated desktop (1440 × 1100 viewport) and
+narrow (390 × 844 viewport) layouts. They were visually inspected
 for readable hierarchy, correct current/pre-action panels, selected history row,
-responsive wrapping, focus ring, timeline and unavailable model panels. Screenshot
+responsive wrapping, focus ring, timeline, populated and unavailable model panels. Screenshot
 comparison runs alongside behavioral checks, with a fixed 100-pixel mismatch limit.
 The Linux baselines use Playwright 1.61.1's Chromium 149 headless shell and
 Liberation Mono. Other platforms/fonts may need a separately inspected baseline.
@@ -190,4 +250,4 @@ Do not update snapshots simply to make a failed test pass. For an intentional
 visual change, generate candidates with `npm run test:browser -- --update-snapshots`,
 inspect the changed images, then run `npm run test:browser` **without** updating.
 Generated `.fixtures/`, `dist/`, browser binaries and test-result logs remain ignored
-or outside Git; the two compact visual fixtures are deliberate acceptance evidence.
+or outside Git; the four compact visual fixtures are deliberate acceptance evidence.

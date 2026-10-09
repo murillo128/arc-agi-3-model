@@ -36,7 +36,20 @@
           <div class="transport"><button id="restart" type="button">↺ Restart</button><button id="previous" type="button">← Previous</button><button id="play" class="primary" type="button" aria-pressed="false">▶ Play episode</button><button id="next" type="button">Next →</button><label for="episode-speed">Playback speed</label><select id="episode-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select><label for="observation-select">Jump to position</label><input id="observation-select" type="number" min="0" value="0" step="1" /></div>
           <p class="keyboard-hint">← / → previous / next · Space play / pause · Home restart · End last position. Interactive controls keep their own keys.</p>
         </section>
-        <div class="diagnostics-grid"><section class="panel"><h3>MODEL PREDICTION</h3><pre id="prediction-info"></pre></section><section class="panel"><h3>DECISION</h3><pre id="decision-info"></pre></section><section class="panel"><h3>LEARNING &amp; DIAGNOSTICS</h3><pre id="learning-info"></pre></section></div>
+        <div class="diagnostics-grid">
+          <section class="panel"><h3>MODEL PREDICTION</h3><div class="diagnostic-screen"><canvas id="prediction-canvas" role="img" aria-label="Aligned model prediction" hidden></canvas></div><pre id="prediction-info"></pre><details><summary>Decoded predicted values</summary><pre id="prediction-values"></pre></details></section>
+          <section class="panel"><h3>DIFFERENCE MAP</h3><div class="diagnostic-screen"><canvas id="difference-canvas" role="img" aria-label="Pixel disagreement map" hidden></canvas></div><pre id="difference-info"></pre><details><summary>Recorded target errors</summary><pre id="recorded-errors"></pre></details></section>
+          <section class="panel"><h3>CHOSEN ACTION</h3><p id="chosen-action"></p><p id="selected-value"></p><h4>LEVEL PROGRESS</h4><p id="level-progress-info"></p><progress id="level-progress" aria-label="Public level progress"></progress></section>
+          <section class="panel"><h3>ACTION SCORES</h3><p id="score-info"></p><div class="table-scroll"><table id="score-table" hidden><thead><tr><th>Candidate action</th><th id="score-heading">Score</th></tr></thead><tbody id="score-rows"></tbody></table></div></section>
+          <section class="panel"><h3>UNCERTAINTY</h3><pre id="uncertainty-info"></pre><h4>LATENT TENSOR</h4><pre id="latent-info"></pre></section>
+          <section class="panel"><h3>ONLINE LEARNING &amp; TIMING</h3><pre id="learning-info"></pre><pre id="timing-info"></pre><h4>NOTES &amp; EVENTS</h4><pre id="rationale-info"></pre><p id="inferred-event"></p></section>
+        </div>
+        <section class="panel chart-panel" aria-labelledby="chart-title"><div class="panel-heading"><h3 id="chart-title">DIAGNOSTICS ACROSS STEPS</h3><span>Recorded samples only</span></div>
+          <div class="chart-controls"><label for="metric-select">Metric</label><select id="metric-select"></select><label for="chart-from">From step</label><input id="chart-from" type="number" min="0" step="1" value="0" /><label for="chart-to">Through step</label><input id="chart-to" type="number" min="0" step="1" value="0" /></div>
+          <p id="chart-info"></p><svg id="diagnostic-chart" viewBox="0 0 560 215" role="img" aria-label="Recorded diagnostic chart"></svg>
+          <details><summary>Exact chart values (including missing samples)</summary><div class="table-scroll"><table><thead><tr><th>Step (zero-based)</th><th>Recorded value</th></tr></thead><tbody id="chart-values"></tbody></table></div></details>
+        </section>
+        <details class="metadata-panel"><summary>Public recorded model config (estimator units / loss objective)</summary><pre id="public-config"></pre></details>
         <details class="metadata-panel"><summary>Recorded termination &amp; summary</summary><pre id="recorded-fields"></pre></details>
       </section>
       <footer><span>ARC3 / REPLAY CONSOLE</span><span>Recorded observations and actions only · <a href="./third-party-notices.txt">License notices</a></span></footer>

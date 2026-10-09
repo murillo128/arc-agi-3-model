@@ -24,7 +24,7 @@ test('zero-step attempt renders native dimensions and meaningful unavailable sta
   await expect(page.locator('#history-empty')).toBeVisible();
   await expect(page.locator('#play')).toBeDisabled();
   await expect(page.locator('#timeline')).toBeDisabled();
-  await expect(page.locator('#prediction-info')).toHaveText('Unavailable (not recorded for this position).');
+  await expect(page.locator('#prediction-info')).toHaveText('Not recorded for this position.');
 });
 
 test('empty step result never borrows the pre-action bitmap', async ({ page }) => {
@@ -43,13 +43,13 @@ test('one-step click, past action, and frame selection preserve actual pixels an
   await expect(page.locator('#observation-info')).toContainText('shape [3, 2, 2]');
   expect(await rgba(page)).toEqual([102, 102, 102, 255, 153, 153, 153, 255, 204, 204, 204, 255, 255, 255, 255, 255]);
   expect(await rgba(page, 'previous-canvas')).toEqual(initialRGBA);
-  await expect(page.locator('#prediction-info')).toContainText('Uncertainty: 0.5');
-  await expect(page.locator('#learning-info')).toContainText('π');
+  await expect(page.locator('#uncertainty-info')).toContainText('Prediction uncertainty: 0.5');
+  await expect(page.locator('#rationale-info')).toContainText('π');
   await page.locator('#frame-select').fill('2'); await page.locator('#frame-select').dispatchEvent('change');
   expect(await rgba(page)).toEqual([0, 255, 255, 255, 0, 255, 255, 255, 255, 123, 204, 255, 255, 255, 255, 255]);
   await expect(page.locator('#canvas-message')).toContainText('Unknown palette indices: 16, 255');
   await page.getByRole('button', { name: '↺ Restart', exact: true }).click();
-  await expect(page.locator('#prediction-info')).toContainText('Unavailable');
+  await expect(page.locator('#prediction-info')).toContainText('Not recorded');
 });
 
 test('level/status markers, scrubbing and past action selection synchronize the actual result', async ({ page }) => {

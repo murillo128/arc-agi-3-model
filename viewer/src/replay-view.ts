@@ -1,6 +1,7 @@
 import { drawObservation, pixelPreview } from './canvas';
+import { DiagnosticsView } from './diagnostics-view';
 import { actionName, observationChanges, Replay } from './replay';
-import type { DecodedAttempt, Tensor } from './types';
+import type { DecodedAttempt } from './types';
 import type { Source } from './loader';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
@@ -11,11 +12,8 @@ function recorded(value: unknown): string {
     return typeof item === 'string' ? previewText(item) : item;
   }, 2);
 }
-function tensorDescription(tensor: Tensor | undefined): string {
-  return tensor ? `${tensor.dtype} [${tensor.shape.join(', ')}] · ${tensor.data.length} bytes` : 'Unavailable (not recorded)';
-}
-
 export class ReplayView {
+  private diagnostics = new DiagnosticsView();
   private replay: Replay | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private rows: HTMLButtonElement[] = [];
@@ -56,6 +54,7 @@ export class ReplayView {
     });
   }
   clear(): void {
+    this.diagnostics.clear();
     clearTimeout(this.timer); this.timer = undefined; this.replay = undefined;
     this.rows = []; this.markers = []; this.renderedPosition = -1;
     element('result').hidden = true;
@@ -68,6 +67,8 @@ export class ReplayView {
     this.clear();
     const attempt = decoded.attempt;
     this.replay = new Replay(attempt);
+    this.diagnostics.display(this.replay);
+    element('public-config').textContent = attempt.metadata.config === undefined ? 'Not recorded.' : previewText(recorded(attempt.metadata.config));
     element('game-id').textContent = previewText(attempt.metadata.game_id);
     element('version').textContent = `ARC3 ${decoded.major}.${decoded.minor}`;
     element('termination').textContent = `Closed: ${attempt.termination.reason}`;
@@ -177,6 +178,7 @@ export class ReplayView {
     element('observation-canvas').setAttribute('aria-label', `${positionLabel} · frame ${replay.frame} · ${o.frames.shape[2]} by ${o.frames.shape[1]} · ${previewText(o.state)}`);
     element('pixels').textContent = pixelPreview(o, replay.frame);
     element('observation-info').textContent = `${previewText(o.state)} · levels ${o.levels_completed}/${o.win_levels} · shape [${o.frames.shape.join(', ')}] · available actions [${o.available_actions.join(', ')}]` + (step ? ` · ACTION${step.action.id} ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? ' · RESET result unavailable' : ' · Initial observation');
+    this.diagnostics.render(replay);
     if (this.renderedPosition === replay.position) return;
     this.renderedPosition = replay.position;
     const pre = replay.preAction;
@@ -190,10 +192,5 @@ export class ReplayView {
     element('action-info').textContent = step ? `${actionName(step.action)} · ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? 'RESET executed · no returned frame in this file' : 'Select a step to inspect its action and result.';
     this.rows.forEach((row, i) => { row.setAttribute('aria-current', String(i + 1 === replay.position)); row.classList.toggle('future', i + 1 > replay.position); });
     this.markers.forEach((marker, i) => marker.setAttribute('aria-current', String(i === replay.position)));
-    const prediction = step?.prediction;
-    element('prediction-info').textContent = prediction ? `Target: ${prediction.target}\nFrames: ${tensorDescription(prediction.frames)}\nLatent: ${tensorDescription(prediction.latent)}\nUncertainty: ${prediction.uncertainty ?? 'Unavailable (not recorded)'}\nErrors: ${prediction.errors ? recorded(prediction.errors) : 'Unavailable (not recorded)'}` : 'Unavailable (not recorded for this position).';
-    element('decision-info').textContent = step?.decision ? recorded(step.decision) : 'Unavailable (not recorded for this position).';
-    const diagnostics = { learning: step?.learning, timing: step?.timing, notes: step?.notes };
-    element('learning-info').textContent = Object.values(diagnostics).some(value => value !== undefined) ? recorded(diagnostics) : 'Unavailable (not recorded for this position).';
   }
 }
