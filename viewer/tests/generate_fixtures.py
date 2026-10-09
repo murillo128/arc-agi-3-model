@@ -234,7 +234,46 @@ for name, payload in (("empty-result", empty_result), ("zero-step", zero), ("une
     decode_attempt(encoded)
     (OUTPUT / f"{name}.arc3").write_bytes(encoded)
 
+# Diagnostic oracle: initial [[0, 1], [2, 3]], then sequence frames with
+# exactly 0/4 and 2/4 disagreements. No expected pixel result is derived by the viewer.
+diagnostics = deepcopy(baseline)
+diagnostics["metadata"]["model_id"] = "synthetic-diagnostics"
+diagnostics["metadata"]["config"] = {"uncertainty_units": "test estimator", "loss_objective": "synthetic test loss"}
+diagnostics["steps"] = []
+for index, score_type in enumerate(("logit", "probability", "probability", "value")):
+    observation = deepcopy(baseline["initial_observation"])
+    observation.update({"levels_completed": 1 if index < 3 else 2, "state": "WIN" if index == 3 else "NOT_FINISHED"})
+    observation["frames"] = {"dtype": "u8", "shape": [2 if index < 2 else 1, 2, 2], "data": bytes([0, 1, 2, 3, 3, 2, 1, 0] if index < 2 else [3, 2, 1, 0])}
+    action = {"id": 6, "data": {"x": 1, "y": 0}} if index == 1 else {"id": 1, "data": {}}
+    step = {"index": index, "action": action, "observation": observation}
+    scores = [-2.5, 4.0] if index == 0 else [0.25, 0.5] if index < 3 else [-1.0, 2.0]
+    step["decision"] = {"score_type": score_type, "candidates": [
+        {"action": {"id": 1, "data": {}}, "score": scores[0]},
+        {"action": {"id": 6, "data": {"x": 1, "y": 0}}, "score": scores[1]},
+    ]}
+    if index != 2:
+        step["decision"].update({"action_entropy": 0.0 if index == 3 else 0.75, "selected_value": -0.25})
+        step["prediction"] = {"target": "post_action_last_frame", "frames": {"dtype": "u8", "shape": [2, 2], "data": bytes([3, 2, 1, 0])}, "uncertainty": [0.2, 0.5, 0, 0][index]}
+        step["learning"] = {"loss": [0.25, 0.125, 0, -0.5][index], "updates": index, "replay_size": 8 + index}
+        step["timing"] = {"decision_ms": 2.5, "environment_ms": 1.0, "learning_ms": 0.0}
+    if index == 0:
+        step["prediction"].update({"target": "post_action_sequence", "frames": {"dtype": "u8", "shape": [2, 2, 2], "data": bytes([0, 1, 2, 3, 3, 9, 1, 9])}})
+    elif index == 1:
+        step["prediction"].update({"frames": {"dtype": "f32", "shape": [2, 2], "data": struct.pack("<4f", 3, 2.25, 1, 0)}, "latent": {"dtype": "f16", "shape": [2], "data": bytes.fromhex("00420044")}, "errors": {"mae": 0.0625, "mse": 0.015625}})
+        step["notes"] = ["Recorded annotation: inspect the changed tile.", "<img src=x onerror=alert(1)> is plain text, not reasoning."]
+    diagnostics["steps"].append(step)
+diagnostics["termination"] = {"reason": "win", "final_state": "WIN"}
+diagnostics["summary"].update({"real_actions": 4, "levels_completed": 2})
+latent_only = deepcopy(diagnostics)
+latent_only["steps"][0]["prediction"] = {"target": "post_action_sequence", "latent": {"dtype": "u8", "shape": [4], "data": bytes([3, 2, 1, 0])}}
+mismatch = deepcopy(diagnostics)
+mismatch["steps"][0]["prediction"]["frames"] = {"dtype": "u8", "shape": [1, 2, 2], "data": bytes([3, 2, 1, 0])}
+for name, payload in (("diagnostics", diagnostics), ("latent-only", latent_only), ("prediction-mismatch", mismatch)):
+    encoded = encode_attempt(payload)
+    decode_attempt(encoded)
+    (OUTPUT / f"{name}.arc3").write_bytes(encoded)
+
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)
-print(f"Generated {len(vectors)} Python-checked vectors and 8 synthetic .arc3 files in {OUTPUT}")
+print(f"Generated {len(vectors)} Python-checked vectors and 11 synthetic .arc3 files in {OUTPUT}")
