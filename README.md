@@ -28,6 +28,9 @@ The repository retains its **Skillforge** issue/PR/review infrastructure (see [A
 
 ## Local development prerequisites
 
+The static [browser .arc3 loader](viewer/README.md) can inspect recorded attempts
+through local files or CORS-authorized URLs without running Python or the SDK.
+
 Use **Python 3.12**. The package pins the official SDK to `arc-agi==0.9.9`; the adapter checks that version at runtime. No GPU, PyTorch, Kaggle account or credentials are required for the smoke tests or notebook generator.
 
 ```sh
