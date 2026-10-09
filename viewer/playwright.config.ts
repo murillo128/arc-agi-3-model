@@ -9,9 +9,13 @@ export default defineConfig({
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {},
   },
-  webServer: {
+  webServer: [{
     command: 'python3 -m http.server 4177 --bind 127.0.0.1 --directory .',
     url: 'http://127.0.0.1:4177/dist/',
     reuseExistingServer: false,
-  },
+  }, {
+    command: 'python3 tests/serve_fixtures.py',
+    url: 'http://127.0.0.1:4178/recorder-baseline-0.arc3',
+    reuseExistingServer: false,
+  }],
 });

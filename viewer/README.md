@@ -181,13 +181,14 @@ The [license notices](public/third-party-notices.txt) are copied into `dist/`.
 
 ## Focused local tests
 
-Fixture generation alone needs **Python 3.12** with the repository's `msgpack` and
-`pyzstd` dependencies. It imports the conventional Python codec and uses only
-synthetic data, without SDK/game execution. For example, from the repository root:
+Fixture generation needs **Python 3.12** with the installed repository package,
+including its pinned SDK types, `msgpack` and `pyzstd`. It executes the Python
+recorder against synthetic SDK transport doubles; it never loads actual games.
+From the repository root:
 
 ```sh
 python3.12 -m venv .venv
-.venv/bin/python -m pip install 'msgpack>=1.1,<2' 'pyzstd>=0.16,<0.20'
+.venv/bin/python -m pip install -e .
 cd viewer
 npm ci
 PYTHON=../.venv/bin/python npm run fixtures
@@ -213,10 +214,17 @@ libzstd; decoder error wording is not part of the wire contract.
 Playwright owns the real built browser/worker/WASM and Canvas boundary: local file dialog,
 drag/drop, sequence preservation, literal hostile text, user-gated URL success,
 HTTPS deep-link, actual CORS refusal, mocked network/HTTP/size failures,
-cancellation, supersession, empty frames and recovery. Its only server is Python's
-ordinary static asset/fixture server; it serves `dist/` at a nested path. URL
-success is a CORS-authorized mock fixture, not evidence that arbitrary remote
-hosts allow requests. No CI or push/PR test trigger is added. Run these focused
+cancellation, supersession, empty frames and recovery. Python's ordinary static
+server serves `dist/` at a nested path; a second loopback static fixture server
+on port 4178 sends the actual CORS header for origin `http://127.0.0.1:4177`.
+`tests/acceptance.browser.ts` opens three checked-in recorder goldens through
+drag/drop and real cross-origin HTTP without route interception, checking their
+literal pixel/count/action/reset/level expectations, synthetic prediction
+disagreement, optional-panel clearing, HTTP 404, actual CORS refusal and visible
+malformed/truncated/oversized/corrupt/version rejection. It retains two screenshot
+artifacts under ignored `test-results/`. The other loader URL-success cases still
+use mocks; none imply arbitrary remote hosts permit requests.
+No CI or push/PR test trigger is added. Run these focused
 tests when relevant format, codec, fixture or viewer files change, and for integrated
 acceptance; unrelated changes do not require viewer validation.
 
@@ -251,3 +259,73 @@ visual change, generate candidates with `npm run test:browser -- --update-snapsh
 inspect the changed images, then run `npm run test:browser` **without** updating.
 Generated `.fixtures/`, `dist/`, browser binaries and test-result logs remain ignored
 or outside Git; the four compact visual fixtures are deliberate acceptance evidence.
+
+## Manual recorder-to-browser acceptance
+
+The [fixture provenance and hashes](../tests/fixtures/README.md) distinguish the
+original synthetic recorder goldens from the optional actual public SDK structure
+extraction. No games, backend or Python process are needed by the built viewer;
+the commands here serve static assets and fixtures locally for acceptance.
+
+1. Run the install/fixture/build commands above (Node **22.12+**, Python **3.12**).
+   To prove fresh recorder output, from the repository root also run:
+
+   ```sh
+   PYTHONPATH=src .venv/bin/python tests/fixtures/generate_arc3.py \
+     --output artifacts/recorder-manual
+   ```
+
+2. In `viewer/`, start the static viewer on port 4177:
+
+   ```sh
+   python3 -m http.server 4177 --bind 127.0.0.1 --directory .
+   ```
+
+   Open `http://127.0.0.1:4177/dist/`. Drag the freshly recorded
+   `artifacts/recorder-manual/recorder-baseline-0.arc3` onto **OPEN RECORDING**.
+   Verify initial pixels `[0,1;2,3]`, two steps/two real actions, and absent model
+   panels. Select **#0 ACTION6 (1, 0)**: counter becomes 1/3 in the same attempt;
+   frame 0 is `[4,5;6,7]`, frame 1 `[8,9;10,11]`. Select **#1 ACTION1**: the
+   attempt ends `game_over`. No RESET result should appear in that file.
+
+3. Drag `recorder-baseline-1.arc3` onto the same viewer. Verify the same session,
+   attempt 1, initial `[9,9;9,9]`, counter 0/3 and one action. The terminal RESET
+   response starts this attempt; neither RESET is double-counted in the files.
+   For an executed RESET that closes an active nonterminal attempt, open the
+   generated `viewer/.fixtures/closing-reset.arc3`: the closing boundary retains
+   the pre-reset observation, and its result belongs to a separate next attempt.
+
+4. In a second terminal in `viewer/`, start the CORS fixture server:
+
+   ```sh
+   python3 tests/serve_fixtures.py
+   ```
+
+   Paste `http://127.0.0.1:4178/recorder-baseline-0.arc3` into **Recording URL**,
+   select **Load URL**, and repeat the same history/frame/level checks. The
+   server sends `Access-Control-Allow-Origin: http://127.0.0.1:4177`.
+   Load `http://127.0.0.1:4178/recorder-prediction.arc3`, then select its action:
+   real `[3,2;1,0]` and synthetic prediction `[0,1;2,3]` differ in 4/4 pixels;
+   MAE 2, MSE 5. The note identifies the prediction as synthetic. Reopen a baseline
+   and verify prediction/difference panels clear and read **Not recorded**.
+
+5. Load `http://127.0.0.1:4178/missing.arc3`: verify HTTP 404. Load
+   `http://localhost:4177/.fixtures/recorder-baseline-0.arc3`: this different
+   origin supplies no CORS header, so verify the CORS/network error. Drag a valid
+   local file again and verify recovery without a reload. Stop both servers with
+   Ctrl+C. The port-4178 helper binds only loopback and is a static acceptance
+   utility, not a viewer runtime service or deployment requirement.
+
+For the automated equivalent, after fixture generation and build:
+
+```sh
+npm run test:browser -- acceptance.browser.ts --workers=1
+```
+
+The full `npm run test:browser` additionally compares the four existing desktop
+and narrow English retro UI baselines. Inspect screenshots as well as behavioral
+assertions; optional diagnostics must stay unavailable on no-model attempts.
+Use the optional public SDK extraction command in the provenance README when
+authorized environment files are already present. Missing files do not prevent
+any default test. No CI/deploy pipeline, automatic download, upload or submission
+is introduced by this acceptance path.
