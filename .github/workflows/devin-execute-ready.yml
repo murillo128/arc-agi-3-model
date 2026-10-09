@@ -1,0 +1,68 @@
+name: Execute issue with local Devin CLI
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: Controlling issue number to launch or resume
+        required: true
+        type: string
+      wait_for_existing_turn:
+        description: Wait for the active local turn before a scheduler follow-up
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: devin-${{ github.repository }}-issue-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    # Reuse the existing physical local host and its persistent clone/auth.
+    # 'codex' is the installed Actions runner label, not the selected executor.
+    runs-on: [self-hosted, codex]
+    timeout-minutes: 25
+    steps:
+      - name: Load trusted launcher and start a detached local Devin turn
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          WAIT_FOR_EXISTING_TURN: ${{ inputs.wait_for_existing_turn }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+          [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          : "${SKILLFORGE_REPO_ROOT:?Set the persistent local repository root}"
+          repo_root="$(cd "$SKILLFORGE_REPO_ROOT" && pwd -P)"
+          case "/$repo_root/" in
+            */_work/*) echo "The persistent clone must be outside Actions _work" >&2; exit 1 ;;
+          esac
+          origin="$(git -C "$repo_root" remote get-url origin)"
+          case "$origin" in
+            "https://github.com/${GITHUB_REPOSITORY}"|"https://github.com/${GITHUB_REPOSITORY}.git"|"git@github.com:${GITHUB_REPOSITORY}"|"git@github.com:${GITHUB_REPOSITORY}.git"|"ssh://git@github.com/${GITHUB_REPOSITORY}"|"ssh://git@github.com/${GITHUB_REPOSITORY}.git") ;;
+            *) echo "Unexpected persistent clone origin" >&2; exit 1 ;;
+          esac
+          command -v python3 >/dev/null
+          command -v tmux >/dev/null
+          command -v devin >/dev/null
+          command -v gh >/dev/null
+          python3 -c 'import tomllib'
+          # Persistent host transport, not the short-lived Actions token.
+          env -u GH_TOKEN -u GITHUB_TOKEN git -C "$repo_root" fetch origin
+          launcher_dir="$(mktemp -d "$RUNNER_TEMP/devin-launcher.XXXXXX")"
+          trap 'rm -rf "$launcher_dir"' EXIT
+          for name in executor_control.py local_issue_worktree.py devin_runner.py devin_host_broker.py devin_host_client.py; do
+            git -C "$repo_root" show "$GITHUB_SHA:.github/scripts/$name" > "$launcher_dir/$name"
+          done
+          # The launcher snapshots its supervisor outside RUNNER_TEMP before
+          # tmux starts. No implementation runs in an Actions checkout.
+          python3 "$launcher_dir/devin_runner.py" launch

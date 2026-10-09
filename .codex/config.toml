@@ -1,0 +1,4 @@
+# Keep model/effort in explicit personal profiles so project precedence cannot
+# silently lower a higher user or CLI selection. See docs/codex-operations.md.
+[agents]
+max_concurrent_threads_per_session = 3

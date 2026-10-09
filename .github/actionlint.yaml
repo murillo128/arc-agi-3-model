@@ -1,0 +1,3 @@
+# Codex execution/audit reusable workflows target a repository self-hosted runner.
+self-hosted-runner:
+  labels: [codex]

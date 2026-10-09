@@ -1,0 +1,58 @@
+name: Executor routing regression checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/**'
+      - 'skills/codex-epic-scheduler/**'
+      - 'skills/codex-local-runner/**'
+      - 'skills/devin-local-runner/**'
+      - 'skills/execution-runner-selection/**'
+      - '.github/workflows/*execute-ready.yml'
+      - '.github/workflows/codex-issue-state.yml'
+      - '.github/workflows/codex-review-ready.yml'
+      - '.github/workflows/executor-routing-ci.yml'
+  pull_request:
+    paths:
+      - '.github/scripts/**'
+      - 'skills/codex-epic-scheduler/**'
+      - 'skills/codex-local-runner/**'
+      - 'skills/devin-local-runner/**'
+      - 'skills/execution-runner-selection/**'
+      - '.github/workflows/*execute-ready.yml'
+      - '.github/workflows/codex-issue-state.yml'
+      - '.github/workflows/codex-review-ready.yml'
+      - '.github/workflows/executor-routing-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Ensure real tmux transport is exercised
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y tmux
+          fi
+      - name: Test routing, real Git worktrees and tmux with a fake local CLI
+        env:
+          REQUIRE_TMUX_TEST: '1'
+        run: python3 -m unittest discover -s .github/scripts -p 'test_executor_routing.py' -v
+      - name: Preserve native Codex lifecycle behavior
+        run: python3 -m unittest discover -s .github/scripts -p 'test_codex_profile.py' -v
+      - name: Test closed-issue worktree cleanup
+        run: python3 -m unittest discover -s .github/scripts -p 'test_worktree_cleanup.py' -v
+      - name: Validate deterministic epic waves and canonical parent discovery
+        run: python3 -m unittest discover -s .github/scripts -p 'test_epic_scheduler.py' -v
+      - name: Preserve canonical template host boundary
+        run: python3 -m unittest discover -s .github/scripts -p 'test_canonical_template.py' -v

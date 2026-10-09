@@ -1,0 +1,247 @@
+name: Route issue state and executor
+
+on:
+  issues:
+    types: [labeled, closed]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Controlling issue number
+        required: true
+        type: string
+      operation:
+        description: Operation to launch
+        required: true
+        type: choice
+        options:
+          - execute
+          - audit
+          - schedule
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      operation: ${{ steps.route.outputs.operation }}
+      issue_number: ${{ steps.route.outputs.issue_number }}
+      issue_title: ${{ steps.route.outputs.issue_title }}
+      wait_for_existing_turn: ${{ steps.route.outputs.wait_for_existing_turn }}
+      cleanup_issue_number: ${{ steps.route.outputs.cleanup_issue_number }}
+    steps:
+      - name: Require the default-branch dispatcher
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: test "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve label transition
+        id: route
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          EVENT_ISSUE_NUMBER: ${{ github.event.issue.number }}
+          EVENT_ISSUE_TITLE: ${{ github.event.issue.title }}
+          EVENT_LABEL: ${{ github.event.label.name }}
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+          INPUT_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+
+          operation=""
+          issue_number=""
+          issue_title=""
+          wait_for_existing_turn=false
+          cleanup_issue_number=""
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if ! [[ "$INPUT_ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+              echo "issue_number must be a positive decimal integer" >&2
+              exit 1
+            fi
+            issue_number="$INPUT_ISSUE_NUMBER"
+            issue_title="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '.title')"
+            case "$INPUT_OPERATION" in
+              execute) operation=execute ;;
+              audit) operation=audit ;;
+              schedule) operation=execute; wait_for_existing_turn=true ;;
+              *) echo "Unsupported operation: $INPUT_OPERATION" >&2; exit 1 ;;
+            esac
+          elif [ "$EVENT_NAME" = "issues" ] && [ "$EVENT_ACTION" = "closed" ]; then
+            cleanup_issue_number="$EVENT_ISSUE_NUMBER"
+          else
+            case "$EVENT_LABEL" in
+              execution-ready)
+                operation=execute
+                issue_number="$EVENT_ISSUE_NUMBER"
+                issue_title="$EVENT_ISSUE_TITLE"
+                ;;
+              review-ready)
+                operation=audit
+                issue_number="$EVENT_ISSUE_NUMBER"
+                issue_title="$EVENT_ISSUE_TITLE"
+                ;;
+              completed|queued)
+                issues_json="$RUNNER_TEMP/in-progress-epics.json"
+                comments_dir="$RUNNER_TEMP/epic-comments"
+                mkdir -p "$comments_dir"
+                gh api --method GET --paginate --slurp \
+                  "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=in-progress&per_page=100" \
+                  > "$issues_json"
+                jq -r 'if (length > 0 and (.[0] | type) == "array") then .[][] else .[] end | .number // empty' "$issues_json" | \
+                  while IFS= read -r parent_number; do
+                  gh api --method GET --paginate --slurp \
+                    "repos/${GITHUB_REPOSITORY}/issues/${parent_number}/comments?per_page=100" \
+                    > "$comments_dir/${parent_number}.json"
+                done
+                result="$(python3 .github/scripts/find_epic_parent.py \
+                  --changed-issue "$EVENT_ISSUE_NUMBER" \
+                  --issues-json "$issues_json" \
+                  --comments-dir "$comments_dir")"
+                issue_number="$(jq -r '.parent.number // empty' <<< "$result")"
+                issue_title="$(jq -r '.parent.title // empty' <<< "$result")"
+                if [ -n "$issue_number" ]; then
+                  operation=execute
+                  wait_for_existing_turn=true
+                fi
+                ;;
+            esac
+          fi
+
+          # Titles are display data, not additional Actions output records.
+          issue_title="$(printf '%s' "$issue_title" | tr '\r\n' '  ')"
+          echo "operation=$operation" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
+          echo "issue_title=$issue_title" >> "$GITHUB_OUTPUT"
+          echo "wait_for_existing_turn=$wait_for_existing_turn" >> "$GITHUB_OUTPUT"
+          echo "cleanup_issue_number=$cleanup_issue_number" >> "$GITHUB_OUTPUT"
+
+  cleanup-worktrees:
+    needs: route
+    if: github.repository != 'murillo128/skillforge' && needs.route.outputs.cleanup_issue_number != ''
+    runs-on: [self-hosted, codex]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    concurrency:
+      group: worktree-cleanup-${{ github.repository }}-issue-${{ needs.route.outputs.cleanup_issue_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Remove closed issue and review worktrees
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.cleanup_issue_number }}
+        run: |
+          set -euo pipefail
+          : "${SKILLFORGE_REPO_ROOT:?SKILLFORGE_REPO_ROOT must point to the persistent local checkout}"
+
+          repo_root="$(cd "$SKILLFORGE_REPO_ROOT" && pwd -P)"
+          worktree_root="${SKILLFORGE_WORKTREE_ROOT:-${HOME}/.skillforge/worktrees}"
+          owner="${GITHUB_REPOSITORY%%/*}"
+
+          origin="$(git -C "$repo_root" remote get-url origin)"
+          case "$origin" in
+            "https://github.com/${GITHUB_REPOSITORY}"|"https://github.com/${GITHUB_REPOSITORY}.git"|"git@github.com:${GITHUB_REPOSITORY}"|"git@github.com:${GITHUB_REPOSITORY}.git"|"ssh://git@github.com/${GITHUB_REPOSITORY}"|"ssh://git@github.com/${GITHUB_REPOSITORY}.git") ;;
+            *) echo "Unexpected repository origin: $origin" >&2; exit 1 ;;
+          esac
+          git -C "$repo_root" fetch --no-tags origin "$GITHUB_SHA"
+
+          cleanup_script="$RUNNER_TEMP/cleanup_issue_worktrees.py"
+          git -C "$repo_root" show "${GITHUB_SHA}:.github/scripts/cleanup_issue_worktrees.py" > "$cleanup_script"
+
+          mapfile -t pr_numbers < <(
+            gh api --method GET --paginate "repos/${GITHUB_REPOSITORY}/pulls" \
+              -f state=all \
+              -f "head=${owner}:codex/issue-${ISSUE_NUMBER}" \
+              -f per_page=100 \
+              --jq '.[].number'
+          )
+
+          args=(
+            --repo-root "$repo_root"
+            --worktree-root "$worktree_root"
+            --repository "$GITHUB_REPOSITORY"
+            --issue-number "$ISSUE_NUMBER"
+            --wait-seconds 900
+          )
+          for pr_number in "${pr_numbers[@]}"; do
+            args+=(--pr-number "$pr_number")
+          done
+
+          python3 "$cleanup_script" "${args[@]}"
+
+  select-executor:
+    needs: route
+    if: needs.route.outputs.operation == 'execute' && needs.route.outputs.issue_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: executor-selection-${{ github.repository }}-${{ needs.route.outputs.issue_number }}
+      cancel-in-progress: false
+    outputs:
+      executor: ${{ steps.select.outputs.executor }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Resolve current issue selection and pin executor ownership
+        id: select
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
+          WAIT_FOR_EXISTING_TURN: ${{ needs.route.outputs.wait_for_existing_turn }}
+        run: python3 .github/scripts/executor_control.py select
+
+  execute:
+    needs: [route, select-executor]
+    if: needs.select-executor.outputs.executor == 'codex'
+    permissions:
+      contents: read
+      issues: read
+    uses: ./.github/workflows/codex-execute-ready.yml
+    with:
+      issue_number: ${{ needs.route.outputs.issue_number }}
+      issue_title: ${{ needs.route.outputs.issue_title }}
+      wait_for_existing_turn: ${{ needs.route.outputs.wait_for_existing_turn == 'true' }}
+
+  execute-devin:
+    needs: [route, select-executor]
+    if: needs.select-executor.outputs.executor == 'devin'
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/devin-execute-ready.yml
+    with:
+      issue_number: ${{ needs.route.outputs.issue_number }}
+      wait_for_existing_turn: ${{ needs.route.outputs.wait_for_existing_turn == 'true' }}
+
+  audit:
+    needs: route
+    if: needs.route.outputs.operation == 'audit' && needs.route.outputs.issue_number != ''
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    uses: ./.github/workflows/codex-review-ready.yml
+    with:
+      issue_number: ${{ needs.route.outputs.issue_number }}

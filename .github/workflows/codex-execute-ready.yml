@@ -1,0 +1,670 @@
+name: Execute issue with local Codex
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: Controlling issue number to launch or resume
+        required: true
+        type: string
+      issue_title:
+        description: Controlling issue title used to name a new thread
+        required: false
+        type: string
+      wait_for_existing_turn:
+        description: Wait for an active turn and serialize a follow-up turn
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: codex-${{ github.repository }}-issue-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: [self-hosted, codex]
+
+    steps:
+      - name: Prepare persistent issue worktree
+        id: worktree
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          : "${SKILLFORGE_REPO_ROOT:?SKILLFORGE_REPO_ROOT must point to the persistent local checkout for this repository}"
+
+          repo_root="$(cd "$SKILLFORGE_REPO_ROOT" && pwd -P)"
+          git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null
+
+          origin="$(git -C "$repo_root" remote get-url origin)"
+          case "$origin" in
+            "https://github.com/${GITHUB_REPOSITORY}"|"https://github.com/${GITHUB_REPOSITORY}.git"|"git@github.com:${GITHUB_REPOSITORY}"|"git@github.com:${GITHUB_REPOSITORY}.git"|"ssh://git@github.com/${GITHUB_REPOSITORY}"|"ssh://git@github.com/${GITHUB_REPOSITORY}.git") ;;
+            *) echo "SKILLFORGE_REPO_ROOT points to unexpected origin: $origin" >&2; exit 1 ;;
+          esac
+
+          fetched=false
+          for attempt in 1 2 3; do
+            if git -C "$repo_root" fetch --prune origin; then
+              fetched=true
+              break
+            fi
+            sleep "$attempt"
+          done
+          test "$fetched" = true
+          git -C "$repo_root" worktree prune
+
+          worktree_base="${SKILLFORGE_WORKTREE_ROOT:-${HOME}/.skillforge/worktrees}"
+          repo_key="${GITHUB_REPOSITORY//\//-}"
+          worktree="${worktree_base}/${repo_key}/issue-${ISSUE_NUMBER}"
+          branch="codex/issue-${ISSUE_NUMBER}"
+          branch_ref="refs/heads/${branch}"
+
+          mapfile -t registered_worktrees < <(
+            git -C "$repo_root" worktree list --porcelain | awk -v ref="$branch_ref" '
+              /^worktree / { path = substr($0, 10) }
+              $0 == "branch " ref { print path }
+            '
+          )
+          if [ "${#registered_worktrees[@]}" -gt 1 ]; then
+            printf 'Branch %s is registered in multiple worktrees:\n' "$branch" >&2
+            printf '  %s\n' "${registered_worktrees[@]}" >&2
+            exit 1
+          fi
+          if [ "${#registered_worktrees[@]}" -eq 1 ]; then
+            worktree="${registered_worktrees[0]}"
+            echo "Adopting registered issue worktree: $worktree"
+          fi
+
+          mkdir -p "$(dirname "$worktree")"
+
+          if git -C "$worktree" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            current_branch="$(git -C "$worktree" symbolic-ref --quiet --short HEAD || true)"
+            if [ "$current_branch" != "$branch" ]; then
+              echo "Existing issue worktree uses unexpected branch: ${current_branch:-DETACHED}" >&2
+              exit 1
+            fi
+          else
+            if [ -e "$worktree" ] && [ -n "$(ls -A "$worktree" 2>/dev/null || true)" ]; then
+              echo "Issue worktree path exists but is not a Git worktree: $worktree" >&2
+              exit 1
+            fi
+            rmdir "$worktree" 2>/dev/null || true
+
+            if git -C "$repo_root" show-ref --verify --quiet "refs/heads/$branch"; then
+              git -C "$repo_root" worktree add "$worktree" "$branch"
+            elif git -C "$repo_root" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              git -C "$repo_root" branch --track "$branch" "origin/$branch"
+              git -C "$repo_root" worktree add "$worktree" "$branch"
+            else
+              git -C "$repo_root" worktree add -b "$branch" "$worktree" "origin/$DEFAULT_BRANCH"
+            fi
+          fi
+
+          echo "path=$worktree" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "repo_root=$repo_root" >> "$GITHUB_OUTPUT"
+
+      - name: Launch controlling issue through shared Codex App Server
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          ISSUE_TITLE: ${{ inputs.issue_title }}
+          WAIT_FOR_EXISTING_TURN: ${{ inputs.wait_for_existing_turn }}
+          SKILLFORGE_REPO_ROOT_RESOLVED: ${{ steps.worktree.outputs.repo_root }}
+          SKILLFORGE_ISSUE_WORKTREE: ${{ steps.worktree.outputs.path }}
+          SKILLFORGE_ISSUE_BRANCH: ${{ steps.worktree.outputs.branch }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          command -v python3 >/dev/null
+          command -v setsid >/dev/null
+
+          codex_home="${CODEX_HOME:-${HOME}/.codex}"
+          socket_path="${SKILLFORGE_CODEX_APP_SERVER_SOCKET:-${codex_home}/app-server-control/app-server-control.sock}"
+          if [ ! -S "$socket_path" ]; then
+            echo "Codex App Server control socket is unavailable: $socket_path" >&2
+            echo "Connect this host/project from Codex Remote Control so Desktop owns the remote App Server, then retry the issue transition." >&2
+            exit 1
+          fi
+
+          repo_key="${GITHUB_REPOSITORY//\//-}"
+          state_dir="${HOME}/.skillforge/run/${repo_key}/issue-${ISSUE_NUMBER}"
+          log_dir="${SKILLFORGE_LOG_ROOT:-${HOME}/.skillforge/logs}/${repo_key}"
+          client="${state_dir}/app-server-client.py"
+          pid_file="${state_dir}/app-server-client.pid"
+          legacy_pid_file="${state_dir}/codex.pid"
+          ready_file="${state_dir}/app-server-ready"
+          error_file="${state_dir}/app-server-error"
+          completed_file="${state_dir}/app-server-completed"
+          thread_file="${state_dir}/app-server-thread-id"
+          turn_file="${state_dir}/app-server-turn-id"
+          log_file="${log_dir}/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-app-server.log"
+          mkdir -p "$state_dir" "$log_dir"
+
+          process_from_pid_file_is_alive() {
+            local file="$1"
+            local marker="$2"
+            [ -f "$file" ] || return 1
+            local pid
+            pid="$(cat "$file" 2>/dev/null || true)"
+            [ -n "$pid" ] || return 1
+            kill -0 "$pid" 2>/dev/null || return 1
+            if [ -r "/proc/${pid}/cmdline" ]; then
+              tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -Fq "$marker" || return 1
+            fi
+            return 0
+          }
+
+          if process_from_pid_file_is_alive "$legacy_pid_file" "$state_dir"; then
+            echo "Legacy detached Codex CLI session for issue #${ISSUE_NUMBER} is still running; refusing a duplicate App Server launch."
+            exit 0
+          fi
+
+          if process_from_pid_file_is_alive "$pid_file" "$client"; then
+            existing_pid="$(cat "$pid_file")"
+            if [ "$WAIT_FOR_EXISTING_TURN" != "true" ]; then
+              echo "Codex App Server client for issue #${ISSUE_NUMBER} is already running as pid ${existing_pid}; refusing a duplicate launch."
+              exit 0
+            fi
+            echo "Codex App Server client for issue #${ISSUE_NUMBER} is running as pid ${existing_pid}; waiting to serialize the requested follow-up turn."
+            while process_from_pid_file_is_alive "$pid_file" "$client"; do
+              sleep 2
+            done
+            echo "Previous Codex turn for issue #${ISSUE_NUMBER} finished; launching the queued follow-up turn."
+          fi
+
+          rm -f "$pid_file" "$ready_file" "$error_file" "$completed_file" "$turn_file"
+
+          git -C "$SKILLFORGE_REPO_ROOT_RESOLVED" show "${GITHUB_SHA}:.github/scripts/codex_profile.py" > "${state_dir}/codex_profile.py"
+          python3 "${state_dir}/codex_profile.py" prepare-issue "${state_dir}/codex-settings.json"
+          cat > "$client" <<'PY'
+          #!/usr/bin/env python3
+          import base64
+          import hashlib
+          import json
+          import os
+          import secrets
+          import socket
+          import struct
+          import traceback
+          from codex_profile import ProfilePolicy, load_settings
+
+          SOCKET_PATH = os.environ["SKILLFORGE_APP_SERVER_SOCKET"]
+          REPO_ROOT = os.environ["SKILLFORGE_REPO_ROOT_RESOLVED"]
+          WORKTREE = os.environ["SKILLFORGE_ISSUE_WORKTREE"]
+          ISSUE_NUMBER = os.environ["ISSUE_NUMBER"]
+          ISSUE_TITLE = os.environ.get("ISSUE_TITLE", "").strip()
+          RUN_ID = os.environ.get("GITHUB_RUN_ID", "unknown")
+          STATE_DIR = os.environ["SKILLFORGE_STATE_DIR"]
+          READY_FILE = os.path.join(STATE_DIR, "app-server-ready")
+          ERROR_FILE = os.path.join(STATE_DIR, "app-server-error")
+          COMPLETED_FILE = os.path.join(STATE_DIR, "app-server-completed")
+          THREAD_FILE = os.path.join(STATE_DIR, "app-server-thread-id")
+          TURN_FILE = os.path.join(STATE_DIR, "app-server-turn-id")
+
+          def write_atomic(path, value):
+              tmp = f"{path}.tmp.{os.getpid()}"
+              with open(tmp, "w", encoding="utf-8") as handle:
+                  handle.write(value)
+                  if not value.endswith("\n"):
+                      handle.write("\n")
+              os.replace(tmp, path)
+
+          def log(event, **fields):
+              print(json.dumps({"event": event, **fields}, ensure_ascii=False, separators=(",", ":")), flush=True)
+
+          class WebSocketUnix:
+              def __init__(self, path):
+                  self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                  self.buffer = bytearray()
+                  self.sock.connect(path)
+                  self._handshake()
+
+              def _recv_exact(self, count):
+                  while len(self.buffer) < count:
+                      chunk = self.sock.recv(max(4096, count - len(self.buffer)))
+                      if not chunk:
+                          raise EOFError("App Server websocket closed")
+                      self.buffer.extend(chunk)
+                  result = bytes(self.buffer[:count])
+                  del self.buffer[:count]
+                  return result
+
+              def _handshake(self):
+                  key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+                  request = (
+                      "GET / HTTP/1.1\r\n"
+                      "Host: localhost\r\n"
+                      "Upgrade: websocket\r\n"
+                      "Connection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\n"
+                      "Sec-WebSocket-Version: 13\r\n"
+                      "\r\n"
+                  ).encode("ascii")
+                  self.sock.sendall(request)
+                  response = bytearray()
+                  while b"\r\n\r\n" not in response:
+                      chunk = self.sock.recv(4096)
+                      if not chunk:
+                          raise EOFError("App Server closed during websocket handshake")
+                      response.extend(chunk)
+                      if len(response) > 65536:
+                          raise RuntimeError("Oversized websocket handshake response")
+                  head, remainder = bytes(response).split(b"\r\n\r\n", 1)
+                  lines = head.decode("latin1").split("\r\n")
+                  if not lines or " 101 " not in lines[0]:
+                      raise RuntimeError(f"Websocket upgrade failed: {lines[0] if lines else head!r}")
+                  headers = {}
+                  for line in lines[1:]:
+                      if ":" in line:
+                          name, value = line.split(":", 1)
+                          headers[name.strip().lower()] = value.strip()
+                  expected = base64.b64encode(
+                      hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")).digest()
+                  ).decode("ascii")
+                  if headers.get("sec-websocket-accept") != expected:
+                      raise RuntimeError("Invalid Sec-WebSocket-Accept from App Server")
+                  self.buffer.extend(remainder)
+
+              def send_frame(self, opcode, payload=b""):
+                  if isinstance(payload, str):
+                      payload = payload.encode("utf-8")
+                  first = 0x80 | opcode
+                  length = len(payload)
+                  if length < 126:
+                      header = bytes([first, 0x80 | length])
+                  elif length < (1 << 16):
+                      header = bytes([first, 0x80 | 126]) + struct.pack("!H", length)
+                  else:
+                      header = bytes([first, 0x80 | 127]) + struct.pack("!Q", length)
+                  mask = secrets.token_bytes(4)
+                  masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+                  self.sock.sendall(header + mask + masked)
+
+              def send_json(self, payload):
+                  self.send_frame(0x1, json.dumps(payload, separators=(",", ":")))
+
+              def recv_text(self):
+                  fragments = []
+                  fragmented_opcode = None
+                  while True:
+                      first, second = self._recv_exact(2)
+                      fin = bool(first & 0x80)
+                      opcode = first & 0x0F
+                      masked = bool(second & 0x80)
+                      length = second & 0x7F
+                      if length == 126:
+                          length = struct.unpack("!H", self._recv_exact(2))[0]
+                      elif length == 127:
+                          length = struct.unpack("!Q", self._recv_exact(8))[0]
+                      mask = self._recv_exact(4) if masked else None
+                      payload = self._recv_exact(length)
+                      if mask is not None:
+                          payload = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
+
+                      if opcode == 0x8:
+                          try:
+                              self.send_frame(0x8, payload)
+                          except OSError:
+                              pass
+                          raise EOFError("App Server websocket sent close")
+                      if opcode == 0x9:
+                          self.send_frame(0xA, payload)
+                          continue
+                      if opcode == 0xA:
+                          continue
+                      if opcode in (0x1, 0x2):
+                          if fin:
+                              if opcode == 0x1:
+                                  return payload.decode("utf-8")
+                              continue
+                          fragmented_opcode = opcode
+                          fragments = [payload]
+                          continue
+                      if opcode == 0x0 and fragmented_opcode is not None:
+                          fragments.append(payload)
+                          if fin:
+                              combined = b"".join(fragments)
+                              opcode = fragmented_opcode
+                              fragmented_opcode = None
+                              fragments = []
+                              if opcode == 0x1:
+                                  return combined.decode("utf-8")
+
+          class AppServerClient:
+              def __init__(self, ws):
+                  self.ws = ws
+                  self.next_id = 1
+                  self.thread_id = None
+                  self.turn_id = None
+                  self.turn_completed = None
+
+              def send_notification(self, method, params=None):
+                  message = {"method": method}
+                  if params is not None:
+                      message["params"] = params
+                  self.ws.send_json(message)
+
+              def _handle_unsolicited(self, message):
+                  method = message.get("method")
+                  if not method:
+                      return
+                  params = message.get("params") or {}
+                  if "id" in message:
+                      log(
+                          "server_request_pending",
+                          method=method,
+                          requestId=message.get("id"),
+                          threadId=params.get("threadId"),
+                          turnId=params.get("turnId"),
+                      )
+                      return
+                  if method == "turn/completed":
+                      turn = params.get("turn") or {}
+                      if self.turn_id and turn.get("id") == self.turn_id:
+                          self.turn_completed = turn
+                          log("turn_completed", turnId=self.turn_id, status=turn.get("status"))
+                      return
+                  if method.endswith("/delta"):
+                      return
+                  if method in (
+                      "thread/started",
+                      "turn/started",
+                      "thread/status/changed",
+                      "item/started",
+                      "item/completed",
+                      "serverRequest/resolved",
+                      "error",
+                  ):
+                      compact = {"method": method}
+                      for key in ("threadId", "turnId", "requestId"):
+                          if key in params:
+                              compact[key] = params[key]
+                      if method.startswith("turn/") and isinstance(params.get("turn"), dict):
+                          compact["turn"] = {
+                              key: params["turn"].get(key)
+                              for key in ("id", "status")
+                              if key in params["turn"]
+                          }
+                      log("notification", **compact)
+
+              def recv_message(self):
+                  message = json.loads(self.ws.recv_text())
+                  if not isinstance(message, dict):
+                      raise RuntimeError(f"Unexpected App Server message: {message!r}")
+                  return message
+
+              def request(self, method, params=None):
+                  request_id = self.next_id
+                  self.next_id += 1
+                  message = {"method": method, "id": request_id}
+                  if params is not None:
+                      message["params"] = params
+                  self.ws.send_json(message)
+                  while True:
+                      response = self.recv_message()
+                      if response.get("id") == request_id and "method" not in response:
+                          if "error" in response:
+                              raise RuntimeError(f"{method} failed: {response['error']}")
+                          return response.get("result") or {}
+                      self._handle_unsolicited(response)
+
+              def drain_until_turn_complete(self):
+                  while self.turn_completed is None:
+                      self._handle_unsolicited(self.recv_message())
+                  return self.turn_completed
+
+          def status_is_active(status):
+              if isinstance(status, str):
+                  return status == "active"
+              if isinstance(status, dict):
+                  return status.get("type") == "active"
+              return False
+
+          def resolve_project_id(client, repo_root):
+              """Find one existing Desktop project by its exact canonical repository root."""
+              try:
+                  expected_root = os.path.realpath(repo_root)
+                  cursor, seen, matches = None, set(), set()
+                  for _ in range(20):
+                      page = client.request("project/list", {"limit": 100, "cursor": cursor})
+                      if (not isinstance(page, dict) or not isinstance(page.get("data"), list)
+                              or "nextCursor" not in page):
+                          raise ValueError("project/list returned an invalid page")
+                      for project in page["data"]:
+                          if (not isinstance(project, dict) or not isinstance(project.get("id"), str)
+                                  or not project["id"] or not isinstance(project.get("roots"), list)):
+                              raise ValueError("project/list returned an invalid project")
+                          for root in project["roots"]:
+                              path = root.get("path") if isinstance(root, dict) else None
+                              if not isinstance(path, str) or not os.path.isabs(path) or "\0" in path:
+                                  raise ValueError("project/list returned an invalid project root")
+                              if os.path.realpath(path) == expected_root:
+                                  matches.add(project["id"])
+                      cursor = page["nextCursor"]
+                      if cursor is None:
+                          break
+                      if not isinstance(cursor, str) or not cursor or cursor in seen:
+                          raise ValueError("project/list returned invalid pagination")
+                      seen.add(cursor)
+                  else:
+                      raise ValueError("project/list exceeded the page limit")
+                  if len(matches) != 1:
+                      raise ValueError(f"Expected one project for the repository root; found {len(matches)}")
+                  return matches.pop()
+              except (RuntimeError, ValueError) as exc:
+                  # These optional RPCs may be absent on older servers. Transport failures
+                  # still propagate; never retry thread/start to repair visual grouping.
+                  log("thread_project_warning", level="warning", reason=str(exc),
+                      action="continue_without_project_change")
+                  return None
+
+
+          def assign_thread_project(client, thread_id, thread, project_id):
+              """Only fill an explicitly unassigned, inactive thread; retain manual moves."""
+              if project_id is None:
+                  return
+              if thread.get("projectId") is not None:
+                  log("thread_project_preserved", threadId=thread_id, projectId=thread["projectId"])
+                  return
+              try:
+                  if thread.get("id") != thread_id or "projectId" not in thread:
+                      raise ValueError("App Server did not expose this thread's project assignment")
+                  if status_is_active(thread.get("status")):
+                      raise ValueError("Active thread project left unchanged")
+                  result = client.request(
+                      "thread/metadata/update", {"threadId": thread_id, "projectId": project_id},
+                  )
+                  updated = result.get("thread") if isinstance(result, dict) else None
+                  if (not isinstance(updated, dict) or updated.get("id") != thread_id
+                          or updated.get("projectId") != project_id):
+                      raise ValueError("App Server did not confirm the requested project assignment")
+                  log("thread_project_assigned", threadId=thread_id, projectId=project_id)
+              except (RuntimeError, ValueError) as exc:
+                  log("thread_project_warning", level="warning", threadId=thread_id,
+                      reason=str(exc), action="continue_without_project_change")
+
+
+          try:
+              ws = WebSocketUnix(SOCKET_PATH)
+              client = AppServerClient(ws)
+              init = client.request(
+                  "initialize",
+                  {
+                      "clientInfo": {
+                          "name": "skillforge",
+                          "title": "Skillforge GitHub Action",
+                          "version": "1.0",
+                      },
+                      "capabilities": {"experimentalApi": True},
+                  },
+              )
+              client.send_notification("initialized")
+              log("initialized", codexHome=init.get("codexHome"), platformOs=init.get("platformOs"))
+              policy = ProfilePolicy(client, init.get("codexHome"), load_settings(os.path.join(STATE_DIR, "codex-settings.json")), os.environ["CODEX_LAUNCH_ROLE"])
+
+              # Resolve before start/resume so the later thread snapshot preserves manual moves.
+              project_id = resolve_project_id(client, REPO_ROOT)
+              was_resumed = False
+              thread_id = None
+              if os.path.exists(THREAD_FILE):
+                  with open(THREAD_FILE, "r", encoding="utf-8") as handle:
+                      thread_id = handle.read().strip() or None
+
+              if thread_id:
+                  read_result = client.request(
+                      "thread/read",
+                      {"threadId": thread_id, "includeTurns": False},
+                  )
+                  stored_thread = read_result.get("thread") or {}
+                  if status_is_active(stored_thread.get("status")):
+                      raise RuntimeError(
+                          f"Existing thread {thread_id} is already active; refusing to steer or duplicate it"
+                      )
+                  resumed = client.request(
+                      "thread/resume",
+                      {
+                          "threadId": thread_id,
+                          "cwd": WORKTREE,
+                          "excludeTurns": True,
+                          "approvalPolicy": "on-request",
+                          "approvalsReviewer": "auto_review",
+                          "sandbox": "workspace-write",
+                          **policy.thread_options(resumed=True),
+                      },
+                  )
+                  live_thread = resumed.get("thread") or {}
+                  if status_is_active(live_thread.get("status")):
+                      raise RuntimeError(
+                          f"Resumed thread {thread_id} became active before launch; refusing to steer it"
+                      )
+                  policy.confirm(resumed, resumed=True)
+                  was_resumed = True
+                  log("thread_resumed", threadId=thread_id)
+              else:
+                  started = client.request(
+                      "thread/start",
+                      {
+                          "cwd": WORKTREE,
+                          "approvalPolicy": "on-request",
+                          "approvalsReviewer": "auto_review",
+                          "sandbox": "workspace-write",
+                          "serviceName": "skillforge",
+                          **policy.thread_options(),
+                      },
+                  )
+                  live_thread = started.get("thread") or {}
+                  thread_id = live_thread.get("id")
+                  if not thread_id:
+                      raise RuntimeError("thread/start returned no thread id")
+                  write_atomic(THREAD_FILE, thread_id)
+                  policy.confirm(started)
+                  display_name = f"#{ISSUE_NUMBER}"
+                  if ISSUE_TITLE:
+                      display_name += f" — {ISSUE_TITLE}"
+                  client.request(
+                      "thread/name/set",
+                      {"threadId": thread_id, "name": display_name},
+                  )
+                  log("thread_started", threadId=thread_id, name=display_name, cwd=WORKTREE)
+
+              policy.log_confirmation(log, thread_id=thread_id, cwd=WORKTREE, resumed=was_resumed)
+              assign_thread_project(client, thread_id, live_thread, project_id)
+              client.thread_id = thread_id
+              prompt = f"Execute GitHub issue #{ISSUE_NUMBER} according to AGENTS.md."
+              turn_result = client.request(
+                  "turn/start",
+                  {
+                      "threadId": thread_id,
+                      "clientUserMessageId": f"skillforge:{os.environ.get('GITHUB_REPOSITORY', 'repo')}:{ISSUE_NUMBER}:{RUN_ID}",
+                      "input": [{"type": "text", "text": prompt}],
+                      **policy.turn_options(),
+                      "environments": [{"environmentId": "local", "cwd": WORKTREE}],
+                      "approvalPolicy": "on-request",
+                      "approvalsReviewer": "auto_review",
+                      "sandboxPolicy": {
+                          "type": "workspaceWrite",
+                          "writableRoots": [WORKTREE],
+                          "networkAccess": True,
+                      },
+                  },
+              )
+              turn = turn_result.get("turn") or {}
+              turn_id = turn.get("id")
+              if not turn_id:
+                  raise RuntimeError("turn/start returned no turn id")
+              client.turn_id = turn_id
+              write_atomic(TURN_FILE, turn_id)
+              write_atomic(READY_FILE, json.dumps({"threadId": thread_id, "turnId": turn_id}))
+              log("turn_started", threadId=thread_id, turnId=turn_id, worktree=WORKTREE)
+
+              completed = client.drain_until_turn_complete()
+              status = completed.get("status")
+              write_atomic(
+                  COMPLETED_FILE,
+                  json.dumps({"threadId": thread_id, "turnId": turn_id, "status": status}),
+              )
+              log("client_exit", threadId=thread_id, turnId=turn_id, status=status)
+          except Exception as exc:
+              message = f"{type(exc).__name__}: {exc}"
+              write_atomic(ERROR_FILE, message)
+              log("fatal", error=message)
+              traceback.print_exc()
+              raise
+          PY
+          chmod 700 "$client"
+
+          RUNNER_TRACKING_ID="" nohup setsid -w \
+            env -u GH_TOKEN -u GITHUB_TOKEN -u CI -u GITHUB_ACTIONS \
+              SKILLFORGE_APP_SERVER_SOCKET="$socket_path" \
+              SKILLFORGE_STATE_DIR="$state_dir" \
+              SKILLFORGE_REPO_ROOT_RESOLVED="$SKILLFORGE_REPO_ROOT_RESOLVED" \
+              SKILLFORGE_ISSUE_WORKTREE="$SKILLFORGE_ISSUE_WORKTREE" \
+              CODEX_LAUNCH_ROLE="execution" \
+              ISSUE_NUMBER="$ISSUE_NUMBER" \
+              ISSUE_TITLE="$ISSUE_TITLE" \
+              GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            python3 "$client" >>"$log_file" 2>&1 &
+          client_pid=$!
+          printf '%s\n' "$client_pid" > "$pid_file"
+          printf '%s\n' "$log_file" > "${state_dir}/latest-log"
+
+          launched=false
+          for _ in $(seq 1 20); do
+            if [ -f "$ready_file" ]; then
+              launched=true
+              break
+            fi
+            if [ -f "$error_file" ]; then
+              echo "Codex App Server launch failed: $(cat "$error_file")" >&2
+              tail -n 100 "$log_file" >&2 || true
+              rm -f "$pid_file"
+              exit 1
+            fi
+            if ! kill -0 "$client_pid" 2>/dev/null; then
+              echo "Codex App Server client exited before starting the turn." >&2
+              tail -n 100 "$log_file" >&2 || true
+              rm -f "$pid_file"
+              exit 1
+            fi
+            sleep 0.5
+          done
+
+          if [ "$launched" != true ]; then
+            echo "Timed out waiting for Codex App Server to start the turn." >&2
+            tail -n 100 "$log_file" >&2 || true
+            exit 1
+          fi
+
+          echo "Codex App Server turn launched for issue #${ISSUE_NUMBER}."
+          echo "Thread: $(cat "$thread_file")"
+          echo "Turn: $(cat "$turn_file")"
+          echo "Local event log: ${log_file}"

@@ -1,0 +1,313 @@
+{
+  "scope": "Reusable epic execution skills, runners, workflows and offline regression tests",
+  "skillforge_base": "747bf4766dec7c9e75384c31b601b5523b2dbb78",
+  "sources": {
+    "murillo128/nfl-world-model": "9fc8e8f0636d4adf0160e9c0d0ecd500c4eb4b4d",
+    "murillo128/llm-model-explorer": "ce5bff20039d6dc2381852bbef07f77273e32553"
+  },
+  "adaptations": [
+    "Keep canonical SkillForge bootstrap, README and AGENTS; append only relevant generic routing.",
+    "Rewrite operations documentation generically; exclude all source live-host/session observations and application details.",
+    "Skip closed-issue local cleanup in canonical SkillForge only; preserve behavior in initialized copies and add an offline regression.",
+    "Do not import application code, datasets, source application CI or local bootstrap state."
+  ],
+  "comparison": [
+    {
+      "path": ".codex/config.toml",
+      "category": "shared-baseline",
+      "skillforge_before": null,
+      "llm_blob": "40aed9a0d99c60ac39882a062323c0e04bb5643b",
+      "import_blob": "40aed9a0d99c60ac39882a062323c0e04bb5643b",
+      "nfl_blob_verified": null,
+      "skillforge_after": "40aed9a0d99c60ac39882a062323c0e04bb5643b"
+    },
+    {
+      "path": ".github/actionlint.yaml",
+      "category": "unchanged",
+      "skillforge_before": "59f7f0397e114792cee282d73009ab6a81d00de9",
+      "llm_blob": "59f7f0397e114792cee282d73009ab6a81d00de9",
+      "import_blob": "59f7f0397e114792cee282d73009ab6a81d00de9",
+      "nfl_blob_verified": null,
+      "skillforge_after": "59f7f0397e114792cee282d73009ab6a81d00de9"
+    },
+    {
+      "path": ".github/scripts/cleanup_issue_worktrees.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": null,
+      "import_blob": "db6eb613d405213bff644866f717aadce064f4d4",
+      "nfl_blob_verified": "db6eb613d405213bff644866f717aadce064f4d4",
+      "skillforge_after": "db6eb613d405213bff644866f717aadce064f4d4"
+    },
+    {
+      "path": ".github/scripts/codex_profile.py",
+      "category": "shared-baseline",
+      "skillforge_before": null,
+      "llm_blob": "4e40f82f5bc885d43d2dead177c185189e722a82",
+      "import_blob": "4e40f82f5bc885d43d2dead177c185189e722a82",
+      "nfl_blob_verified": null,
+      "skillforge_after": "4e40f82f5bc885d43d2dead177c185189e722a82"
+    },
+    {
+      "path": ".github/scripts/devin_host_broker.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": null,
+      "import_blob": "150f18237f8956e12721864b0b565e67f61c395e",
+      "nfl_blob_verified": "150f18237f8956e12721864b0b565e67f61c395e",
+      "skillforge_after": "150f18237f8956e12721864b0b565e67f61c395e"
+    },
+    {
+      "path": ".github/scripts/devin_host_client.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": null,
+      "import_blob": "5c89a2a8fcb1f74d526dd8b8cff84f8a9021417e",
+      "nfl_blob_verified": "5c89a2a8fcb1f74d526dd8b8cff84f8a9021417e",
+      "skillforge_after": "5c89a2a8fcb1f74d526dd8b8cff84f8a9021417e"
+    },
+    {
+      "path": ".github/scripts/devin_runner.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "bae118519159145f6e9781538a83425bce83fa60",
+      "import_blob": "27cafabb82fdd2fc272996ff31102235a99a759d",
+      "nfl_blob_verified": "27cafabb82fdd2fc272996ff31102235a99a759d",
+      "skillforge_after": "27cafabb82fdd2fc272996ff31102235a99a759d"
+    },
+    {
+      "path": ".github/scripts/executor_control.py",
+      "category": "shared-baseline",
+      "skillforge_before": null,
+      "llm_blob": "30dc4c70940676a56ae1cb1754b0ec0816db42b6",
+      "import_blob": "30dc4c70940676a56ae1cb1754b0ec0816db42b6",
+      "nfl_blob_verified": null,
+      "skillforge_after": "30dc4c70940676a56ae1cb1754b0ec0816db42b6"
+    },
+    {
+      "path": ".github/scripts/find_epic_parent.py",
+      "category": "unchanged",
+      "skillforge_before": "e219ea8580edb56bafb2abf6f52864fd5132156c",
+      "llm_blob": "e219ea8580edb56bafb2abf6f52864fd5132156c",
+      "import_blob": "e219ea8580edb56bafb2abf6f52864fd5132156c",
+      "nfl_blob_verified": null,
+      "skillforge_after": "e219ea8580edb56bafb2abf6f52864fd5132156c"
+    },
+    {
+      "path": ".github/scripts/local_issue_worktree.py",
+      "category": "shared-baseline",
+      "skillforge_before": null,
+      "llm_blob": "8b81a97667954d8cb5296cd024e8f76a86518b01",
+      "import_blob": "8b81a97667954d8cb5296cd024e8f76a86518b01",
+      "nfl_blob_verified": null,
+      "skillforge_after": "8b81a97667954d8cb5296cd024e8f76a86518b01"
+    },
+    {
+      "path": ".github/scripts/prepare_pr_audit.py",
+      "category": "shared-baseline",
+      "skillforge_before": "998d6f24823eabcec662a8cd76cc8f29502ae4c0",
+      "llm_blob": "5549201ce8aaa20c8c07d68e6674b0d44f87aa13",
+      "import_blob": "5549201ce8aaa20c8c07d68e6674b0d44f87aa13",
+      "nfl_blob_verified": null,
+      "skillforge_after": "5549201ce8aaa20c8c07d68e6674b0d44f87aa13"
+    },
+    {
+      "path": ".github/scripts/test_codex_profile.py",
+      "category": "shared-baseline",
+      "skillforge_before": null,
+      "llm_blob": "97d1c48bab29fcd2dac5f5e420796d9a13f0c5b3",
+      "import_blob": "97d1c48bab29fcd2dac5f5e420796d9a13f0c5b3",
+      "nfl_blob_verified": null,
+      "skillforge_after": "97d1c48bab29fcd2dac5f5e420796d9a13f0c5b3"
+    },
+    {
+      "path": ".github/scripts/test_epic_scheduler.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": null,
+      "import_blob": "6872402165deee505108ded9bdedad89045ca8f4",
+      "nfl_blob_verified": "6872402165deee505108ded9bdedad89045ca8f4",
+      "skillforge_after": "6872402165deee505108ded9bdedad89045ca8f4"
+    },
+    {
+      "path": ".github/scripts/test_executor_routing.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "f4863a2ae8c226aa230e899213307ad09eda211f",
+      "import_blob": "b0e26517401fec347ba9435d1bc8c0d34426c49d",
+      "nfl_blob_verified": "b0e26517401fec347ba9435d1bc8c0d34426c49d",
+      "skillforge_after": "b0e26517401fec347ba9435d1bc8c0d34426c49d"
+    },
+    {
+      "path": ".github/scripts/test_worktree_cleanup.py",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": null,
+      "import_blob": "2c82ed7393be13dd2f82ed1b21296439b1d72a5c",
+      "nfl_blob_verified": "2c82ed7393be13dd2f82ed1b21296439b1d72a5c",
+      "skillforge_after": "2c82ed7393be13dd2f82ed1b21296439b1d72a5c"
+    },
+    {
+      "path": ".github/workflows/codex-execute-ready.yml",
+      "category": "shared-baseline",
+      "skillforge_before": "bbf95c4f4b7c8e1853e92bbdd67ba28b0b6b631a",
+      "llm_blob": "43510f1285a1620fe8d728ec59247abbf0da96cd",
+      "import_blob": "43510f1285a1620fe8d728ec59247abbf0da96cd",
+      "nfl_blob_verified": null,
+      "skillforge_after": "43510f1285a1620fe8d728ec59247abbf0da96cd"
+    },
+    {
+      "path": ".github/workflows/codex-issue-state.yml",
+      "category": "nfl-delta",
+      "skillforge_before": "9aac73c2952822bbd13d2a2cff82c3fd9fb39d0a",
+      "llm_blob": "cdbc0b2a5445d78b5d71a9f4f388c9cc5cde0ddc",
+      "import_blob": "218dd30b30b06e614ba1fc6afa62b0fb79637301",
+      "nfl_blob_verified": "218dd30b30b06e614ba1fc6afa62b0fb79637301",
+      "skillforge_after": "473fe05aef599d97e92d66bdee924aed09619810"
+    },
+    {
+      "path": ".github/workflows/codex-review-ready.yml",
+      "category": "shared-baseline",
+      "skillforge_before": "85b8cf23267bb28939c6aba43a8bc3b060ccfaeb",
+      "llm_blob": "adde797f6b8f37c7b51d0ff308585b7c46341aa5",
+      "import_blob": "adde797f6b8f37c7b51d0ff308585b7c46341aa5",
+      "nfl_blob_verified": null,
+      "skillforge_after": "adde797f6b8f37c7b51d0ff308585b7c46341aa5"
+    },
+    {
+      "path": ".github/workflows/devin-execute-ready.yml",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "e06bd51d3f1e358573e892afac815cf17f6a6333",
+      "import_blob": "722bdf2e00709ee92bc0b0dad9bf0b6d6d0f2f1f",
+      "nfl_blob_verified": "722bdf2e00709ee92bc0b0dad9bf0b6d6d0f2f1f",
+      "skillforge_after": "722bdf2e00709ee92bc0b0dad9bf0b6d6d0f2f1f"
+    },
+    {
+      "path": ".github/workflows/executor-routing-ci.yml",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "3982ec98c05f6d587ceac78651913775c0a1f413",
+      "import_blob": "704681e2d3bb6b13372824fc1b7e20a1cb6ed151",
+      "nfl_blob_verified": "704681e2d3bb6b13372824fc1b7e20a1cb6ed151",
+      "skillforge_after": "f1b864fa52df48d2803e74562ced1021fb75f514"
+    },
+    {
+      "path": "docs/codex-operations.md",
+      "category": "generic-doc-adaptation",
+      "skillforge_before": null,
+      "llm_blob": "a4621a4b75967bb423f6b009f44fc3c89c97c65a",
+      "import_blob": "959d02b62bb160644cbae170365f272e65e9db9b",
+      "nfl_blob_verified": null,
+      "skillforge_after": "959d02b62bb160644cbae170365f272e65e9db9b"
+    },
+    {
+      "path": "docs/execution-runners.md",
+      "category": "generic-doc-adaptation",
+      "skillforge_before": null,
+      "llm_blob": "841c703ab60c06f61a8b0a11566d05ea60f15177",
+      "import_blob": "b52dab8ba8aa094262c54913882ab6202f9553af",
+      "nfl_blob_verified": null,
+      "skillforge_after": "b52dab8ba8aa094262c54913882ab6202f9553af"
+    },
+    {
+      "path": "skills/codex-epic-scheduler/SKILL.md",
+      "category": "unchanged",
+      "skillforge_before": "2e8e3753fec126ee6be62bdb68d38a22f7b2320d",
+      "llm_blob": "2e8e3753fec126ee6be62bdb68d38a22f7b2320d",
+      "import_blob": "2e8e3753fec126ee6be62bdb68d38a22f7b2320d",
+      "nfl_blob_verified": null,
+      "skillforge_after": "2e8e3753fec126ee6be62bdb68d38a22f7b2320d"
+    },
+    {
+      "path": "skills/codex-epic-scheduler/scripts/plan_wave.py",
+      "category": "unchanged",
+      "skillforge_before": "3fab03bca923188e571067de7967b8307e823b80",
+      "llm_blob": "3fab03bca923188e571067de7967b8307e823b80",
+      "import_blob": "3fab03bca923188e571067de7967b8307e823b80",
+      "nfl_blob_verified": null,
+      "skillforge_after": "3fab03bca923188e571067de7967b8307e823b80"
+    },
+    {
+      "path": "skills/codex-github-operations/SKILL.md",
+      "category": "shared-baseline",
+      "skillforge_before": "66cbfbcc4ecba9c70be253b25bef86434b30a867",
+      "llm_blob": "47582a68343a15ea617d5f9e679d4c3331fb8b7f",
+      "import_blob": "47582a68343a15ea617d5f9e679d4c3331fb8b7f",
+      "nfl_blob_verified": null,
+      "skillforge_after": "47582a68343a15ea617d5f9e679d4c3331fb8b7f"
+    },
+    {
+      "path": "skills/codex-independent-review/SKILL.md",
+      "category": "unchanged",
+      "skillforge_before": "904f2837cb45dc3368e2327a87a25cc1e21aa9b8",
+      "llm_blob": "904f2837cb45dc3368e2327a87a25cc1e21aa9b8",
+      "import_blob": "904f2837cb45dc3368e2327a87a25cc1e21aa9b8",
+      "nfl_blob_verified": null,
+      "skillforge_after": "904f2837cb45dc3368e2327a87a25cc1e21aa9b8"
+    },
+    {
+      "path": "skills/codex-issue-orchestrator/SKILL.md",
+      "category": "unchanged",
+      "skillforge_before": "5dbaa305c695dd0a2c7121f5cc7a4f0ae0dbe994",
+      "llm_blob": "5dbaa305c695dd0a2c7121f5cc7a4f0ae0dbe994",
+      "import_blob": "5dbaa305c695dd0a2c7121f5cc7a4f0ae0dbe994",
+      "nfl_blob_verified": null,
+      "skillforge_after": "5dbaa305c695dd0a2c7121f5cc7a4f0ae0dbe994"
+    },
+    {
+      "path": "skills/codex-local-runner/SKILL.md",
+      "category": "nfl-delta",
+      "skillforge_before": "79b6781ccf6236f778b6f5fb0910d2b7d51e05f0",
+      "llm_blob": "c2c86e9953594e182c70f66db9932b3e0508a96b",
+      "import_blob": "6ccf344e4195003541066a70c14ad15bceca6ad8",
+      "nfl_blob_verified": "6ccf344e4195003541066a70c14ad15bceca6ad8",
+      "skillforge_after": "6ccf344e4195003541066a70c14ad15bceca6ad8"
+    },
+    {
+      "path": "skills/codex-pr-audit/SKILL.md",
+      "category": "shared-baseline",
+      "skillforge_before": "e05620b1f255241097b8a0226279912ac79c722b",
+      "llm_blob": "4a185d5ffb969e3d1b8309a1f70eb0ed895dc390",
+      "import_blob": "4a185d5ffb969e3d1b8309a1f70eb0ed895dc390",
+      "nfl_blob_verified": null,
+      "skillforge_after": "4a185d5ffb969e3d1b8309a1f70eb0ed895dc390"
+    },
+    {
+      "path": "skills/design-github-issue/SKILL.md",
+      "category": "nfl-delta",
+      "skillforge_before": "9150f56006ea359d437644e37939cb8aab425b9d",
+      "llm_blob": "5bffc27a305d66bf3bfa5747f77abe59dae1b91c",
+      "import_blob": "e9373c2912d6e863f05779f7e7e25be603d99f36",
+      "nfl_blob_verified": "e9373c2912d6e863f05779f7e7e25be603d99f36",
+      "skillforge_after": "e9373c2912d6e863f05779f7e7e25be603d99f36"
+    },
+    {
+      "path": "skills/devin-local-runner/SKILL.md",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "74489f139804ec5d8f539fb56ba1bfd4abb30f14",
+      "import_blob": "b12d1d7854f1589054e96bcf71212e6f015e41df",
+      "nfl_blob_verified": "b12d1d7854f1589054e96bcf71212e6f015e41df",
+      "skillforge_after": "b12d1d7854f1589054e96bcf71212e6f015e41df"
+    },
+    {
+      "path": "skills/execution-runner-selection/SKILL.md",
+      "category": "nfl-delta",
+      "skillforge_before": null,
+      "llm_blob": "fa74a12da5918a13b9713e126fcba4e50b57051d",
+      "import_blob": "6efbdf78d849c9a828dccfb60cfae175b1c9ac2a",
+      "nfl_blob_verified": "6efbdf78d849c9a828dccfb60cfae175b1c9ac2a",
+      "skillforge_after": "6efbdf78d849c9a828dccfb60cfae175b1c9ac2a"
+    },
+    {
+      "path": "skills/spec-driven-codex-loop/SKILL.md",
+      "category": "shared-baseline",
+      "skillforge_before": "3288ef7a4ab52081fcc621cd1b6827ff1166403a",
+      "llm_blob": "a1f55520824c8ebde06b4307350dd2e87185516c",
+      "import_blob": "a1f55520824c8ebde06b4307350dd2e87185516c",
+      "nfl_blob_verified": null,
+      "skillforge_after": "a1f55520824c8ebde06b4307350dd2e87185516c"
+    }
+  ]
+}

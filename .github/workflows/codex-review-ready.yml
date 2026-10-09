@@ -1,0 +1,268 @@
+name: Audit review-ready PR with local Codex
+
+on:
+  workflow_call:
+    inputs:
+      issue_number:
+        description: Controlling review-ready issue number to audit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: codex-review-${{ github.repository }}-issue-${{ inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: [self-hosted, codex]
+    timeout-minutes: 10
+
+    steps:
+      - name: Resolve current review-ready target
+        id: target
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          number = os.environ["ISSUE_NUMBER"]
+          if not re.fullmatch(r"[1-9][0-9]*", number):
+              raise SystemExit("issue_number must be a positive decimal integer")
+
+          def get_json(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "skillforge-review-ready-workflow",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          issue = get_json(f"issues/{number}")
+          states = {"queued", "execution-ready", "in-progress", "review-ready",
+                    "design-required", "investigation-required", "blocked", "completed"}
+          labels = {entry["name"] for entry in issue.get("labels", [])}
+          if (issue.get("state") != "open" or "pull_request" in issue
+                  or labels & states != {"review-ready"}):
+              raise SystemExit("Expected an open issue with review-ready as its sole workflow state")
+          owner = repo.split("/", 1)[0]
+          branch = f"codex/issue-{number}"
+          query = urllib.parse.urlencode({"state": "open", "head": f"{owner}:{branch}", "per_page": 100})
+          pulls = get_json("pulls?" + query)
+          if len(pulls) != 1:
+              raise SystemExit(f"Expected exactly one open PR for {branch}; found {len(pulls)}")
+          pr = pulls[0]
+          if (pr.get("draft") or pr["head"]["ref"] != branch
+                  or pr["head"]["repo"]["full_name"] != repo
+                  or pr["base"]["repo"]["full_name"] != repo):
+              raise SystemExit("Expected a ready, same-repository PR")
+          for side in ("head", "base"):
+              if not re.fullmatch(r"[0-9a-f]{40}", pr[side]["sha"]):
+                  raise SystemExit("Invalid published commit SHA")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"issue_number={number}\npr_number={pr['number']}\n")
+              output.write(f"head_sha={pr['head']['sha']}\nbase_sha={pr['base']['sha']}\n")
+          print(f"Resolved issue #{number} to PR #{pr['number']} at current head {pr['head']['sha']}.")
+          PY
+
+      - name: Launch isolated PR audit through shared Codex App Server
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ steps.target.outputs.issue_number }}
+          PR_NUMBER: ${{ steps.target.outputs.pr_number }}
+          REVIEW_HEAD_SHA: ${{ steps.target.outputs.head_sha }}
+          REVIEW_BASE_SHA: ${{ steps.target.outputs.base_sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          command -v python3 >/dev/null
+          command -v setsid >/dev/null
+          command -v flock >/dev/null
+          : "${SKILLFORGE_REPO_ROOT:?SKILLFORGE_REPO_ROOT must point to the persistent local checkout}"
+          repo_root="$(cd "$SKILLFORGE_REPO_ROOT" && pwd -P)"
+          origin="$(git -C "$repo_root" remote get-url origin)"
+          case "$origin" in
+            "https://github.com/${GITHUB_REPOSITORY}"|"https://github.com/${GITHUB_REPOSITORY}.git"|"git@github.com:${GITHUB_REPOSITORY}"|"git@github.com:${GITHUB_REPOSITORY}.git"|"ssh://git@github.com/${GITHUB_REPOSITORY}"|"ssh://git@github.com/${GITHUB_REPOSITORY}.git") ;;
+            *) echo "Unexpected repository origin: $origin" >&2; exit 1 ;;
+          esac
+          codex_home="${CODEX_HOME:-${HOME}/.codex}"
+          socket_path="${SKILLFORGE_CODEX_APP_SERVER_SOCKET:-${codex_home}/app-server-control/app-server-control.sock}"
+          test -S "$socket_path" || { echo "Shared Codex App Server socket unavailable" >&2; exit 1; }
+
+          repo_key="${GITHUB_REPOSITORY//\//-}"
+          audit_root="${HOME}/.skillforge/run/${repo_key}/pr-review-${PR_NUMBER}"
+          mkdir -p "$audit_root"
+          exec 9>"${audit_root}/active.lock"
+          if ! flock -n 9; then
+            echo "An isolated audit for PR #${PR_NUMBER} is already active; no duplicate launched."
+            exit 0
+          fi
+
+          legacy_dir="${HOME}/.skillforge/run/${repo_key}/issue-${ISSUE_NUMBER}"
+          if [ -f "${legacy_dir}/pr-audit-client.pid" ]; then
+            legacy_pid="$(cat "${legacy_dir}/pr-audit-client.pid")"
+            if [[ "$legacy_pid" =~ ^[0-9]+$ ]] && kill -0 "$legacy_pid" 2>/dev/null; then
+              legacy_cmd="$(tr '\0' ' ' < "/proc/${legacy_pid}/cmdline" 2>/dev/null || true)"
+              if [[ "$legacy_cmd" == *"${legacy_dir}/pr-audit-client.py"* ]]; then
+                echo "The previous shared-session audit is still active; no second audit started. Finish or stop that audit in Desktop before retrying." >&2
+                exit 1
+              fi
+            fi
+          fi
+
+          attempt="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          state_dir="${audit_root}/${attempt}"
+          worktree_base="${SKILLFORGE_WORKTREE_ROOT:-${HOME}/.skillforge/worktrees}"
+          worktree="${worktree_base}/${repo_key}/reviews/pr-${PR_NUMBER}-${attempt}"
+          log_dir="${SKILLFORGE_LOG_ROOT:-${HOME}/.skillforge/logs}/${repo_key}"
+          log_file="${log_dir}/pr-${PR_NUMBER}-audit-${attempt}.log"
+          mkdir -p "$(dirname "$worktree")" "$log_dir"
+          mkdir "$state_dir"
+          test ! -e "$worktree"
+          git -C "$repo_root" fetch --no-tags origin "$GITHUB_SHA" "$REVIEW_HEAD_SHA" "$REVIEW_BASE_SHA"
+          git -C "$repo_root" worktree add --detach "$worktree" "$REVIEW_HEAD_SHA"
+          test "$(git -C "$worktree" rev-parse HEAD)" = "$REVIEW_HEAD_SHA"
+          if git -C "$worktree" symbolic-ref --quiet HEAD; then
+            echo "Audit worktree must have detached HEAD" >&2
+            exit 1
+          fi
+
+          git -C "$repo_root" show "${GITHUB_SHA}:.github/workflows/codex-execute-ready.yml" > "${state_dir}/published-launcher.yml"
+          git -C "$repo_root" show "${GITHUB_SHA}:.github/scripts/prepare_pr_audit.py" > "${state_dir}/prepare_pr_audit.py"
+          git -C "$repo_root" show "${GITHUB_SHA}:.github/scripts/codex_profile.py" > "${state_dir}/codex_profile.py"
+          audit_client="${state_dir}/pr-audit-client.py"
+          python3 "${state_dir}/prepare_pr_audit.py" "${state_dir}/published-launcher.yml" "$audit_client"
+
+          for path in AGENTS.md skills/codex-pr-audit/SKILL.md skills/codex-independent-review/SKILL.md skills/codex-github-operations/SKILL.md; do
+            if [ ! -f "${worktree}/${path}" ]; then
+              echo "Audited PR head lacks required workflow instruction: ${path}" >&2
+              exit 1
+            fi
+          done
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          number = os.environ["ISSUE_NUMBER"]
+          expected_pr = int(os.environ["PR_NUMBER"])
+          expected_head = os.environ["REVIEW_HEAD_SHA"]
+          expected_base = os.environ["REVIEW_BASE_SHA"]
+          states = {"queued", "execution-ready", "in-progress", "review-ready",
+                    "design-required", "investigation-required", "blocked", "completed"}
+
+          def get_json(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/{path}",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": "Bearer " + os.environ["GITHUB_TOKEN"],
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "skillforge-review-ready-prelaunch-guard",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  return json.load(response)
+
+          issue = get_json(f"issues/{number}")
+          labels = {entry["name"] for entry in issue.get("labels", [])}
+          if issue.get("state") != "open" or "pull_request" in issue or labels & states != {"review-ready"}:
+              raise SystemExit("Pre-launch guard: issue is no longer solely review-ready")
+
+          owner = repo.split("/", 1)[0]
+          branch = f"codex/issue-{number}"
+          query = urllib.parse.urlencode({"state": "open", "head": f"{owner}:{branch}", "per_page": 100})
+          pulls = get_json("pulls?" + query)
+          if len(pulls) != 1:
+              raise SystemExit(f"Pre-launch guard: expected exactly one open PR; found {len(pulls)}")
+          current = pulls[0]
+          if (current["number"] != expected_pr or current.get("draft")
+                  or current["head"]["ref"] != branch
+                  or current["head"]["repo"]["full_name"] != repo
+                  or current["base"]["repo"]["full_name"] != repo
+                  or current["head"]["sha"] != expected_head
+                  or current["base"]["sha"] != expected_base):
+              raise SystemExit("Pre-launch guard: PR identity/readiness/head/base changed; require a fresh audit launch")
+          print(f"Pre-launch guard passed for current PR #{expected_pr} head {expected_head}.")
+          PY
+
+          python3 "${state_dir}/codex_profile.py" prepare-issue "${state_dir}/codex-settings.json"
+
+          task_prompt="Audit PR #${PR_NUMBER} for issue #${ISSUE_NUMBER} according to AGENTS.md."
+          ready_file="${state_dir}/app-server-ready"
+          error_file="${state_dir}/app-server-error"
+          thread_file="${state_dir}/app-server-thread-id"
+          turn_file="${state_dir}/app-server-turn-id"
+          printf '%s\n' "$worktree" > "${state_dir}/worktree"
+          printf '%s\n' "$REVIEW_HEAD_SHA" > "${state_dir}/head-sha"
+          printf '%s\n' "$REVIEW_BASE_SHA" > "${state_dir}/base-sha"
+          printf '%s\n' "$state_dir" > "${audit_root}/latest-attempt"
+
+          RUNNER_TRACKING_ID="" nohup setsid -w \
+            env -u GH_TOKEN -u GITHUB_TOKEN -u CI -u GITHUB_ACTIONS \
+              -u SKILLFORGE_LOCAL_RUNNER -u SKILLFORGE_ISSUE_BRANCH -u SKILLFORGE_ISSUE_WORKTREE \
+              -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+              SKILLFORGE_APP_SERVER_SOCKET="$socket_path" \
+              SKILLFORGE_STATE_DIR="$state_dir" \
+              SKILLFORGE_REPO_ROOT_RESOLVED="$repo_root" \
+              SKILLFORGE_REVIEW_WORKTREE="$worktree" \
+              SKILLFORGE_TASK_PROMPT="$task_prompt" \
+              CODEX_LAUNCH_ROLE="audit" \
+              ISSUE_NUMBER="$ISSUE_NUMBER" ISSUE_TITLE="" PR_NUMBER="$PR_NUMBER" \
+              REVIEW_HEAD_SHA="$REVIEW_HEAD_SHA" \
+              GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+            python3 "$audit_client" >>"$log_file" 2>&1 &
+          client_pid=$!
+          printf '%s\n' "$client_pid" > "${state_dir}/pr-audit-client.pid"
+          printf '%s\n' "$log_file" > "${state_dir}/latest-log"
+
+          launched=false
+          for _ in $(seq 1 60); do
+            if [ -f "$ready_file" ]; then launched=true; break; fi
+            if [ -f "$error_file" ] || ! kill -0 "$client_pid" 2>/dev/null; then
+              echo "Isolated PR audit launch failed; see $log_file" >&2
+              tail -n 40 "$log_file" >&2 || true
+              exit 1
+            fi
+            sleep 0.5
+          done
+          if [ "$launched" != true ]; then
+            echo "Launch acknowledgement timed out; client/state retained to prevent duplicate turns: $state_dir" >&2
+            exit 1
+          fi
+          echo "Isolated audit launched: issue #${ISSUE_NUMBER}, PR #${PR_NUMBER}."
+          echo "Review worktree: $worktree"
+          echo "Reviewed head/base: $REVIEW_HEAD_SHA / $REVIEW_BASE_SHA"
+          echo "New review thread: $(cat "$thread_file")"
+          echo "Turn: $(cat "$turn_file")"
+          echo "State: $state_dir"
+          echo "Log: $log_file"
+          {
+            echo "### Isolated PR #${PR_NUMBER} audit launched"
+            echo "Issue: #${ISSUE_NUMBER}. Head: \`$REVIEW_HEAD_SHA\`. Base: \`$REVIEW_BASE_SHA\`."
+            echo "Worktree: \`$worktree\`. Thread: \`$(cat "$thread_file")\`."
+            echo "Launch success is not a technical PASS; a positive final-capable audit will be merged and completed by the audit controller."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,47 @@
+{
+  "scope": "One-time bidirectional synchronization of all reusable operational skills, including test quality and safe worktree cleanup.",
+  "source_revisions": {
+    "skillforge_main": "3ab26579e9663b102919916948fc6e33aa72cc20",
+    "llm_model_explorer_main": "6b068b92e8c5d7e63246666e13eedd90c3d8b320",
+    "llm_model_explorer_runner_pr_257": "ba064471c8160c11478a82c15b4afaf5a24c43df",
+    "original_skillforge_runner_source": "bcf442d2562eab22a6f12cd53ac67eafadf6e400"
+  },
+  "shared_skill_blobs": {
+    "skills/codex-epic-scheduler/SKILL.md": "2e8e3753fec126ee6be62bdb68d38a22f7b2320d",
+    "skills/codex-github-operations/SKILL.md": "47582a68343a15ea617d5f9e679d4c3331fb8b7f",
+    "skills/codex-independent-review/SKILL.md": "1b19aa5b0498dd378eb1dfd1ae867ccf1c3154b3",
+    "skills/codex-issue-orchestrator/SKILL.md": "5dbaa305c695dd0a2c7121f5cc7a4f0ae0dbe994",
+    "skills/codex-local-runner/SKILL.md": "d8481c066d64bcd75fa7c06c4621fb07a4b1a087",
+    "skills/codex-pr-audit/SKILL.md": "4a185d5ffb969e3d1b8309a1f70eb0ed895dc390",
+    "skills/design-github-issue/SKILL.md": "521967c98edadb4677440884e05bae62c87ff99d",
+    "skills/devin-local-runner/SKILL.md": "b12d1d7854f1589054e96bcf71212e6f015e41df",
+    "skills/execution-runner-selection/SKILL.md": "6efbdf78d849c9a828dccfb60cfae175b1c9ac2a",
+    "skills/repository-wiki-curation/SKILL.md": "b25e732ad44666897115488376425e693740739e",
+    "skills/spec-driven-codex-loop/SKILL.md": "638a12f19d3b74ceca93cc5437216ef372c7ef25",
+    "skills/test-quality/SKILL.md": "71aea515b9168b2914b8e4dcfbe0bc590716b8cc"
+  },
+  "shared_support_blobs": {
+    "skills/codex-epic-scheduler/scripts/plan_wave.py": "3fab03bca923188e571067de7967b8307e823b80",
+    ".github/scripts/cleanup_issue_worktrees.py": "d249bdadb710fea1292bccc6aef2375190a2a833",
+    ".github/scripts/test_worktree_cleanup.py": "83a863f4a15a8e3b3f2ab4b1d41adfbe546447b3"
+  },
+  "integration": [
+    "Preserve current main test-quality routing in AGENTS, issue design, execution and independent review while integrating PR 257.",
+    "Backport non-forced cleanup and its unfinished-work regression cases from LLM Model Explorer to Skillforge.",
+    "Use the same reusable runner skill wording in both repositories; safe cleanup is no longer an application-only deviation.",
+    "Keep native executor/model defaults, final audit authority and explicit activation holds."
+  ],
+  "intentional_repository_specific_content": [
+    "AGENTS.md, README.md and domain/operations documentation retain each repository's scope.",
+    "skills/test-quality/references/repository-testing.md retains native commands and proof boundaries for each repository.",
+    "skills/architecture-json-authoring exists only in LLM Model Explorer.",
+    "skills/repository-bootstrap remains the canonical template procedure in Skillforge and the completed-bootstrap marker in LLM Model Explorer.",
+    "Application code, application CI and the canonical-template-only test/CI step are not mirrored.",
+    "Historical supporting-file comment/formatting differences outside the listed blobs are not asserted byte-identical."
+  ],
+  "notes": [
+    "Blob IDs describe this synchronization snapshot, not automatic drift prevention or a live synchronization service.",
+    "The original LLM runner-port provenance remains available at PR 257's original head.",
+    "No live runner provisioning, credential change, issue activation or model call is authorized by this record."
+  ]
+}
