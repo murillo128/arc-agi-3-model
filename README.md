@@ -78,6 +78,12 @@ python -m compileall -q src tests
 
 Four inexpensive tests with a fake environment cover run lifetime/transition recording, local split separation, held-out-level boundary and notebook source inclusion. They do **not** prove real-engine or Kaggle gateway compatibility. Actual game evaluation and GPU performance measurement are deliberately run outside CI; inherited Skillforge workflows remain unchanged.
 
+## Training-policy alignment
+
+The accepted [two-phase training policy](docs/training-policy.md) reserves **five complete public games** for local evaluation (random seed **42**) and the **last level** of each of the other 20 games. After local model selection, final training must initialize **new random weights** and use all 25 public games before independent Kaggle assessment.
+
+This first scaffold only supports training-data collection from explicitly listed games with level caps and whole-game evaluation on explicitly listed held-out games. It **does not yet generate the official 20/5 split, evaluate reserved last levels, train a world model, or implement phase-2 retraining from scratch**.
+
 ## Evaluation and reproducibility
 
 Separate **real environment steps** (scarce and potentially scored) from **imagined model steps** (compute-limited). Keep a per-game state and replay buffer, and explicitly define reset semantics for offline experiments versus competition runs. Maintain fixed seeds, SDK versions, recorded configuration, action counts, total wall-clock time, and evidence for comparative claims.
