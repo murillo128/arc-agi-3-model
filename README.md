@@ -72,6 +72,50 @@ python -m arc3.evaluation.run --split configs/splits.example.json \
 
 Evaluation runs only the configured held-out games and writes JSON metrics without training imports, transition recordings or weight updates. Metrics include state, win status, completed levels, actual policy-issued actions (including resets), actions per completed level, stop reason and elapsed wall time. They are local baseline diagnostics, not an official competition score. SDK initialization performed by `make` is outside the policy action count. Both lifecycles use one `make` per game and stop on a win or the action budget; `GAME_OVER` causes the shared policy to choose a reset on its next turn. Evaluation requires a new `.json` output path.
 
+Opt in to local, self-contained attempt replays with `--trace-dir`:
+
+```sh
+python -m arc3.evaluation.run --split configs/splits.example.json \
+  --seed 0 --max-actions 80 --output results/evaluation.json \
+  --trace-dir artifacts/evaluation-traces
+```
+
+Each completed or partial attempt becomes one [`.arc3` v1](docs/arc3-format-v1.md)
+file containing all public SDK frame layers, available actions and exact executed
+action parameters. Level changes remain inside the attempt. Files share a run ID;
+each game has its own session ID and increasing attempt index. The random policy
+records no predictions, rewards, values or learning metrics. Future policies may
+implement the read-only `DiagnosticPolicy.trace_diagnostics(observation, action)`
+hook in `core/policy.py`: the recorder copies optional step groups before executing
+the action and computes MAE/MSE only for aligned predictions and real pixels.
+This hook must not train or update weights during evaluation.
+
+WIN and GAME_OVER finalize immediately with their true SDK state. A later RESET
+starts a new attempt without changing the preceding terminal reason. An explicit
+RESET of an active attempt is stored in its `termination.reset_action`; the
+returned frame starts the next file, even when the overall budget is exhausted.
+Bootstrap RESET from NOT_PLAYED and resets after a finalized terminal attempt are
+counted in JSON session metrics, outside the files' action counts. No initialization
+file is created before a usable initial/post-reset observation exists.
+
+`--timeout-seconds` optionally limits each game's elapsed time, checked between
+actions; it cannot preempt a blocking SDK call. Budget, timeout, error and keyboard
+interruption preserve the last verified state and never imply a win. Errors or
+interruptions finalize the active partial attempt and propagate, so a failed run
+does not produce a successful metrics JSON. Unconfirmed failing SDK calls are not
+counted or fabricated as transitions; their execution uncertainty is noted in the
+trace. Ragged frames or invalid diagnostics fail rather than being rewritten.
+Abrupt process death cannot save the current in-memory attempt. Previously
+finalized files remain valid; a death during publication may leave a hidden
+`.arc3-*.tmp` staging file, which can be removed after the writer exits.
+
+The shared codec validates and fsyncs each file before atomic, collision-safe
+publication, preserving existing files even across concurrent writers. Storage
+errors propagate; an attempt that cannot be finalized has no published file.
+Generated `.arc3` files are ignored by Git. Without `--trace-dir`, evaluation
+retains its JSON format and action behavior and does not load the trace codec,
+collect diagnostics or write traces. Collection and Kaggle execution are unchanged.
+
 ## Generate a Kaggle notebook locally
 
 ```sh
@@ -127,8 +171,12 @@ may lower the 512 MiB uncompressed/window cap. The convenience file reader also
 limits compressed bytes to that cap plus 1 MiB; unusual valid files with more
 framing overhead receive a resource refusal. Callers managing such input memory
 can use `decode_attempt` directly. Generated `.arc3` attempts are ignored.
-This codec is independent of the existing collection/evaluation lifecycles;
-recorder integration is separate work.
+The codec also validates files emitted by the opt-in evaluation recorder above.
+Run its focused acceptance suite with:
+
+```sh
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_evaluation_recorder.py' -v
+```
 
 ## Training-policy alignment
 

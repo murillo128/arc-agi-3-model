@@ -26,3 +26,4 @@ datasets/
 *.ipynb
 kernel-metadata.json
 *.arc3
+.*arc3-*.tmp
