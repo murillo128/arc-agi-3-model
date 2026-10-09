@@ -1,6 +1,6 @@
 import './style.css';
-import { decodeInWorker, loadLocal, loadURL, type Source } from './loader';
-import type { Attempt, DecodedAttempt, Observation } from './types';
+import { decodeInWorker, loadLocal, loadURL } from './loader';
+import { ReplayView } from './replay-view';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 const fileInput = element<HTMLInputElement>('file-input');
@@ -11,83 +11,14 @@ const error = element<HTMLParagraphElement>('error');
 const progress = element<HTMLProgressElement>('progress');
 const cancel = element<HTMLButtonElement>('cancel');
 const result = element<HTMLElement>('result');
-const observations = element<HTMLInputElement>('observation-select');
-const frames = element<HTMLInputElement>('frame-select');
+const replayView = new ReplayView();
 let current: AbortController | undefined;
-let attempt: Attempt | undefined;
-let activeObservation: Observation | undefined;
-function previewText(value: string): string { return value.length > 2000 ? `${value.slice(0, 2000)}… [text preview truncated]` : value; }
-
-function showPixels(): void {
-  const tensor = activeObservation!.frames;
-  const [, height = 0, width = 0] = tensor.shape;
-  const pixels = element<HTMLPreElement>('pixels');
-  if (!tensor.shape[0]) { pixels.textContent = 'No frames were returned for this observation.'; return; }
-  const index = Math.min(Math.max(Math.trunc(Number(frames.value)) || 0, 0), tensor.shape[0]! - 1);
-  frames.value = String(index);
-  // This loader's compact preview limits DOM work. The decoded BIN stays exact.
-  const rows = Math.min(height, 32), cols = Math.min(width, 32);
-  const lines: string[] = [];
-  for (let y = 0; y < rows; y++) {
-    const line: string[] = [];
-    for (let x = 0; x < cols; x++) line.push(String(tensor.data[index * height * width + y * width + x]).padStart(3));
-    lines.push(line.join(' '));
-  }
-  pixels.textContent = lines.join('\n') + (height > rows || width > cols ? '\nPreview limited to the first 32 × 32 indices; complete bytes are retained.' : '');
-}
-
-function showObservation(): void {
-  const i = Math.min(Math.max(Math.trunc(Number(observations.value)) || 0, 0), attempt!.steps.length);
-  observations.value = String(i);
-  const step = i === 0 ? undefined : attempt!.steps[i - 1];
-  activeObservation = step?.observation ?? attempt!.initial_observation;
-  const o = activeObservation;
-  const count = o.frames.shape[0]!;
-  frames.value = '0';
-  frames.max = String(Math.max(0, count - 1));
-  frames.disabled = count === 0;
-  element('observation-info').textContent = `${previewText(o.state)} · levels ${o.levels_completed}/${o.win_levels} · shape [${o.frames.shape.join(', ')}] · available actions [${o.available_actions.join(', ')}]` +
-    (step ? ` · ACTION${step.action.id} ${JSON.stringify(step.action.data)}` : ' · Initial observation');
-  showPixels();
-}
-
-function display(decoded: DecodedAttempt, source: Source): void {
-  attempt = decoded.attempt;
-  element('game-id').textContent = previewText(attempt.metadata.game_id);
-  element('version').textContent = `ARC3 ${decoded.major}.${decoded.minor}`;
-  const metadata = element<HTMLDListElement>('metadata');
-  metadata.replaceChildren();
-  const entries: [string, string][] = [
-    ['Source', `${source.kind === 'local' ? 'Local file' : 'URL'} · ${source.name}`],
-    ['Size', `${source.bytes.toLocaleString()} bytes · ${decoded.uncompressedBytes.toLocaleString()} bytes uncompressed`],
-    ['Run / session', `${previewText(attempt.metadata.run_id)} / ${previewText(attempt.metadata.session_id)}`],
-    ['Attempt / seed', `${attempt.metadata.attempt_index} / ${attempt.metadata.seed}`],
-    ['SDK / split', `${previewText(attempt.metadata.sdk_version)} / ${attempt.metadata.source_split}`],
-    ['Started', attempt.metadata.started_at],
-    ['Model', previewText(attempt.metadata.model_id ?? 'Unavailable (not recorded)')],
-    ['Checkpoint', previewText(attempt.metadata.checkpoint_id ?? 'Unavailable (not recorded)')],
-    ['Termination', `${attempt.termination.reason} · ${previewText(attempt.termination.final_state)}`],
-    ['Summary', `${attempt.summary.real_actions} real actions · ${attempt.summary.levels_completed}/${attempt.summary.win_levels} levels · ${attempt.summary.wall_seconds} seconds`],
-  ];
-  if (source.lastModified !== undefined) entries.push(['Local file modified', new Date(source.lastModified).toISOString()]);
-  for (const [key, value] of entries) {
-    const dt = document.createElement('dt'), dd = document.createElement('dd');
-    dt.textContent = key; dd.textContent = previewText(value); metadata.append(dt, dd);
-  }
-  element('sequence-info').textContent = `Initial observation + ${attempt.steps.length} recorded transitions. Frame sequences and palette index bytes are preserved.`;
-  observations.value = '0';
-  observations.max = String(attempt.steps.length);
-  element('recorded-fields').textContent = JSON.stringify({ termination: attempt.termination, summary: attempt.summary }, (_key, value: unknown) => typeof value === 'string' && value.length > 2000 ? `${value.slice(0, 2000)}… [text preview truncated]` : value, 2);
-  showObservation();
-  result.hidden = false;
-}
 
 async function open(input: File | string): Promise<void> {
   current?.abort();
   const controller = new AbortController();
   current = controller;
-  attempt = undefined;
-  activeObservation = undefined;
+  replayView.clear();
   result.hidden = true;
   error.hidden = true;
   cancel.hidden = false;
@@ -106,7 +37,7 @@ async function open(input: File | string): Promise<void> {
     progress.removeAttribute('value');
     const decoded = await decodeInWorker(loaded.bytes, controller.signal);
     if (current !== controller) return;
-    display(decoded, loaded.source);
+    replayView.display(decoded, loaded.source);
     status.textContent = 'Attempt validated. Open another recording at any time.';
   } catch (cause) {
     if (current !== controller) return;
@@ -136,8 +67,6 @@ dropZone.addEventListener('drop', event => {
 });
 element('url-form').addEventListener('submit', event => { event.preventDefault(); void open(urlInput.value.trim()); });
 cancel.addEventListener('click', () => current?.abort());
-observations.addEventListener('change', showObservation);
-frames.addEventListener('change', showPixels);
 const deepLink = new URLSearchParams(location.search).get('file');
 if (deepLink !== null) {
   urlInput.value = deepLink;
