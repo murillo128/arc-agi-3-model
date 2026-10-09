@@ -1,0 +1,32 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.kaggle/
+.env
+.env.*
+!.env.example
+
+# Local ARC-AGI-3 engines, observations, checkpoints and results
+environment_files/
+recordings/
+data/
+results/
+checkpoints/
+outputs/
+wandb/
+vendor/
+third_party/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Kaggle submission artifacts, regenerated from versioned source
+notebooks/
+
+# Local split definitions
+configs/*.local.json

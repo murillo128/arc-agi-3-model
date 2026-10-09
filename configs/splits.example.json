@@ -1,0 +1,5 @@
+{
+  "training_games": ["ls20"],
+  "evaluation_games": ["vc33"],
+  "training_level_caps": {"ls20": 1}
+}

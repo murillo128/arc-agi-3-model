@@ -134,3 +134,5 @@ Prioritize the shortest total time to a correct result, not the fewest character
 - Preserve errors, exit codes, and required checks. Simplifying must not hide failures or skip validation.
 
 These rules do not waive repository workflow, authorization, validation, or review requirements.
+- Keep project validation deliberately cheap: a handful of deterministic local smoke tests, no mandatory coverage targets. Never add automatic GPU training, game downloads, full-game evaluation or heavy benchmarks to CI. Preserve inherited Skillforge checks for changes to their own workflows, but do not expand them into ML validation without an explicit need.
+- Keep `training/`, `evaluation/`, and `kaggle/` as distinct lifecycles over one shared core. During phase 1 avoid training on held-out games or reserved final levels; later final pretraining from scratch and Kaggle online adaptation must be explicit rather than accidental.

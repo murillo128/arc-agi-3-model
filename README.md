@@ -22,25 +22,61 @@ JEPA-style representations, Dreamer-style latent dynamics, planning algorithms, 
 
 Prefer the SDK as a **versioned dependency** rather than vendoring a Starter repository into the research code. Keep Kaggle-specific code at the submission boundary.
 
-## Current repository state
+## Three separated execution paths
 
-The repository was initialized from **Skillforge** and retains its issue/PR/review workflow infrastructure (see [AGENTS.md](AGENTS.md) and [skills/](skills/)). There is **no agent implementation or experiment runner yet**. Do not interpret planned module names as existing source files.
+The first implemented agent is a **seeded random baseline**. JEPA/Dreamer training, online adaptation, and checkpoint loading are not yet implemented. The code shares a small policy in `src/arc3/core/`, while keeping three command entrypoints separate:
 
-The first implementation milestone should deliver a minimal, deterministic local agent and environment adapter before introducing a trainable world model:
+| Path | Purpose | Command |
+| --- | --- | --- |
+| `src/arc3/training/` | Capture real public-game transitions for later world-model training | `arc3-collect` |
+| `src/arc3/evaluation/` | Evaluate locally on disjoint held-out games, without training | `arc3-evaluate` |
+| `src/arc3/kaggle/` | Build a notebook with the same policy and competition-mode adapter | `arc3-build-kaggle` |
 
-- Package/setup for Python 3.12 and the official `arc-agi` SDK, with local game setup documented.
-- A small adapter that exposes observations, legal actions, level state, and transition recording without using private game implementation details.
-- An executable baseline agent and a reproducible smoke test on public games, with fixed seeds and action budgets.
-- Unit and integration checks, plus a clear split between public training games and held-out validation games.
-- Only then: online dynamics adaptation, imagined planning/policy learning, performance benchmarks, and Kaggle notebook generation.
+The `envs/` module imports the official SDK lazily. The Kaggle adapter implements the official framework's `MyAgent` interface without copying the policy.
 
-Each milestone should be tracked as a bounded GitHub issue and integrated via the existing Skillforge review process.
+## Install and run
 
-## Local development prerequisites
+Use **Python 3.12**. The baseline runs on CPU; no CUDA installation is required.
 
-Use **Python 3.12**, a virtual environment, and the official [`arc-agi` package](https://pypi.org/project/arc-agi/) for SDK experiments. CUDA/PyTorch and GPU acceleration are optional until an actual trainable model is added. Development should remain testable on a CPU, RTX 4070 Ti (12 GB), or RTX A4500 (20 GB); future Kaggle hardware should not be hard-coded into model logic.
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[kaggle]'
+cp configs/splits.example.json configs/splits.local.json
+```
 
-Local games can be exercised through the SDK, after downloading the publicly available environment files according to its documentation. This repository does not yet provide its own `make play` or `train` command.
+Edit `configs/splits.local.json` before running. The versioned file is an **illustrative example only**, not the final deterministic 20-training/5-evaluation split. Training games need a positive `training_level_caps` value set from the actual number of levels you want to finish before entering the reserved final level. Do not guess it. The training collector excludes the boundary transition to avoid recording the new held-out level's starting observation.
+
+**Training data collection (not model fitting):**
+
+```bash
+arc3-collect --split configs/splits.local.json --output data/transitions.jsonl --max-actions 80 --seed 42
+```
+
+**Local evaluation:**
+
+```bash
+arc3-evaluate --split configs/splits.local.json --output results/evaluation.json --max-actions 80 --seed 42
+```
+
+These commands use `arc-agi` in normal local mode and can download public games on first use. Pass `--offline` after caching games. The evaluator measures actions, levels completed and final state; it does not collect training records. Scoring *only the reserved last level* within training games still needs a dedicated implementation; no hidden Kaggle results are available locally.
+
+**Generate a Kaggle notebook (without uploading):**
+
+```bash
+arc3-build-kaggle --username YOUR_KAGGLE_USERNAME --accelerator t4
+```
+
+For an intentional upload, authenticate the Kaggle CLI and run `kaggle kernels push -p notebooks/`. The generated notebook follows the official Starter's gateway pattern with the same shared policy. Kaggle then requires a separate **Submit to Competition** action; no upload, remote benchmark or official submission has been performed by this project bootstrap. Accelerators: `cpu`, `t4`, `p100`, `rtx6000`. Future trainable models must bundle their weights through approved Kaggle datasets, not by assuming local files exist.
+
+## Minimal validation
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+python -m compileall -q src tests
+```
+
+Four inexpensive tests with a fake environment cover run lifetime/transition recording, local split separation, held-out-level boundary and notebook source inclusion. They do **not** prove real-engine or Kaggle gateway compatibility. Actual game evaluation and GPU performance measurement are deliberately run outside CI; inherited Skillforge workflows remain unchanged.
 
 ## Evaluation and reproducibility
 
