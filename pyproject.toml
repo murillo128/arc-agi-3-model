@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Minimal ARC-AGI-3 research lifecycles and seeded random baseline"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = ["arc-agi==0.9.9"]
+dependencies = ["arc-agi==0.9.9", "msgpack>=1.1,<2", "pyzstd>=0.16,<0.20"]
 
 [project.optional-dependencies]
 kaggle = ["kaggle>=2.2"]
@@ -17,6 +17,7 @@ kaggle = ["kaggle>=2.2"]
 arc3-collect = "arc3.training.collect:main"
 arc3-evaluate = "arc3.evaluation.run:main"
 arc3-build-kaggle = "arc3.kaggle.build:main"
+arc3-validate-trace = "arc3.traces.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
