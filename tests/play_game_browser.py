@@ -1,6 +1,7 @@
 """Optional real Chromium acceptance. Run with the repository's Python 3.12 venv."""
 
 import argparse
+import base64
 from contextlib import contextmanager
 from io import BytesIO
 import json
@@ -10,6 +11,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from threading import Thread
 import time
 from urllib.request import urlopen
 
@@ -17,6 +19,17 @@ from PIL import Image
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+# The isolated SDK fixture imports the real launcher; no test endpoints or
+# geometry are added to the product protocol.
+sys.path.insert(0, str(ROOT))
+
+from arcengine import GameAction
+from flask import Flask
+from werkzeug.serving import make_server
+
+from arc3.envs.sdk import open_arcade
+from scripts.play_game import PlaySession, web_routes
+from square_cross_reference import reference_actions
 
 
 def assert_native_pixels(page, data):
@@ -24,6 +37,14 @@ def assert_native_pixels(page, data):
     palette = [[int(color[i:i+2], 16) for i in (1, 3, 5, 7)] for color in data['palette']]
     expected = [channel for row in data['frame'] for index in row for channel in palette[index]]
     assert pixels == expected, 'Canvas must render the actual SDK observation with official palette'
+
+
+def assert_display_pixels(page, data):
+    rendered = Image.open(BytesIO(page.locator('#game').screenshot())).convert('RGB')
+    for y, row in enumerate(data['frame']):
+        for x, index in enumerate(row):
+            expected = tuple(int(data['palette'][index][i:i+2], 16) for i in (1, 3, 5))
+            assert rendered.getpixel((int((x+.5)*rendered.width/64), int((y+.5)*rendered.height/64))) == expected
 
 
 def selected(source, game):
@@ -132,11 +153,7 @@ def check_viewport(page, url, name):
     assert_badges(initial)
     assert_layout()
     # Check displayed pixels too: CSS clipping, overlays or tint must not change the observation.
-    rendered = Image.open(BytesIO(page.locator("#game").screenshot())).convert("RGB")
-    for y, row in enumerate(initial["frame"]):
-        for x, index in enumerate(row):
-            expected = tuple(int(initial["palette"][index][i:i+2], 16) for i in (1, 3, 5))
-            assert rendered.getpixel((int((x+.5)*rendered.width/64), int((y+.5)*rendered.height/64))) == expected
+    assert_display_pixels(page, initial)
     screenshot("after")
     action_count = len(actions)
     page.locator("#restart").focus()
@@ -241,7 +258,7 @@ def check_viewport(page, url, name):
     assert reset["frame"] == initial["frame"]
     # Presentation-only response fixtures cover badge updates and WIN without adding a UI solver.
     # Real multi-level/win SDK lifecycle proof remains in test_square_cross.py.
-    for completed, total, state in ((1, 5, "NOT_FINISHED"), (5, 5, "WIN"), (0, 0, "NOT_FINISHED")):
+    for completed, total, state in ((1, 8, "NOT_FINISHED"), (8, 8, "WIN"), (0, 0, "NOT_FINISHED")):
         fixture = dict(initial, levels_completed=completed, win_levels=total, state=state)
         page.route("**/play/state", lambda route: route.fulfill(json=fixture))
         page.reload()
@@ -503,6 +520,84 @@ def check_original(page, url, name):
 
 
 @contextmanager
+def running_selection_server():
+    """One real SDK seed, advanced through level 6 before starting the test UI."""
+    arcade = open_arcade('offline', str(ROOT / 'games'))
+    server = thread = None
+    try:
+        session = PlaySession({'synthetic': (arcade, arcade.open_scorecard())}, 'sc01-v1', 42)
+        for level in range(1, 7):
+            for action, data in reference_actions(session.env._game.scene, level):
+                session.frame = session.env.step(GameAction.from_id(action), data=data)
+        assert session.frame.levels_completed == 6
+        app = Flask('square-cross-selection-test')
+        web_routes(session)(arcade, app)
+        server = make_server('127.0.0.1', 0, app)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f'http://127.0.0.1:{server.server_port}', session
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=5)
+        arcade.close_scorecard()
+
+
+def check_selection(page, url, name, session):
+    errors, writes = [], []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
+    page.on('request', lambda request: writes.append(request.post_data_json)
+            if request.url == url + '/play/action' else None)
+    page.goto(url)
+    page.evaluate('() => queue')
+    directions = {1: 'Up', 2: 'Down', 3: 'Left', 4: 'Right'}
+    for level in (7, 8):
+        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 8')
+        expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'false')
+        scene = session.env._game.scene
+        for action, coordinates in reference_actions(scene, level):
+            before = page.request.get(url + '/play/state').json()
+            count = len(writes)
+            with page.expect_response(url + '/play/action') as response:
+                if action == 6:
+                    box = page.locator('#game').bounding_box()
+                    x, y = coordinates['x'], coordinates['y']
+                    px, py = box['x'] + (x+.5)*box['width']/64, box['y'] + (y+.5)*box['height']/64
+                    if name == 'mobile':
+                        page.touchscreen.tap(px, py)
+                    else:
+                        page.mouse.click(px, py)
+                else:
+                    page.get_by_role('button', name=directions[action], exact=True).tap()
+            assert response.value.status == 200
+            data = response.value.json()
+            page.evaluate('() => queue')
+            assert len(writes) == count + 1
+            assert writes[-1]['action'] == f'ACTION{action}'
+            assert_native_pixels(page, data)
+            if action == 6:
+                assert writes[-1]['data'] == coordinates
+                changed = {(x, y) for y in range(64) for x in range(64)
+                           if before['frame'][y][x] != data['frame'][y][x]}
+                x, y = coordinates['x'], coordinates['y']
+                assert changed == {(x-1, y-1), (x, y-1), (x-1, y), (x, y)}
+                assert all(data['frame'][y][x] == 0 for x, y in changed)
+                assert data['palette'][0] == '#FFFFFFFF'
+                assert_display_pixels(page, data)
+                capture(page, f'selection-level-{level}-{name}')
+                native = page.locator('#game').evaluate('canvas => canvas.toDataURL()')
+                output = ROOT / 'artifacts/square-cross' / f'selection-level-{level}-{name}-native.png'
+                output.write_bytes(base64.b64decode(native.split(',', 1)[1]))
+    assert data['state'] == 'WIN' and data['levels_completed'] == data['win_levels'] == 8
+    expect(page.locator('#message')).to_contain_text('WIN')
+    assert not errors, errors
+    print(f'PASS {name}: real synthetic levels 7–8, scaled selection, four white pixels, exact native/display frames, D-pad delivery and WIN')
+
+
+@contextmanager
 def running_server(*args):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -554,6 +649,12 @@ def main():
                             page = browser.new_page(viewport=viewport, has_touch=True)
                             check(page, url, name)
                             page.close()
+                for name, viewport in (("mobile", {"width": 390, "height": 844}),
+                                       ("desktop", {"width": 1280, "height": 900})):
+                    with running_selection_server() as (url, session):
+                        page = browser.new_page(viewport=viewport, has_touch=True)
+                        check_selection(page, url, name, session)
+                        page.close()
         finally:
             browser.close()
 

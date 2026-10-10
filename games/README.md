@@ -2,7 +2,7 @@
 
 This directory contains our own versioned ARCEngine environments, separate from
 ignored downloaded `environment_files/`. The first family is
-[Square Cross](square_cross/README.md), one game (`sc01-v1`) with five levels.
+[Square Cross](square_cross/README.md), one game (`sc01-v1`) with eight levels.
 These games are not held-out evaluation games and do not change the repository's
 training/evaluation splits. No learning or training is performed by the launcher.
 
@@ -141,11 +141,14 @@ python -m unittest discover -s tests -p 'test_square_cross.py' -v
 python -m unittest discover -s tests -p 'test_play_game.py' -v
 ```
 
-The engine tests cover literal boundary fixtures and 64 seeds × five levels.
+The engine tests cover literal boundary fixtures and 64 seeds × eight levels.
 An independent test-only pixel-footprint BFS checks every pixel along each stride;
 bar fixtures check every decrement through a 128-action budget on all four edges.
 Two real seeded SDK environments exercise all level transitions, terminal behavior
-and resets.
+and resets. The later levels add wrong-colour swept-contact checks, free click
+selection with a four-pixel white marker, and two solid pieces that lock on
+delivery. Both delivery orders are verified against independent safe searches
+and disjoint lane footprints within the shared movement budget.
 Reference solving stays in tests and is never a policy input or benchmark claim.
 Launcher tests exercise real, separate SDK providers, catalog/source isolation,
 atomic selection and failed loads, epoch conflicts, terminal/reset behavior,
@@ -170,6 +173,10 @@ checks native dropdown opening, grouped labels, real cross-source selection,
 scaled edge clicks, one tap/one action, per-observation control changes, actual
 SDK animation ordering/cancellation and shared-tab conflict recovery. Level/WIN
 response fixtures test presentation only; the engine tests own completion proof.
+An additional real synthetic lane reaches levels 7–8 through the SDK, then taps
+squares and uses the D-pad to deliver both pairs. It checks the exact four white
+selection pixels against both native canvas data and displayed pixels, and saves
+native 64×64 marker images plus mobile/desktop screenshots.
 
 To add genuine **offline ls20** browser smoke on a provisioned public cache:
 

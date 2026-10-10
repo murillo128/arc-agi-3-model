@@ -14,6 +14,7 @@ from flask import Flask
 
 from scripts.play_game import ROOT, PlaySession, main, web_routes
 from arc3.envs.sdk import open_arcade
+from square_cross_reference import reference_actions
 
 FIXTURES = ROOT / 'tests/fixtures/play_game'
 
@@ -209,6 +210,45 @@ class ProtocolTests(unittest.TestCase):
             self.assertNotIn('private credential', response.get_data(as_text=True))
             self.assertEqual(self.state(), before)
         self.assertEqual(self.action('ACTION2').status_code, 200)
+
+    def test_real_square_cross_selection_levels_through_public_actions(self):
+        initial = self.state()
+        self.assertEqual(initial['win_levels'], 8)
+        for level in range(1, 9):
+            state = self.state()
+            self.assertEqual(state['levels_completed'], level - 1)
+            self.assertEqual(state['available_actions'], [1, 2, 3, 4] + ([6] if level >= 7 else []))
+            self.assertEqual(set(state), set(initial))  # No geometry or selection identity in JSON.
+            scene = self.session.env._game.scene  # Test-only oracle; requests use public routes.
+            for action, data in reference_actions(scene, level):
+                if action == 6:
+                    before = self.state()
+                    for bad in ({'x': -1, 'y': 0}, {'x': 64, 'y': 0}, {'x': 0, 'y': True}, {}):
+                        self.assertEqual(self.action('ACTION6', data=bad).status_code, 400)
+                        self.assertEqual(self.state(), before)
+                response = self.action(f'ACTION{action}', **({'data': data} if data is not None else {}))
+                self.assertEqual(response.status_code, 200)
+                if action == 6:
+                    after = response.get_json()['frame']
+                    changed = {(x, y) for y in range(64) for x in range(64)
+                               if before['frame'][y][x] != after[y][x]}
+                    x, y = data['x'], data['y']
+                    self.assertEqual(changed, {(x-1, y-1), (x, y-1), (x-1, y), (x, y)})
+                    self.assertTrue(all(after[y][x] == 0 for x, y in changed))
+            if level in (6, 7):
+                # An unselected arrow spends budget, RESET restores the seeded
+                # level and marker-free frame with ACTION6 still advertised.
+                before = self.state()
+                self.action('ACTION1')
+                reset = self.action('RESET').get_json()
+                self.assertEqual(reset['frame'], before['frame'])
+                self.assertEqual(reset['available_actions'], [1, 2, 3, 4, 6])
+                self.assertNotEqual(reset['epoch'], before['epoch'])
+        self.assertEqual(self.state()['state'], 'WIN')
+        self.assertEqual(self.state()['levels_completed'], 8)
+        reset = self.action('RESET').get_json()
+        self.assertEqual(reset['frame'], initial['frame'])
+        self.assertEqual(reset['available_actions'], [1, 2, 3, 4])
 
     def test_stale_epoch_and_concurrent_switch_have_no_side_effects(self):
         old = self.state()['epoch']
