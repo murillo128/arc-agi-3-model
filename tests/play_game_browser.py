@@ -55,7 +55,7 @@ def check_viewport(page, url, name):
         expected = [channel for row in data["frame"] for index in row for channel in palette[index]]
         assert pixels() == expected, "Canvas must render the actual SDK observation with official palette"
 
-    def dots(data):
+    def bar_pixels(data):
         return sum(row.count(0) for row in data["frame"])
 
     def square(data):
@@ -100,12 +100,14 @@ def check_viewport(page, url, name):
             assert button.get_attribute("aria-label") or button.inner_text().strip()
 
     def screenshot(suffix):
-        output = ROOT / "artifacts" / "issue-22" / f"{suffix}-{name}.png"
+        output = ROOT / "artifacts" / "square-cross" / f"{suffix}-{name}.png"
         output.parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(output), full_page=True)
         print(f"Screenshot: {output}")
 
     assert_canvas(initial)
+    assert bar_pixels(initial) == 180
+    expect(page.locator('#game')).to_have_attribute('aria-label', 'Game observation, including remaining-moves bar')
     assert_badges(initial)
     assert_layout()
     # Check displayed pixels too: CSS clipping, overlays or tint must not change the observation.
@@ -153,20 +155,20 @@ def check_viewport(page, url, name):
     moved = command(lambda: page.keyboard.press("ArrowRight"))
     assert page.evaluate("scrollY") == scroll_before
     assert actions[-1:] == ["ACTION4"]
-    assert square(moved) == {(x + 1, y) for x, y in square(initial)}
-    assert dots(moved) == dots(initial) - 1
+    assert square(moved) == {(x + 5, y) for x, y in square(initial)}
+    assert 0 < bar_pixels(moved) < bar_pixels(initial)
     before_tap = len(actions)
     touched = command(lambda: page.get_by_role("button", name="Down", exact=True).tap())
-    assert square(touched) == {(x, y + 1) for x, y in square(moved)}
-    assert dots(touched) == dots(initial) - 2
+    assert square(touched) == {(x, y + 5) for x, y in square(moved)}
+    assert 0 < bar_pixels(touched) < bar_pixels(moved)
     page.evaluate("() => queue")
     assert actions[before_tap:] == ["ACTION2"], "One tap must dispatch exactly once"
     # Burst input must preserve all commands in order, with no simultaneous requests.
     page.evaluate("() => { for (let i=0;i<3;i++) document.querySelector('#left').click(); }")
     page.evaluate("() => queue")
     burst = page.request.get(url + "/play/state").json()
-    assert square(burst) == {(x - 3, y) for x, y in square(touched)}
-    assert dots(burst) == dots(initial) - 5
+    assert square(burst) == {(x - 15, y) for x, y in square(touched)}
+    assert 0 < bar_pixels(burst) < bar_pixels(touched)
     assert actions[-3:] == ["ACTION3"] * 3
     assert max_pending == 1, "Browser action requests must be serialized"
     assert_canvas(burst)
@@ -179,8 +181,8 @@ def check_viewport(page, url, name):
     page.evaluate("() => queue")
     mixed = page.request.get(url + "/play/state").json()
     assert actions[action_count:] == ["ACTION3", "RESET", "ACTION2"]
-    assert square(mixed) == {(x, y + 1) for x, y in square(initial)}
-    assert dots(mixed) == dots(initial) - 1
+    assert square(mixed) == {(x, y + 5) for x, y in square(initial)}
+    assert bar_pixels(mixed) == bar_pixels(moved)
     assert_canvas(mixed)
     command(lambda: page.get_by_role("button", name="Restart", exact=True).click())
     assert not errors, errors
@@ -195,10 +197,15 @@ def check_viewport(page, url, name):
     command(lambda: page.get_by_role("button", name="Restart", exact=True).click())
     assert not errors, errors
     # Real SDK depletion, terminal controls and reset; no game internals are inspected.
-    for _ in range(dots(initial)):
-        depleted = command(lambda: page.keyboard.press("ArrowUp"))
+    previous = bar_pixels(initial)
+    for _ in range(128):  # Contract cap, not a privileged budget in browser/API state.
+        depleted = command(lambda: page.keyboard.press("ArrowDown"))  # Away from seed-42's cross.
+        assert bar_pixels(depleted) < previous
+        previous = bar_pixels(depleted)
+        if depleted['state'] == 'GAME_OVER':
+            break
     assert depleted["state"] == "GAME_OVER"
-    assert dots(depleted) == 0
+    assert bar_pixels(depleted) == 0
     expect(page.locator("#message")).to_contain_text("GAME_OVER")
     expect(page.locator("#message")).to_be_visible()
     for direction in ("Up", "Down", "Left", "Right"):

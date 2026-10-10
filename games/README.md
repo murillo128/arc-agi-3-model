@@ -17,9 +17,10 @@ python scripts/play_game.py --mode sdk --seed 42 --max-actions 100
 ```
 
 The web command prints `http://127.0.0.1:8001/`. Open it in a local browser and use
-arrow keys or the directional buttons (including touch). The dots inside the
-image are the remaining moves. Restart follows the SDK's reset lifecycle: retry
-the current level after movement/loss; start at level 1 after a win. Close the
+arrow keys or the directional buttons (including touch). The remaining-moves bar
+inside the image shrinks on every directional command, including blocked moves.
+Restart follows the SDK's reset lifecycle: retry the current level after
+movement/loss; start at level 1 after a win. Close the
 server with Ctrl+C. This is a small **local play UI**, not the hosted competition
 UI. Tabs share one play session. Inputs are queued in the browser and serialized
 on the server. Errors appear below the controls; Restart can recover after a
@@ -35,7 +36,8 @@ the complete native 64 × 64 observation is displayed without tint or clipping.
 
 The SDK command runs a seeded random smoke agent, stopping at a terminal state
 or `--max-actions`. Its JSON summary counts directional actions, excluding SDK
-initialization. Seed 42 currently ends with `GAME_OVER`, 0/5 levels and 17 actions.
+initialization. This command cap is separate from each level's in-game budget;
+the terminal state and action count depend on the seeded layout and movement rules.
 This is a plumbing check, not a solver or learned-agent result. Add `--render`
 for terminal frames. Both routes accept `--game sc01-v1`; web also accepts
 `--host` and `--port`. The games path is resolved relative to the launcher, so an
@@ -87,8 +89,10 @@ python -m unittest discover -s tests -p 'test_play_game.py' -v
 ```
 
 The engine tests cover literal boundary fixtures and 64 seeds × five levels.
-An independent test-only pixel-footprint BFS checks solutions; two real seeded
-SDK environments exercise all level transitions, terminal behavior and resets.
+An independent test-only pixel-footprint BFS checks every pixel along each stride;
+bar fixtures check every decrement through a 128-action budget on all four edges.
+Two real seeded SDK environments exercise all level transitions, terminal behavior
+and resets.
 Reference solving stays in tests and is never a policy input or benchmark claim.
 Launcher tests exercise real SDK/Flask behavior, arbitrary working directories,
 finite smoke runs and error responses. They do not claim browser coverage.
@@ -104,11 +108,11 @@ python tests/play_game_browser.py
 The browser check starts/stops its own local server and checks 390 × 844 mobile
 and 1280 × 900 desktop layouts (plus 320-pixel-wide controls). It compares native
 canvas pixels and displayed cell colours with the SDK observation, exercises
-keyboard/touch/burst inputs, dot depletion, reset and injected connection-error
+keyboard/touch/burst inputs, bar depletion, reset and injected connection-error
 recovery. It also checks focus, hit targets, HELP, disabled controls, loading and
 state badges. Level/WIN response fixtures test presentation only; the engine
 tests above own real multi-level completion proof. Chromium screenshots of the
-initial, error and terminal states go under ignored `artifacts/issue-22/`.
+initial, error and terminal states go under ignored `artifacts/square-cross/`.
 For a temporary browser cache, set `PLAYWRIGHT_BROWSERS_PATH=/tmp/arc3-playwright`
 for both the install and test commands. On hosts with an unwritable matplotlib
 config directory, `MPLCONFIGDIR=/tmp/arc3-mpl` avoids its cache warning.

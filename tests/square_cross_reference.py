@@ -33,8 +33,10 @@ def reference_path(scene, center_only=False):
             return path[::-1]
         x, y = point
         for action, dx, dy in steps:
-            nxt = (x + dx, y + dy)
-            if 0 <= nxt[0] < 64 and 0 <= nxt[1] < 64 and nxt not in forbidden and nxt not in parents:
+            sweep = [(x + dx * step, y + dy * step) for step in range(1, scene.stride + 1)]
+            nxt = sweep[-1]
+            if nxt not in parents and all(0 <= xx < 64 and 0 <= yy < 64 and (xx, yy) not in forbidden
+                                          for xx, yy in sweep):
                 parents[nxt] = (point, action)
                 queue.append(nxt)
     raise AssertionError("Reference search found no solution")
