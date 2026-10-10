@@ -1,0 +1,6 @@
+{
+  "game_id": "sc01-v1",
+  "title": "Square Cross",
+  "tags": ["synthetic", "perception", "control"],
+  "default_fps": 10
+}
