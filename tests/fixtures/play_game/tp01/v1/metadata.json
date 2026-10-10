@@ -1,0 +1,6 @@
+{
+  "game_id": "tp01-v1",
+  "title": "Input test fixture (not official)",
+  "tags": ["test-fixture"],
+  "default_fps": 10
+}
