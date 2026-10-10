@@ -201,7 +201,7 @@ function draw(data) {
   document.querySelector('#message').textContent = data.state === 'WIN' ? 'WIN · All levels complete. Restart to play again.' :
     data.state === 'GAME_OVER' ? 'GAME_OVER · Restart to try again.' : '';
   document.querySelector('#game-help').textContent = data.source === 'synthetic' && data.game === 'sc01-v1' ?
-    'Move the square’s centre onto the cross. Each arrow spends one move, even when blocked, and shrinks the remaining-moves bar. Restart retries the current level; after a win, it starts at level 1.' :
+    'Move each square’s centre onto its cross. In levels 6 and 8, match colours: touching a different-colour cross ends the attempt. In levels 7–8, tap a square to select it (white marker); tap again or tap empty space to deselect. Level 8 requires delivering both squares. Clicks are free; every arrow spends one move, even when blocked or unselected. Restart retries the current level; after a win, it starts at level 1.' :
     'Explore the game and infer its rules from the screen and the available actions.';
   controls();
 }

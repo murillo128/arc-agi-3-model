@@ -3,7 +3,7 @@
 from collections import deque
 
 
-def reference_path(scene, center_only=False):
+def reference_path(scene, center_only=False, *, color_rule=False):
     # Enumerate occupied pixels independently of production rectangle arithmetic.
     limits = {"top": (0, 4, 63, 63), "bottom": (0, 0, 63, 59),
               "left": (4, 0, 63, 63), "right": (0, 0, 59, 63)}
@@ -12,6 +12,12 @@ def reference_path(scene, center_only=False):
     if scene.obstacle:
         x, y, w, h = scene.obstacle
         solid = {(xx, yy) for xx in range(x, x + w) for yy in range(y, y + h)}
+    if scene.other_player is not None:
+        solid |= square_pixels(scene.other_player, scene.player_size)
+    if color_rule:
+        for point, color in scene.targets:
+            if color != scene.player_color:
+                solid |= cross_pixels(point, scene.target_size)
     radius = 0 if center_only else scene.player_size // 2
     forbidden = set()
     for x in range(64):
@@ -40,3 +46,39 @@ def reference_path(scene, center_only=False):
                 parents[nxt] = (point, action)
                 queue.append(nxt)
     raise AssertionError("Reference search found no solution")
+
+
+def square_pixels(point, size=5):
+    x, y = point
+    r = size // 2
+    return {(xx, yy) for xx in range(x - r, x + r + 1) for yy in range(y - r, y + r + 1)}
+
+
+def cross_pixels(point, size=5):
+    x, y = point
+    r = size // 2
+    return {(x + d, y) for d in range(-r, r + 1)} | {(x, y + d) for d in range(-r, r + 1)}
+
+
+def reference_actions(scene, level, order=(0, 1)):
+    """SDK actions with free selections; only tests may inspect seeded geometry.
+
+    Search one piece at a time with the other solid at its current/locked
+    position. The matrix also proves the lanes disjoint and the total length
+    equal to the Manhattan lower bound, so a joint two-piece BFS is unnecessary.
+    """
+    if level < 8:
+        clicks = [(6, dict(zip(('x', 'y'), scene.player)))] if level == 7 else []
+        return clicks + [(action, None) for action in reference_path(scene, color_rule=level == 6)]
+    positions = [point for point, _ in scene.players]
+    targets = [point for point, _ in scene.targets]
+    colors = [color for _, color in scene.players]
+    actions = []
+    for i in order:
+        single = scene._replace(player=positions[i], target=targets[i], player_color=colors[i],
+                                target_color=colors[i], other_player=positions[1-i],
+                                other_target=targets[1-i], other_color=colors[1-i])
+        actions.append((6, dict(zip(('x', 'y'), positions[i]))))
+        actions.extend((action, None) for action in reference_path(single, color_rule=True))
+        positions[i] = targets[i]
+    return actions
