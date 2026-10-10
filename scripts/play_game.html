@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Square Cross · Local play</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #15171b; color: #f2f2f2; }
+  body { max-width: 38rem; margin: 2rem auto; padding: 0 1rem; text-align: center; }
+  h1 { margin-bottom: .4rem; }
+  p { line-height: 1.5; }
+  canvas { width: min(100%, 512px); height: auto; image-rendering: pixelated; border: 1px solid #666; }
+  button { font: inherit; min-width: 3.5rem; min-height: 3rem; border: 1px solid #777; border-radius: .4rem;
+           background: #30343c; color: white; cursor: pointer; touch-action: manipulation; }
+  button:focus-visible { outline: 3px solid #ffdc00; outline-offset: 3px; }
+  button:disabled { opacity: .4; cursor: default; }
+  .controls { display: grid; grid-template-columns: repeat(3, 3.5rem); gap: .4rem; justify-content: center; margin: 1rem; }
+  #up { grid-column: 2; } #left { grid-column: 1; } #down { grid-column: 2; } #right { grid-column: 3; }
+  #error { color: #ffabab; min-height: 1.5em; }
+</style>
+<h1>Square Cross</h1>
+<p>Move the square’s centre onto the cross. Each arrow uses one dot.<br>Use arrow keys or the buttons below.</p>
+<p id="status" role="status">Connecting…</p>
+<canvas id="game" width="64" height="64" aria-label="Game observation, including remaining move dots"></canvas>
+<div class="controls" aria-label="Directional controls">
+  <button id="up" data-action="ACTION1" aria-label="Up" disabled>↑</button>
+  <button id="left" data-action="ACTION3" aria-label="Left" disabled>←</button>
+  <button id="down" data-action="ACTION2" aria-label="Down" disabled>↓</button>
+  <button id="right" data-action="ACTION4" aria-label="Right" disabled>→</button>
+</div>
+<button id="restart" data-action="RESET">Restart</button>
+<p id="error" role="alert"></p>
+<p>Local play UI · Restart follows the SDK: retry the current level; after a win, start at level 1.</p>
+<script>
+const canvas = document.querySelector('#game');
+const ctx = canvas.getContext('2d');
+const status = document.querySelector('#status');
+const error = document.querySelector('#error');
+let ready = false;
+let terminal = false;
+let queue = Promise.resolve();
+function draw(data) {
+  if (!Array.isArray(data.frame) || data.frame.length !== 64 || data.frame.some(row => row.length !== 64)) {
+    throw new Error('SDK returned an invalid frame');
+  }
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    ctx.fillStyle = data.palette[data.frame[y][x]];
+    ctx.fillRect(x, y, 1, 1);
+  }
+  terminal = ['WIN', 'GAME_OVER'].includes(data.state);
+  ready = true;
+  const level = Math.min(data.levels_completed + 1, data.win_levels);
+  status.textContent = `${data.game} · Seed ${data.seed} · Level ${level}/${data.win_levels} · ${data.state}`;
+  document.querySelectorAll('.controls button').forEach(button => { button.disabled = terminal; });
+}
+async function request(path, action) {
+  const response = await fetch(path, action ? {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})
+  } : undefined);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  draw(data);
+}
+function enqueue(action) {
+  // Each command waits for the previous response, including restart.
+  queue = queue.then(async () => {
+    if (action !== 'RESET' && (!ready || terminal)) return;
+    error.textContent = '';
+    await request('/play/action', action);
+  }).catch(err => {
+    error.textContent = `${err.message}. Try Restart to recover.`;
+  });
+}
+document.querySelectorAll('[data-action]').forEach(button => {
+  button.addEventListener('click', () => enqueue(button.dataset.action));
+});
+const keys = {ArrowUp: 'ACTION1', ArrowDown: 'ACTION2', ArrowLeft: 'ACTION3', ArrowRight: 'ACTION4'};
+document.addEventListener('keydown', event => {
+  if (keys[event.key]) { event.preventDefault(); enqueue(keys[event.key]); }
+});
+queue = request('/play/state').catch(err => { error.textContent = `${err.message}. Try Restart to recover.`; });
+</script>
+</html>
