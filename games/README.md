@@ -25,6 +25,14 @@ UI. Tabs share one play session. Inputs are queued in the browser and serialized
 on the server. Errors appear below the controls; Restart can recover after a
 connection interruption.
 
+The magenta handheld shell is locally authored HTML/CSS, visually inspired by
+the [ARC Prize ls20 console](https://arcprize.org/tasks/ls20). Its badges show the
+live game ID and level; the compact readout includes the seed and SDK state.
+HELP opens instructions without spending a move. The SPACEBAR, CLICK, UNDO and
+SELECT decorations are disabled. On phones the lower panel reflows to keep
+active hit targets at least 44 × 44 pixels. The shell uses CSS colour properties;
+the complete native 64 × 64 observation is displayed without tint or clipping.
+
 The SDK command runs a seeded random smoke agent, stopping at a terminal state
 or `--max-actions`. Its JSON summary counts directional actions, excluding SDK
 initialization. Seed 42 currently ends with `GAME_OVER`, 0/5 levels and 17 actions.
@@ -93,10 +101,14 @@ python -m playwright install chromium
 python tests/play_game_browser.py
 ```
 
-The browser check starts/stops its own local server, compares the canvas with SDK
-pixels and palette, sends keyboard/touch/burst inputs, checks dot decrements and
-reset, and injects one connection failure to check UI recovery. It requires a
-Chromium-compatible host and saves a screenshot under ignored `artifacts/`.
+The browser check starts/stops its own local server and checks 390 × 844 mobile
+and 1280 × 900 desktop layouts (plus 320-pixel-wide controls). It compares native
+canvas pixels and displayed cell colours with the SDK observation, exercises
+keyboard/touch/burst inputs, dot depletion, reset and injected connection-error
+recovery. It also checks focus, hit targets, HELP, disabled controls, loading and
+state badges. Level/WIN response fixtures test presentation only; the engine
+tests above own real multi-level completion proof. Chromium screenshots of the
+initial, error and terminal states go under ignored `artifacts/issue-22/`.
 For a temporary browser cache, set `PLAYWRIGHT_BROWSERS_PATH=/tmp/arc3-playwright`
 for both the install and test commands. On hosts with an unwritable matplotlib
 config directory, `MPLCONFIGDIR=/tmp/arc3-mpl` avoids its cache warning.

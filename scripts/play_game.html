@@ -5,37 +5,153 @@
 <link rel="icon" href="data:,">
 <title>Square Cross · Local play</title>
 <style>
-  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #15171b; color: #f2f2f2; }
-  body { max-width: 38rem; margin: 2rem auto; padding: 0 1rem; text-align: center; }
-  h1 { margin-bottom: .4rem; }
-  p { line-height: 1.5; }
-  canvas { width: min(100%, 512px); height: auto; image-rendering: pixelated; border: 1px solid #666; }
-  button { font: inherit; min-width: 3.5rem; min-height: 3rem; border: 1px solid #777; border-radius: .4rem;
-           background: #30343c; color: white; cursor: pointer; touch-action: manipulation; }
-  button:focus-visible { outline: 3px solid #ffdc00; outline-offset: 3px; }
-  button:disabled { opacity: .4; cursor: default; }
-  .controls { display: grid; grid-template-columns: repeat(3, 3.5rem); gap: .4rem; justify-content: center; margin: 1rem; }
-  #up { grid-column: 2; } #left { grid-column: 1; } #down { grid-column: 2; } #right { grid-column: 3; }
-  #error { color: #ffabab; min-height: 1.5em; }
+  :root {
+    color-scheme: dark;
+    font-family: system-ui, sans-serif;
+    background: #0e0c0d;
+    color: #eee8ed;
+    --shell: #ce79ad;
+    --shell-light: #efb1d6;
+    --shell-dark: #a13b78;
+    --shell-edge: #772453;
+    --ink: #321326;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 40px 16px; }
+  main { width: min(100%, 520px); margin: auto; }
+  .masthead { display: flex; justify-content: space-between; align-items: baseline; margin: 0 4px 18px; gap: 12px; }
+  h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .03em; }
+  .local { color: #afa0aa; font: 11px ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .console {
+    padding: 16px 20px 18px;
+    border: 1px solid var(--shell-light);
+    border-right-color: var(--shell-dark);
+    border-bottom-color: var(--shell-dark);
+    border-radius: 23px 23px 27px 27px;
+    background:
+      repeating-linear-gradient(90deg, #ffffff06 0 1px, transparent 1px 4px),
+      repeating-linear-gradient(0deg, #32132603 0 1px, transparent 1px 3px),
+      linear-gradient(115deg, var(--shell-light), transparent 26%),
+      linear-gradient(180deg, var(--shell), var(--shell-dark) 74%, var(--shell) 88%, var(--shell-dark));
+    box-shadow: inset 3px 3px 5px #fff5, inset -5px -4px 8px #69204b55,
+                5px 8px 0 var(--shell-edge), 9px 17px 0 #0005, 0 26px 50px #0009;
+  }
+  .badges { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; color: var(--ink); }
+  .badge {
+    min-width: 0; padding: 5px 9px; border: 1px solid var(--shell-edge); border-radius: 7px;
+    background: #78234b19; box-shadow: inset 1px 2px 3px #53143880, 0 1px 1px #ffdfef99;
+    font: bold 13px ui-monospace, monospace; letter-spacing: .06em;
+  }
+  #game-id { overflow-wrap: anywhere; }
+  #level { flex-shrink: 0; font-size: 11px; }
+  .bezel {
+    padding: 12px; border: 3px solid var(--shell-edge); border-radius: 20px;
+    background: #20171e;
+    box-shadow: 0 0 0 4px #6e224a45, 0 5px 3px #51122b66, inset 0 3px 5px #000, 0 -2px 1px #ffe0f0;
+  }
+  /* Only the surrounding bezel is rounded. Every observation pixel stays exposed. */
+  canvas { display: block; width: 100%; height: auto; aspect-ratio: 1; image-rendering: pixelated; background: #0b0b0b; }
+  button { font: inherit; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  button:focus-visible { outline: 3px solid #fff1aa; outline-offset: 3px; }
+  button:disabled { cursor: not-allowed; }
+  .panel { display: grid; grid-template-columns: 132px minmax(0, 1fr) 104px; gap: 16px; align-items: center; margin-top: 20px; }
+  .controls { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); }
+  .controls button { position: relative; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #c4b6c0; }
+  .controls button::before {
+    content: ''; position: absolute; inset: 4px; border-radius: 50%; border: 1px solid #35232e;
+    background: radial-gradient(ellipse at 35% 20%, #67545f, #231b21 48%, #100e10 90%);
+    box-shadow: 0 3px 0 #551736, 0 4px 4px #46102999, inset 0 1px 2px #d7c1ce88, 0 0 0 2px #a7427b;
+  }
+  .controls button span { position: relative; display: inline-block; font-size: 20px; line-height: 1; text-shadow: 0 1px 2px #000; }
+  #up { grid-area: 1 / 2; } #left { grid-area: 2 / 1; } #right { grid-area: 2 / 3; } #down { grid-area: 3 / 2; }
+  .controls button:disabled { opacity: .45; }
+  .capsules { display: grid; }
+  .capsule {
+    display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+    min-width: 44px; min-height: 44px; padding: 0 3px; border: 0; border-radius: 8px;
+    background: transparent; color: var(--ink); font: 11px ui-monospace, monospace;
+  }
+  .capsule::after {
+    content: ''; flex: 0 0 auto; width: 36px; height: 18px; border: 1px solid #7a2f59; border-radius: 20px;
+    background: linear-gradient(#c95d9f, #a03175);
+    box-shadow: inset 0 1px 2px #ffd0eb88, 0 2px 0 #76244f, 0 3px 4px #5c1a4166;
+  }
+  .auxiliary .capsule::after { background: linear-gradient(#4b3943, #171216); border-color: #281821; }
+  .capsule:disabled { opacity: .45; }
+  .controls button:not(:disabled):active::before, .controls button.pressed::before, .capsule:not(:disabled):active::after {
+    transform: translateY(2px); box-shadow: inset 0 2px 4px #0009, 0 0 0 1px #76244f;
+  }
+  .controls button:not(:disabled):active span, .controls button.pressed span { transform: translateY(2px); }
+  .shell-footer { display: flex; justify-content: space-between; align-items: end; margin-top: 8px; color: var(--ink); }
+  .shell-footer small { font: 9px ui-monospace, monospace; letter-spacing: .14em; }
+  .speaker { width: 28px; height: 20px; background: radial-gradient(circle, var(--shell-edge) 1.6px, transparent 2px) 0 0 / 7px 7px; transform: skewY(-12deg); }
+  .readout { text-align: center; margin: 25px 4px 0; font: 12px/1.6 ui-monospace, monospace; color: #bcaebb; overflow-wrap: anywhere; }
+  #status { margin: 0; }
+  #message { color: #fff1aa; margin: 6px 0 0; }
+  #error { color: #ffb5b5; margin: 6px 0 0; }
+  #message:empty, #error:empty { display: none; }
+  .hint { text-align: center; color: #bcaebb; font-size: 12px; margin: 12px 0 0; }
+  #help-panel { margin-top: 20px; padding: 20px; border: 1px solid #65505f; border-radius: 14px; background: #211a20; line-height: 1.6; }
+  #help-panel h2 { margin: 0; font-size: 18px; }
+  #help-panel p { margin: 10px 0; }
+  #close-help { min-height: 44px; padding: 0 16px; border: 1px solid #bcaebb; border-radius: 8px; background: #392b35; color: #fff; }
+  @media (max-width: 480px) {
+    body { padding: 24px 16px; }
+    .console { padding: 14px 14px 16px; }
+    .bezel { padding: 9px; border-radius: 16px; }
+    .panel { grid-template-columns: 132px minmax(0, 1fr); gap: 8px 18px; margin-top: 16px; }
+    .system { grid-area: 1 / 2; }
+    .auxiliary { grid-column: 1 / -1; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+    .auxiliary .capsule { flex-direction: column; justify-content: center; gap: 5px; font-size: 10px; }
+    .system .capsule { justify-content: space-between; }
+  }
 </style>
-<h1>Square Cross</h1>
-<p>Move the square’s centre onto the cross. Each arrow uses one dot.<br>Use arrow keys or the buttons below.</p>
-<p id="status" role="status">Connecting…</p>
-<canvas id="game" width="64" height="64" aria-label="Game observation, including remaining move dots"></canvas>
-<div class="controls" aria-label="Directional controls">
-  <button id="up" data-action="ACTION1" aria-label="Up" disabled>↑</button>
-  <button id="left" data-action="ACTION3" aria-label="Left" disabled>←</button>
-  <button id="down" data-action="ACTION2" aria-label="Down" disabled>↓</button>
-  <button id="right" data-action="ACTION4" aria-label="Right" disabled>→</button>
-</div>
-<button id="restart" data-action="RESET">Restart</button>
-<p id="error" role="alert"></p>
-<p>Local play UI · Restart follows the SDK: retry the current level; after a win, start at level 1.</p>
+<main>
+  <header class="masthead"><h1>Square Cross</h1><span class="local">Local play</span></header>
+  <section class="console" aria-label="Game console">
+    <div class="badges"><span class="badge" id="game-id">Connecting…</span><span class="badge" id="level">LEVEL —</span></div>
+    <div class="bezel"><canvas id="game" width="64" height="64" aria-label="Game observation, including remaining move dots"></canvas></div>
+    <div class="panel">
+      <div class="controls" role="group" aria-label="Directional controls">
+        <button id="up" data-action="ACTION1" aria-label="Up" disabled><span aria-hidden="true">▴</span></button>
+        <button id="left" data-action="ACTION3" aria-label="Left" disabled><span aria-hidden="true">◂</span></button>
+        <button id="down" data-action="ACTION2" aria-label="Down" disabled><span aria-hidden="true">▾</span></button>
+        <button id="right" data-action="ACTION4" aria-label="Right" disabled><span aria-hidden="true">▸</span></button>
+      </div>
+      <div class="capsules auxiliary" role="group" aria-label="Unavailable controls">
+        <button class="capsule" disabled title="Not available in this game">SPACEBAR</button>
+        <button class="capsule" disabled title="Not available in this game">CLICK</button>
+        <button class="capsule" disabled title="Not available in this game">UNDO (Z)</button>
+      </div>
+      <div class="capsules system">
+        <button class="capsule" id="restart" data-action="RESET" aria-label="Restart">RESET</button>
+        <button class="capsule" id="help" aria-expanded="false" aria-controls="help-panel">HELP</button>
+        <button class="capsule" disabled title="Not available in this game">SELECT</button>
+      </div>
+    </div>
+    <div class="shell-footer"><small>SQUARE CROSS · LOCAL</small><span class="speaker" aria-hidden="true"></span></div>
+  </section>
+  <div class="readout">
+    <p id="status" role="status">Connecting…</p>
+    <p id="message" role="status"></p>
+    <p id="error" role="alert"></p>
+  </div>
+  <p class="hint">Arrow keys or D-pad to move · Each move uses one dot</p>
+  <section id="help-panel" aria-labelledby="help-title" tabindex="-1" hidden>
+    <h2 id="help-title">How to play</h2>
+    <p>Move the square’s centre onto the centre of the cross. Use arrow keys or the D-pad. Each arrow uses one dot, even if a border or block stops the square.</p>
+    <p>The dots inside the screen show your remaining moves. Restart retries the current level; after a win, it starts at level 1.</p>
+    <p>Spacebar, click, undo and select are unavailable. This local game supports the four directions and reset.</p>
+    <button id="close-help">Close help</button>
+  </section>
+</main>
 <script>
 const canvas = document.querySelector('#game');
 const ctx = canvas.getContext('2d');
 const status = document.querySelector('#status');
 const error = document.querySelector('#error');
+const help = document.querySelector('#help');
+const helpPanel = document.querySelector('#help-panel');
 let ready = false;
 let terminal = false;
 let queue = Promise.resolve();
@@ -49,8 +165,12 @@ function draw(data) {
   }
   terminal = ['WIN', 'GAME_OVER'].includes(data.state);
   ready = true;
-  const level = Math.min(data.levels_completed + 1, data.win_levels);
-  status.textContent = `${data.game} · Seed ${data.seed} · Level ${level}/${data.win_levels} · ${data.state}`;
+  const level = data.win_levels > 0 ? `${Math.min(data.levels_completed + 1, data.win_levels)} / ${data.win_levels}` : '—';
+  document.querySelector('#game-id').textContent = data.game;
+  document.querySelector('#level').textContent = `LEVEL ${level}`;
+  status.textContent = `${data.game} · Seed ${data.seed} · ${data.state}`;
+  document.querySelector('#message').textContent = data.state === 'WIN' ? 'WIN · All levels complete. Restart to play again.' :
+    data.state === 'GAME_OVER' ? 'GAME_OVER · Out of moves. Restart to retry this level.' : '';
   document.querySelectorAll('.controls button').forEach(button => { button.disabled = terminal; });
 }
 async function request(path, action) {
@@ -74,10 +194,35 @@ function enqueue(action) {
 document.querySelectorAll('[data-action]').forEach(button => {
   button.addEventListener('click', () => enqueue(button.dataset.action));
 });
+function closeHelp() {
+  helpPanel.hidden = true;
+  help.setAttribute('aria-expanded', 'false');
+  help.focus();
+}
+help.addEventListener('click', () => {
+  if (!helpPanel.hidden) { closeHelp(); return; }
+  helpPanel.hidden = false;
+  help.setAttribute('aria-expanded', 'true');
+  helpPanel.focus();
+});
+document.querySelector('#close-help').addEventListener('click', closeHelp);
+helpPanel.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); closeHelp(); }
+});
 const keys = {ArrowUp: 'ACTION1', ArrowDown: 'ACTION2', ArrowLeft: 'ACTION3', ArrowRight: 'ACTION4'};
 document.addEventListener('keydown', event => {
-  if (keys[event.key]) { event.preventDefault(); enqueue(keys[event.key]); }
+  if (event.target.closest('#help-panel')) return;
+  if (keys[event.key]) {
+    event.preventDefault();
+    const button = document.querySelector(`[data-action="${keys[event.key]}"]`);
+    if (!button.disabled) button.classList.add('pressed');
+    enqueue(keys[event.key]);
+  }
 });
+document.addEventListener('keyup', event => {
+  if (keys[event.key]) document.querySelector(`[data-action="${keys[event.key]}"]`).classList.remove('pressed');
+});
+window.addEventListener('blur', () => document.querySelectorAll('.pressed').forEach(button => button.classList.remove('pressed')));
 queue = request('/play/state').catch(err => { error.textContent = `${err.message}. Try Restart to recover.`; });
 </script>
 </html>
