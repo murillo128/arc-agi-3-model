@@ -25,9 +25,19 @@ class LauncherTests(unittest.TestCase):
                 result = self.command("--mode", "sdk", "--seed", "42", "--max-actions", str(limit))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 summary = json.loads(result.stdout)
-                self.assertEqual(summary["actions"], 0 if limit == 0 else 17)
-                self.assertEqual(summary["state"], "NOT_FINISHED" if limit == 0 else "GAME_OVER")
-                self.assertEqual(summary["levels_completed"], 0)
+                self.assertLessEqual(summary["actions"], limit)
+                if limit == 0:
+                    self.assertEqual(summary["actions"], 0)
+                    self.assertEqual(summary["state"], "NOT_FINISHED")
+                    self.assertEqual(summary["levels_completed"], 0)
+                else:
+                    self.assertGreater(summary["actions"], 0)
+                if summary['stop'] == 'max-actions':
+                    self.assertEqual(summary['actions'], limit)
+                    self.assertEqual(summary['state'], 'NOT_FINISHED')
+                else:
+                    self.assertEqual(summary['stop'], 'terminal')
+                    self.assertIn(summary['state'], ('WIN', 'GAME_OVER'))
 
     def test_make_failure_is_visible(self):
         result = self.command("--mode", "sdk", "--game", "zz00-missing")
@@ -45,6 +55,8 @@ class LauncherTests(unittest.TestCase):
         with client.get("/") as response:
             self.assertEqual(response.status_code, 200)
         initial = client.get("/play/state").get_json()
+        self.assertEqual(set(initial), {'frame', 'state', 'levels_completed', 'win_levels',
+                                        'game', 'seed', 'palette'})  # No privileged geometry/stride/budget.
         self.assertEqual(initial["seed"], 42)
         self.assertEqual(initial["frame"], env.observation_space.frame[-1].tolist())
         self.assertEqual(initial["palette"][9], "#1E93FFFF")
@@ -61,8 +73,11 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         self.assertIn("SDK action failed", response.get_json()["error"])
         self.assertEqual(client.post("/play/action", json={"action": "RESET"}).status_code, 200)
-        for _ in range(17):
-            response = client.post("/play/action", json={"action": "ACTION1"})
+        for _ in range(128):
+            response = client.post("/play/action", json={"action": "ACTION2"})
+            self.assertEqual(response.status_code, 200)
+            if response.get_json()['state'] == 'GAME_OVER':
+                break
         self.assertEqual(response.get_json()["state"], "GAME_OVER")
         self.assertEqual(client.post("/play/action", json={"action": "ACTION1"}).status_code, 409)
         self.assertEqual(client.post("/play/action", json={"action": "RESET"}).status_code, 200)

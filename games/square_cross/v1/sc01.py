@@ -5,7 +5,7 @@ import random
 from typing import NamedTuple
 
 import numpy as np
-from arcengine import ARCBaseGame, Camera, GameAction, Level, Sprite
+from arcengine import ARCBaseGame, Camera, Level, Sprite
 
 DIRECTIONS = {1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}
 SIZES = (3, 5, 7)
@@ -21,6 +21,7 @@ class Scene(NamedTuple):
     target: tuple[int, int]
     player_size: int
     target_size: int
+    stride: int
     edge: str
     obstacle: tuple[int, int, int, int] | None
     distance: int
@@ -43,7 +44,15 @@ def fits(center, size, bounds, obstacle=None):
     return True
 
 
-def shortest_distance(start, goal, size, bounds, obstacle):
+def sweep_fits(start, direction, stride, size, bounds, obstacle):
+    """A command is atomic: every intermediate footprint must be clear."""
+    x, y = start
+    dx, dy = direction
+    return all(fits((x + dx * step, y + dy * step), size, bounds, obstacle)
+               for step in range(1, stride + 1))
+
+
+def shortest_distance(start, goal, stride, size, bounds, obstacle):
     """Bounded generation check; never exported as policy input."""
     queue = deque([(start, 0)])
     seen = {start}
@@ -54,8 +63,8 @@ def shortest_distance(start, goal, size, bounds, obstacle):
         if distance == 24:
             continue
         for dx, dy in DIRECTIONS.values():
-            point = (x + dx, y + dy)
-            if point not in seen and fits(point, size, bounds, obstacle):
+            point = (x + dx * stride, y + dy * stride)
+            if point not in seen and sweep_fits((x, y), (dx, dy), stride, size, bounds, obstacle):
                 seen.add(point)
                 queue.append((point, distance + 1))
     return None
@@ -63,53 +72,76 @@ def shortest_distance(start, goal, size, bounds, obstacle):
 
 def generate_scene(seed, level):
     # A fresh level-specific stream also makes level resets independent of history.
+    if level not in range(1, 6):
+        raise ValueError(f"Invalid square-cross level: seed={seed}, level={level}")
     rng = random.Random(f"square-cross-v1:{seed}:{level}")
     edge = rng.choice(tuple(BOUNDS))
     bounds = BOUNDS[edge]
     ps = 5 if level == 1 else rng.choice(SIZES)
     ts = 5 if level == 1 else rng.choice(SIZES)
+    stride = ps if level <= 2 else rng.randint(1, 7)
     colors = rng.sample((6, 7, 8, 9, 10, 11, 12, 14, 15), 2)
-    for _ in range(128):
-        obstacle = None
-        if level <= 2:
-            left, top, right, bottom = bounds
-            player = ((left + right) // 2, (top + bottom) // 2)
-            dx, dy = rng.choice(tuple(DIRECTIONS.values()))
-            gap = rng.randint(ps // 2 + ts // 2 + 2, 20)
-            target = (player[0] + dx * gap, player[1] + dy * gap)
+    left, top, right, bottom = bounds
+    obstacle = None
+    if level <= 2:
+        player = ((left + right) // 2, (top + bottom) // 2)
+        # Enumerate only aligned, visible, disjoint cardinal destinations.
+        targets = [(player[0] + dx * stride * steps, player[1] + dy * stride * steps)
+                   for dx, dy in DIRECTIONS.values() for steps in range(1, 25)
+                   if stride * steps > ps // 2 + ts // 2
+                   and fits((player[0] + dx * stride * steps, player[1] + dy * stride * steps),
+                            max(ps, ts), bounds)]
+        target = rng.choice(targets)
+    else:
+        r, tr = ps // 2, max(ps, ts) // 2
+        if level == 3:
+            # Both offsets are nonzero multiples of stride; translation keeps the
+            # entire rectangle between the two footprints inside the play area.
+            minimum = (r + ts // 2) // stride + 1
+            across = rng.randint(minimum, max(minimum, 20 // stride))
+            dx = stride * across
+            dy = stride * rng.randint(1, min(24 - across, max(1, 20 // stride)))
+            player, target = (0, 0), (dx, dy)
+            extent = (-tr, -tr, dx + tr, dy + tr)
         else:
-            player = (rng.randint(4, 59), rng.randint(4, 59))
-            if level == 3:
-                target = (player[0] + rng.randint(-16, 16), player[1] + rng.randint(-16, 16))
-            else:
-                # Short crossing of one rectangle, with room to go around its end.
-                dx = rng.choice((-1, 1)) * rng.randint(9, 16)
-                dy = rng.randint(-3, 3)
-                if rng.choice((False, True)):
-                    dx, dy = dy, dx
-                target = (player[0] + dx, player[1] + dy)
-                w, h = rng.choice((3, 5)), rng.choice((3, 5))
-                obstacle = ((player[0] + target[0]) // 2 - w // 2,
-                            (player[1] + target[1]) // 2 - h // 2, w, h)
-        if not fits(player, ps, bounds, obstacle) or not fits(target, max(ps, ts), bounds, obstacle):
-            continue
+            # Construct an aligned crossing with a guaranteed route around either
+            # end of the block. Even at stride 1 / size 7 this takes <=24 actions.
+            w, h = rng.choice((3, 5)), rng.choice((3, 5))
+            player = (-r - 1, 0)
+            across = (w + tr - player[0] + stride - 1) // stride
+            target = (player[0] + across * stride, 0)
+            obstacle = (0, -(h // 2), w, h)
+            detour = ((r + h // 2) // stride + 1) * stride
+            extent = (player[0] - r, -detour - tr, target[0] + tr, detour + tr)
+        # Reflect/transpose the whole layout, then place its clearance envelope.
+        if rng.choice((False, True)):
+            player, target = (-player[0], player[1]), (-target[0], target[1])
+            x0, y0, x1, y1 = extent
+            extent = (-x1, y0, -x0, y1)
+            if obstacle:
+                x, y, w, h = obstacle
+                obstacle = (-x - w + 1, y, w, h)
+        if rng.choice((False, True)):
+            player, target = player[::-1], target[::-1]
+            x0, y0, x1, y1 = extent
+            extent = (y0, x0, y1, x1)
+            if obstacle:
+                x, y, w, h = obstacle
+                obstacle = (y, x, h, w)
+        x0, y0, x1, y1 = extent
+        ox = rng.randint(left - x0, right - x1)
+        oy = rng.randint(top - y0, bottom - y1)
+        player = (player[0] + ox, player[1] + oy)
+        target = (target[0] + ox, target[1] + oy)
         if obstacle:
             x, y, w, h = obstacle
-            left, top, right, bottom = bounds
-            if not (left <= x and top <= y and x + w - 1 <= right and y + h - 1 <= bottom):
-                continue
-        # Disjoint bounding boxes ensure no initial square/cross overlap.
-        if max(abs(player[0] - target[0]), abs(player[1] - target[1])) <= ps // 2 + ts // 2:
-            continue
-        distance = shortest_distance(player, target, ps, bounds, obstacle)
-        if distance is None:
-            continue
-        manhattan = abs(player[0] - target[0]) + abs(player[1] - target[1])
-        if level >= 4 and distance <= manhattan:
-            continue
-        return Scene(player, target, ps, ts, edge, obstacle, distance,
-                     distance + rng.randint(4, 6), *colors)
-    raise RuntimeError(f"No square-cross layout after 128 candidates: seed={seed}, level={level}")
+            obstacle = (x + ox, y + oy, w, h)
+    distance = shortest_distance(player, target, stride, ps, bounds, obstacle)
+    manhattan = (abs(player[0] - target[0]) + abs(player[1] - target[1])) // stride
+    if distance is None or (level >= 4 and distance <= manhattan):
+        raise RuntimeError(f"Invalid square-cross construction: seed={seed}, level={level}")
+    return Scene(player, target, ps, ts, stride, edge, obstacle, distance,
+                 max(24, 5 * distance + 8), *colors)
 
 
 class Sc01(ARCBaseGame):
@@ -157,12 +189,13 @@ class Sc01(ARCBaseGame):
             frame[:, :4] = 5
         else:
             frame[:, 60:] = 5
-        for i in range(self.remaining):
-            offset = 2 + 2 * i
+        filled = (180 * self.remaining + self.scene.budget - 1) // self.scene.budget
+        for i in range(filled):
+            offset, thickness = 2 + i // 3, i % 3
             if edge in ("top", "bottom"):
-                frame[1 if edge == "top" else 62, offset] = 0
+                frame[thickness if edge == "top" else 61 + thickness, offset] = 0
             else:
-                frame[offset, 1 if edge == "left" else 62] = 0
+                frame[offset, thickness if edge == "left" else 61 + thickness] = 0
         return frame
 
     def step(self):
@@ -170,9 +203,10 @@ class Sc01(ARCBaseGame):
         if direction is not None:
             dx, dy = direction
             r = self.scene.player_size // 2
-            center = (self.player.x + r + dx, self.player.y + r + dy)
-            if fits(center, self.scene.player_size, BOUNDS[self.scene.edge], self.scene.obstacle):
-                self.player.move(dx, dy)
+            center = (self.player.x + r, self.player.y + r)
+            if sweep_fits(center, direction, self.scene.stride, self.scene.player_size,
+                          BOUNDS[self.scene.edge], self.scene.obstacle):
+                self.player.move(dx * self.scene.stride, dy * self.scene.stride)
             self.remaining = max(0, self.remaining - 1)
             if (self.player.x + r, self.player.y + r) == self.scene.target:
                 self.next_level()

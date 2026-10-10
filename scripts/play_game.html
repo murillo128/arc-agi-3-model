@@ -110,7 +110,7 @@
   <header class="masthead"><h1>Square Cross</h1><span class="local">Local play</span></header>
   <section class="console" aria-label="Game console">
     <div class="badges"><span class="badge" id="game-id">Connecting…</span><span class="badge" id="level">LEVEL —</span></div>
-    <div class="bezel"><canvas id="game" width="64" height="64" aria-label="Game observation, including remaining move dots"></canvas></div>
+    <div class="bezel"><canvas id="game" width="64" height="64" aria-label="Game observation, including remaining-moves bar"></canvas></div>
     <div class="panel">
       <div class="controls" role="group" aria-label="Directional controls">
         <button id="up" data-action="ACTION1" aria-label="Up" disabled><span aria-hidden="true">▴</span></button>
@@ -136,11 +136,11 @@
     <p id="message" role="status"></p>
     <p id="error" role="alert"></p>
   </div>
-  <p class="hint">Arrow keys or D-pad to move · Each move uses one dot</p>
+  <p class="hint">Arrow keys or D-pad to move · Each move shrinks the bar</p>
   <section id="help-panel" aria-labelledby="help-title" tabindex="-1" hidden>
     <h2 id="help-title">How to play</h2>
-    <p>Move the square’s centre onto the centre of the cross. Use arrow keys or the D-pad. Each arrow uses one dot, even if a border or block stops the square.</p>
-    <p>The dots inside the screen show your remaining moves. Restart retries the current level; after a win, it starts at level 1.</p>
+    <p>Move the square’s centre onto the centre of the cross. Use arrow keys or the D-pad. Each arrow spends one move, even if a border or block stops the square.</p>
+    <p>The remaining-moves bar inside the screen shrinks with every directional command, even when blocked. Restart retries the current level; after a win, it starts at level 1.</p>
     <p>Spacebar, click, undo and select are unavailable. This local game supports the four directions and reset.</p>
     <button id="close-help">Close help</button>
   </section>

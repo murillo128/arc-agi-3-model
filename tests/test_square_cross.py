@@ -1,6 +1,7 @@
 """Real ARCEngine boundaries, generation properties and offline SDK lifecycle."""
 
 from importlib.metadata import version
+from math import ceil
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -29,8 +30,8 @@ def center(game):
 
 
 def fixture(**changes):
-    values = dict(player=(20, 30), target=(30, 30), player_size=5, target_size=3,
-                  edge="top", obstacle=None, distance=10, budget=15, player_color=9, target_color=11)
+    values = dict(player=(20, 30), target=(35, 30), player_size=5, target_size=3, stride=5,
+                  edge="top", obstacle=None, distance=3, budget=24, player_color=9, target_color=11)
     values.update(changes)
     return sc01.Scene(**values)
 
@@ -42,60 +43,90 @@ class EngineTests(unittest.TestCase):
         act(game)
         return game
 
-    def test_directions_redraw_and_visible_dots(self):
+    def test_directions_redraw_and_visible_bar(self):
         game = self.game()
-        for action, expected in [(1, (20, 29)), (2, (20, 30)), (3, (19, 30)), (4, (20, 30))]:
+        for action, expected in [(1, (20, 25)), (2, (20, 30)), (3, (15, 30)), (4, (20, 30))]:
             before = frame(game)
             np.testing.assert_array_equal(before, frame(game))
+            remaining = game.remaining
             result = act(game, action)
             self.assertEqual(center(game), expected)
-            self.assertEqual(np.count_nonzero(before == 0) - np.count_nonzero(result.frame[-1] == 0), 1)
-        self.assertEqual(game.remaining, 11)
+            self.assertEqual(game.remaining, remaining - 1)
+            self.assertEqual(np.count_nonzero(result.frame[-1] == 0), ceil(180 * game.remaining / 24))
+            self.assertGreater(np.count_nonzero(before == 0), np.count_nonzero(result.frame[-1] == 0))
+        self.assertEqual(game.remaining, 20)
         act(game, 5)  # Not advertised; cannot consume a directional move.
-        self.assertEqual(game.remaining, 11)
+        self.assertEqual(game.remaining, 20)
 
-    def test_full_footprint_obstacle_detour_and_blocked_dot(self):
-        game = self.game(obstacle=(24, 28, 3, 5), distance=20, budget=25)
+    def test_full_footprint_obstacle_detour_and_blocked_command(self):
+        game = self.game(target=(30, 30), stride=1, obstacle=(24, 28, 3, 5), distance=20, budget=108)
         self.assertEqual(len(reference_path(game.scene)), 20)  # 10 across + 5 up + 5 down.
         self.assertEqual(len(reference_path(game.scene, center_only=True)), 16)
         act(game, 4)
         before = frame(game)
         act(game, 4)  # Centre x=22 is clear, but right edge x=24 intersects the block.
         self.assertEqual(center(game), (21, 30))
-        self.assertEqual(np.count_nonzero(before == 0) - np.count_nonzero(frame(game) == 0), 1)
+        self.assertEqual(game.remaining, 106)
+        self.assertGreater(np.count_nonzero(before == 0), np.count_nonzero(frame(game) == 0))
         self.assertTrue(np.all(frame(game)[28:33, 24:27] == 2))
         self.assertEqual(game.current_level.get_sprites_by_name("obstacle")[0].x, 24)
 
-    def test_all_hud_edges_exclude_player_footprint(self):
-        cases = [("top", (20, 5), 1), ("bottom", (20, 58), 2),
-                 ("left", (5, 20), 3), ("right", (58, 20), 4)]
+    def test_mid_sweep_obstacle_rejects_whole_command(self):
+        for size, obstacle in [(3, (23, 30, 1, 1)), (5, (24, 32, 1, 1))]:
+            with self.subTest(size=size):
+                game = self.game(player_size=size, stride=7, obstacle=obstacle)
+                # Both endpoints are clear; the second case only hits an outer pixel.
+                self.assertTrue(sc01.fits((27, 30), size, sc01.BOUNDS['top'], obstacle))
+                act(game, 4)
+                self.assertEqual(center(game), (20, 30))
+                self.assertEqual(game.remaining, 23)
+                self.assertGreater(len(reference_path(game.scene._replace(target=(34, 30)))), 2)
+
+    def test_stride_cannot_stop_partway_at_frame_border(self):
+        game = self.game(player=(4, 30), player_size=3, stride=5)
+        act(game, 3)  # Some intermediate pixels fit, but the full command does not.
+        self.assertEqual(center(game), (4, 30))
+        self.assertEqual(game.remaining, 23)
+
+    def test_all_hud_edges_exclude_footprint_and_bar_decreases_every_action(self):
+        cases = [("top", (20, 9), 1), ("bottom", (20, 54), 2),
+                 ("left", (9, 20), 3), ("right", (54, 20), 4)]
         for edge, player, action in cases:
-            with self.subTest(edge=edge), patch.object(sc01, "generate_scene", return_value=fixture(
-                    edge=edge, player=player, player_size=3, budget=30)):
-                game = sc01.Sc01()
-                act(game)
-                before = frame(game)
-                act(game, action)
-                self.assertEqual(center(game), player)
-                expected = {(1 if edge == "top" else 62, x) for x in range(2, 61, 2)} if edge in ("top", "bottom") else {
-                    (y, 1 if edge == "left" else 62) for y in range(2, 61, 2)}
-                self.assertEqual(set(zip(*np.where(before == 0))), expected)
-                self.assertEqual(np.count_nonzero(frame(game) == 0), 29)
+            for budget in (24, 38, 73, 128):
+                with self.subTest(edge=edge, budget=budget), patch.object(sc01, "generate_scene", return_value=fixture(
+                        edge=edge, player=player, player_size=3, budget=budget)):
+                    game = sc01.Sc01()
+                    act(game)
+                    # Longitudinal order is stable, with thickness filled first.
+                    rows = range(3) if edge in ('top', 'left') else range(61, 64)
+                    cells = [(thickness, offset) if edge in ('top', 'bottom') else (offset, thickness)
+                             for offset in range(2, 62) for thickness in rows]
+                    previous = 181
+                    for remaining in range(budget, -1, -1):
+                        image = frame(game)
+                        count = ceil(180 * remaining / budget)
+                        self.assertEqual(set(zip(*np.where(image == 0))), set(cells[:count]))
+                        self.assertLess(count, previous)
+                        self.assertEqual(game.remaining, remaining)
+                        self.assertEqual(center(game), player)  # No partial stride into the HUD.
+                        previous = count
+                        if remaining:
+                            result = act(game, action)
+                    self.assertEqual(result.state, GameState.GAME_OVER)
 
     def test_centre_goal_last_move_and_new_level_budget(self):
-        game = self.game(player_size=3, target_size=7, target=(26, 30), distance=6, budget=6)
-        for _ in range(3):
-            result = act(game, 4)
+        game = self.game(player_size=3, target_size=7, target=(26, 30), stride=2, distance=3, budget=3)
+        result = act(game, 4)
         self.assertEqual(result.levels_completed, 0)  # Already touching the cross's left arm.
-        for _ in range(3):
+        for _ in range(2):
             result = act(game, 4)
         self.assertEqual(result.state, GameState.NOT_FINISHED)
         self.assertEqual(result.levels_completed, 1)
-        self.assertEqual(game.remaining, 6)
+        self.assertEqual(game.remaining, 3)
         self.assertEqual(len(result.frame), 2)  # Solved scene then new level, no double consumption.
         self.assertEqual(np.count_nonzero(result.frame[0] == 0), 0)
-        self.assertEqual(np.count_nonzero(result.frame[1] == 0), 6)
-        for _ in range(4 * 6):
+        self.assertEqual(np.count_nonzero(result.frame[1] == 0), 180)
+        for _ in range(4 * 3):
             result = act(game, 4)
         self.assertEqual(result.state, GameState.WIN)
         self.assertEqual(result.levels_completed, 5)
@@ -105,7 +136,20 @@ class EngineTests(unittest.TestCase):
         reset = act(game)
         self.assertTrue(reset.full_reset)
         self.assertEqual(reset.levels_completed, 0)
-        self.assertEqual(game.remaining, 6)
+        self.assertEqual(game.remaining, 3)
+
+    def test_literal_five_pixel_arrivals_and_intermediate_goal_does_not_win(self):
+        game = self.game(budget=3)
+        for expected in ((25, 30), (30, 30)):
+            result = act(game, 4)
+            self.assertEqual(center(game), expected)
+            self.assertEqual(result.levels_completed, 0)
+        result = act(game, 4)
+        self.assertEqual(result.levels_completed, 1)  # Final centre (35,30) advances.
+        crossing = self.game(player_size=3, target=(24, 30), stride=7)
+        result = act(crossing, 4)
+        self.assertEqual(center(crossing), (27, 30))
+        self.assertEqual(result.levels_completed, 0)
 
     def test_exhaustion_and_current_level_reset(self):
         game = self.game(budget=2)
@@ -142,8 +186,25 @@ class EngineTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def test_alignment_is_necessary_but_not_sufficient(self):
+        aligned = fixture(player_size=3, stride=4, target=(32, 38))
+        self.assertEqual(len(reference_path(aligned)), 5)  # (12,8) / 4.
+        self.assertEqual(sc01.shortest_distance(aligned.player, aligned.target, 4, 3,
+                                               sc01.BOUNDS['top'], None), 5)
+        cases = [aligned._replace(target=(30, 38)),  # (10,8) is not aligned.
+                 fixture(player_size=3, stride=7, target=(34, 30), obstacle=(23, 4, 1, 60)),
+                 fixture(player=(20, 9), target=(20, 2), player_size=3, stride=7)]
+        for scene in cases:
+            with self.subTest(scene=scene):
+                with self.assertRaisesRegex(AssertionError, 'no solution'):
+                    reference_path(scene)
+                self.assertIsNone(sc01.shortest_distance(scene.player, scene.target, scene.stride,
+                                                        scene.player_size, sc01.BOUNDS[scene.edge], scene.obstacle))
+
     def test_seed_matrix_geometry_visuals_and_independent_solvability(self):
         edges, pairs, colors, directions, placements, distances = set(), set(), set(), set(), set(), set()
+        strides = {level: set() for level in range(3, 6)}
+        independent_sizes = {level: set() for level in range(3, 6)}
         for seed in range(64):
             game = sc01.Sc01(seed)
             for level in range(1, 6):
@@ -156,17 +217,25 @@ class GenerationTests(unittest.TestCase):
                     self.assertEqual(image.shape, (64, 64))
                     self.assertTrue(np.issubdtype(image.dtype, np.integer))
                     self.assertTrue(np.all((0 <= image) & (image <= 15)))
-                    self.assertEqual(np.count_nonzero(image == 0), scene.budget)
+                    self.assertEqual(np.count_nonzero(image == 0), 180)
                     # Every object pixel is in-frame, with no initial object occlusion.
                     self.assertEqual(np.count_nonzero(image == scene.player_color), scene.player_size ** 2)
                     self.assertEqual(np.count_nonzero(image == scene.target_color), 2 * scene.target_size - 1)
                     path = reference_path(scene)
                     self.assertGreater(len(path), 0)
                     self.assertLessEqual(len(path), 24)
-                    self.assertIn(scene.budget - len(path), (4, 5, 6))
-                    self.assertLessEqual(scene.budget, 30)
+                    self.assertEqual(scene.budget, max(24, 5 * len(path) + 8))
+                    self.assertLessEqual(scene.budget, 128)
                     self.assertEqual(scene.distance, len(path))
                     dx, dy = scene.target[0] - scene.player[0], scene.target[1] - scene.player[1]
+                    self.assertEqual(abs(dx) % scene.stride, 0)
+                    self.assertEqual(abs(dy) % scene.stride, 0)
+                    if level <= 2:
+                        self.assertEqual(scene.stride, scene.player_size)
+                    else:
+                        self.assertIn(scene.stride, range(1, 8))
+                        strides[level].add(scene.stride)
+                        independent_sizes[level].add((scene.player_size, scene.stride))
                     if level <= 2:
                         self.assertNotEqual(dx == 0, dy == 0)
                         self.assertLessEqual(abs(scene.player[0] - 32), 3)
@@ -178,17 +247,18 @@ class GenerationTests(unittest.TestCase):
                     if level == 2:
                         pairs.add((scene.player_size, scene.target_size))
                     if level == 3:
+                        self.assertTrue(dx != 0 and dy != 0)
                         placements.add((dx != 0 and dy != 0, scene.player))
                     self.assertEqual(scene.obstacle is not None, level >= 4)
                     if scene.obstacle:
                         x, y, w, h = scene.obstacle
                         self.assertEqual(np.count_nonzero(image == 2), w * h)
-                        self.assertGreater(len(path), abs(dx) + abs(dy))
+                        self.assertGreater(len(path), (abs(dx) + abs(dy)) // scene.stride)
                     if level < 5:
                         self.assertNotIn(4, image)
                     edges.add(scene.edge)
                     colors.add((scene.player_color, scene.target_color))
-                    act(game, 1)
+                    act(game, 2 if dy < 0 else 1)  # Move away: some levels now solve in one stride.
                     reset = act(game)
                     self.assertEqual(game.scene, scene)
                     np.testing.assert_array_equal(reset.frame[-1], image)
@@ -199,6 +269,10 @@ class GenerationTests(unittest.TestCase):
         self.assertGreater(len(colors), 10)
         self.assertGreater(sum(non_cardinal for non_cardinal, _ in placements), 20)
         self.assertGreater(len({position for _, position in placements}), 20)
+        for level in range(3, 6):
+            self.assertEqual(strides[level], set(range(1, 8)))
+            self.assertTrue(any(size != stride for size, stride in independent_sizes[level]))
+            self.assertEqual({size for size, _ in independent_sizes[level]}, {3, 5, 7})
 
 
 class SDKTests(unittest.TestCase):
