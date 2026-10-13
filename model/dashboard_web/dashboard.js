@@ -108,6 +108,17 @@ const charts = Object.fromEntries(['delta', 'loss', 'speed', 'spread', 'latent',
 
 function render(data) {
   const p = data.progress, run = data.run, config = run.training || {};
+  const clean = run.statistics_origin === 'after_first_action';
+  $('statistics-origin').textContent = clean
+    ? finite(p.elapsed_seconds)
+      ? `Estadísticas desde el final de la primera jugada · ${fmt(p.elapsed_seconds, 1)} s medidos`
+      : 'Preparando el punto limpio: esperando a que termine la primera jugada…'
+    : 'Log anterior: contadores acumulados y velocidad media desde el arranque';
+  $('tps-period').textContent = clean ? 'Media desde el punto limpio' : 'Media desde el arranque del proceso';
+  $('axis-origin').textContent = clean ? 'Eje horizontal: acciones desde el punto limpio' : 'Eje horizontal: acciones acumuladas';
+  $('speed-period').textContent = clean
+    ? 'Media desde el punto limpio; incluye las pausas posteriores de validación y guardado.'
+    : 'Media desde el arranque; incluye validación y guardado de checkpoints.';
   const currentLevel = Object.hasOwn(p, 'level') ? p.level : run.levels?.[p.level_index || 0];
   const latest = [...data.validations].reverse().find(v => v.level === currentLevel);
   $('run-info').textContent = [run.game || 'Juego pendiente', run.device?.toUpperCase(),
@@ -115,7 +126,7 @@ function render(data) {
     run.compile === true ? 'torch.compile' : run.compile === false ? 'Eager' : null].filter(Boolean).join(' · ');
   $('level').textContent = currentLevel === undefined ? '—' : levelName(currentLevel);
   $('level-actions').textContent = `${fmt(p.level_actions)} acciones en este nivel`;
-  $('actions').textContent = fmt(p.actions); $('episodes').textContent = `${fmt(p.episodes)} partidas iniciadas`;
+  $('actions').textContent = fmt(p.actions); $('episodes').textContent = `${fmt(p.episodes)} ${clean ? 'partidas nuevas desde el punto limpio' : 'partidas iniciadas'}`;
   $('tps').textContent = fmt(p.actions_per_second, 2); $('updates').textContent = fmt(p.updates);
   $('replay').textContent = finite(p.episode_actions)
     ? `Partida actual: ${fmt(p.episode_actions)} acciones · ${fmt(p.device_cache_mb, 1)} MiB de entradas`
@@ -141,7 +152,7 @@ function render(data) {
   if (data.source.tail_limited) messages.push('Se muestra el tramo reciente del log; los datos anteriores quedan fuera de la ventana de lectura.');
   $('notice').hidden = messages.length === 0; $('notice').textContent = messages.join(' ');
   $('gate-info').textContent = `Validación cada ${fmt(config.validate_every)} acciones. Umbrales: errores visuales ≤ ${pct(config.delta_error)}, MSE latente ≤ ${scalar(config.latent_delta_mse)}, diversidad ≥ ${scalar(config.min_latent_std)}; también se exige cobertura suficiente.`;
-  $('retention').textContent = `Lee el log existente · hasta ${fmt(data.max_points)} puntos por tipo en memoria · no guarda un historial adicional. Sin timestamps antiguos, el eje usa acciones reales.`;
+  $('retention').textContent = `Lee el log existente · hasta ${fmt(data.max_points)} puntos por tipo en memoria · no guarda un historial adicional.`;
 
   const levels = [...new Set([...(run.levels || []), ...data.validations.map(v => v.level)])];
   const levelSelect = $('validation-level'), selected = levelSelect.value;
@@ -177,7 +188,7 @@ function drawCharts(currentLevel) {
   const series = (name, rows, value) => ({name, points: rows.map(row => ({x: row.actions, y: value(row)}))});
   charts.delta.set([series('Predictor', validation, r => percentValue(r.delta_error)), series('Decoder · latente real', validation, r => percentValue(r.decoder_delta_error))], percentValue(config.delta_error), ' %');
   charts.loss.set([series('Predictor', progress, r => r.loss?.decoder_ce), series('Reconstrucción', progress, r => r.loss?.reconstruction_ce), series('Reconstrucción local', progress, r => r.loss?.local_reconstruction_ce)]);
-  charts.speed.set([series('Media del proceso', progress, r => r.actions_per_second)]);
+  charts.speed.set([series(state.run.statistics_origin === 'after_first_action' ? 'Media desde el punto limpio' : 'Media del proceso', progress, r => r.actions_per_second)]);
   charts.spread.set([series('Diversidad observada', validation, r => r.latent_std)], config.min_latent_std);
   charts.latent.set([series('MSE del delta', validation, r => r.latent_delta_mse)], config.latent_delta_mse);
   charts.total.set([series('Pérdida total', progress, r => r.loss?.loss)]);

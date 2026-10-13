@@ -10,20 +10,20 @@
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">ARC · WORLD MODEL</p><h1>Entrenamiento en directo</h1><p id="run-info" class="muted">Esperando datos del entrenamiento…</p></div>
+    <div><p class="eyebrow">ARC · WORLD MODEL</p><h1>Entrenamiento en directo</h1><p id="run-info" class="muted">Esperando datos del entrenamiento…</p><p id="statistics-origin" class="muted"></p></div>
     <div class="connection"><span id="connection" role="status">Conectando…</span><small id="freshness">Actualización automática cada 2 s</small></div>
   </header>
   <p id="notice" class="notice" hidden></p>
   <section class="metrics" aria-label="Estado del entrenamiento">
     <article><h2>Nivel</h2><strong id="level">—</strong><small id="level-actions">—</small></article>
     <article><h2>Jugadas / acciones</h2><strong id="actions">—</strong><small id="episodes">— partidas iniciadas</small></article>
-    <article><h2>TPS · acciones/s</h2><strong id="tps">—</strong><small>Media desde el arranque del proceso</small></article>
+    <article><h2>TPS · acciones/s</h2><strong id="tps">—</strong><small id="tps-period">Media desde el punto limpio</small></article>
     <article><h2>Actualizaciones</h2><strong id="updates">—</strong><small id="replay">Optimizador</small></article>
     <article><h2>Error del predictor</h2><strong id="prediction">—</strong><small id="prediction-note">Última validación del nivel actual</small></article>
     <article><h2>Error del decoder</h2><strong id="reconstruction">—</strong><small>Reconstrucción desde latente real</small></article>
   </section>
   <div class="toolbar">
-    <div><h2>Evolución</h2><span class="muted">Eje horizontal: acciones reales de entrenamiento</span></div>
+    <div><h2>Evolución</h2><span id="axis-origin" class="muted">Eje horizontal: acciones desde el punto limpio</span></div>
     <div class="controls">
       <label>Nivel de validación <select id="validation-level"><option value="current">Actual</option></select></label>
       <label>Ventana <select id="window"><option value="10000">Últimas 10.000 acciones</option><option value="50000">Últimas 50.000 acciones</option><option value="all">Todos los puntos disponibles</option></select></label>
@@ -32,7 +32,7 @@
   <section class="charts" aria-label="Gráficas de entrenamiento">
     <article class="chart-card"><h3>Error del delta visual <span>% · menor es mejor</span></h3><p>Predicción causal frente a reconstrucción desde la observación real posterior. Pesos congelados durante la validación.</p><div id="delta-legend" class="legend"></div><div class="plot"><canvas id="delta" role="img" aria-label="Errores de delta en validación"></canvas><output class="tooltip" hidden></output></div></article>
     <article class="chart-card"><h3>Pérdidas visuales <span>NLL · entrenamiento</span></h3><p>Supervisión del predictor y las dos reconstrucciones. Son pérdidas de aprendizaje, no porcentajes de error.</p><div id="loss-legend" class="legend"></div><div class="plot"><canvas id="loss" role="img" aria-label="Pérdidas visuales por número de acciones"></canvas><output class="tooltip" hidden></output></div></article>
-    <article class="chart-card"><h3>Velocidad <span>acciones / segundo</span></h3><p>Media acumulada del proceso; incluye las pausas de validación y guardado de checkpoints.</p><div id="speed-legend" class="legend"></div><div class="plot"><canvas id="speed" role="img" aria-label="Velocidad media del entrenamiento"></canvas><output class="tooltip" hidden></output></div></article>
+    <article class="chart-card"><h3>Velocidad <span>acciones / segundo</span></h3><p id="speed-period">Media desde el punto limpio; incluye las pausas posteriores de validación y guardado.</p><div id="speed-legend" class="legend"></div><div class="plot"><canvas id="speed" role="img" aria-label="Velocidad media del entrenamiento"></canvas><output class="tooltip" hidden></output></div></article>
     <article class="chart-card"><h3>Diversidad del latente <span>desviación típica</span></h3><p>Variación entre observaciones reales. Un valor alto por sí solo no demuestra que el modelo prediga bien.</p><div id="spread-legend" class="legend"></div><div class="plot"><canvas id="spread" role="img" aria-label="Desviación del latente en validación"></canvas><output class="tooltip" hidden></output></div></article>
     <article class="chart-card"><h3>Error del delta latente <span>MSE · validación</span></h3><p>Diferencia entre el cambio latente predicho y el real. Se interpreta junto con el error visual y la diversidad.</p><div id="latent-legend" class="legend"></div><div class="plot"><canvas id="latent" role="img" aria-label="Error cuadrático del delta latente"></canvas><output class="tooltip" hidden></output></div></article>
     <article class="chart-card"><h3>Objetivo total <span>pérdida · entrenamiento</span></h3><p>Suma de las pérdidas visuales, latentes y de regularización con sus pesos de entrenamiento.</p><div id="total-legend" class="legend"></div><div class="plot"><canvas id="total" role="img" aria-label="Pérdida total de entrenamiento"></canvas><output class="tooltip" hidden></output></div></article>

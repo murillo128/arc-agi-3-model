@@ -89,11 +89,23 @@ def validation(engine, factory, levels, seed):
 def train(engine, learner, factory, run, progress, rng, output, stop_after_level=False):
     c = engine.config
     levels = run['levels']
-    start = time.monotonic()
+    start, baseline = None, None
     starting_actions = progress['actions']
     episode, env = None, None
     latest_update = None
     reason = 'action_limit'
+
+    def statistics():
+        if baseline is None:
+            return {}
+        elapsed = max(0., time.monotonic() - start)
+        values = {key: progress[key] - baseline[key] for key in ('actions', 'updates', 'episodes')}
+        values['level_actions'] = progress['level_actions'] - (
+            baseline['level_actions'] if progress['level_index'] == baseline['level_index'] else 0)
+        values['elapsed_seconds'] = round(elapsed, 3)
+        values['actions_per_second'] = round(values['actions'] / elapsed, 2) if elapsed and values['actions'] else None
+        return values
+
     try:
         while (not c.max_steps or progress['actions'] < c.max_steps) and progress['level_index'] < len(levels):
             level = levels[progress['level_index']]
@@ -119,10 +131,17 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                     if result is not None:
                         latest_update = result
                         progress['updates'] += 1
+            if baseline is None:
+                # The first action and its learning step establish the origin,
+                # including on resume. Checkpoint/curriculum counters stay intact.
+                baseline = dict(progress)
+                if engine.device.type == 'cuda':
+                    torch.cuda.reset_peak_memory_stats(engine.device)
+                start = time.monotonic()
             if progress['actions'] % min(100, c.train_every) == 0 or ended or progress['actions'] == starting_actions + 1:
-                elapsed = time.monotonic() - start
+                measured = statistics()
                 emit('progress', **progress, level=level, loss=latest_update,
-                     actions_per_second=round((progress['actions'] - starting_actions) / max(elapsed, 1e-6), 2),
+                     statistics=measured, actions_per_second=measured['actions_per_second'],
                      replay_episodes=1, episode_actions=len(episode.actions),
                      episode_observations=len(episode.observations),
                      device_cache_mb=round(episode.device_bytes / 2 ** 20, 2),
@@ -169,7 +188,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
         reason = 'interrupted'
     finally:
         checkpoint.save(output / 'latest.pt', learner, progress, run, rng)
-    emit('stopped', reason=reason, **progress, checkpoint=str(output / 'latest.pt'))
+    emit('stopped', reason=reason, **progress, statistics=statistics(), checkpoint=str(output / 'latest.pt'))
     return reason
 
 
@@ -249,6 +268,7 @@ def main(argv=None):
     torch.manual_seed(run['seed'])
     rng = random.Random(run['seed'])
     emit('initializing', device=str(device), compile=compiled, fp8=fp8, optimizer_bits=optimizer_bits,
+         statistics_origin='after_first_action' if args.command == 'train' else None,
          network=asdict(network), training=asdict(training), game=run['game'], levels=run['levels'])
     model = WorldModel(network).to(device)
     engine = Engine(model, training, compiled, fp8=fp8, optimizer_bits=optimizer_bits)

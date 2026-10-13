@@ -24,6 +24,44 @@ class DashboardTests(unittest.TestCase):
             for row in rows:
                 stream.write(json.dumps(row) + '\n')
 
+    def test_post_first_action_statistics_share_one_origin_across_consumers(self):
+        self.append({'event': 'initializing', 'statistics_origin': 'after_first_action'},
+                    {'event': 'resumed', 'actions': 9802, 'updates': 1220, 'episodes': 443})
+        warming = self.monitor.snapshot()
+        self.assertIsNone(warming['progress'].get('actions'))
+        first = {'event': 'progress', 'actions': 9803, 'updates': 1221, 'episodes': 444,
+                 'level': 1, 'level_index': 0, 'level_actions': 9803,
+                 'statistics': {'actions': 0, 'updates': 0, 'episodes': 0, 'level_actions': 0,
+                                'elapsed_seconds': 0, 'actions_per_second': None}}
+        second = {'event': 'progress', 'actions': 9805, 'updates': 1223, 'episodes': 445,
+                  'level': 1, 'level_index': 0, 'level_actions': 9805,
+                  'statistics': {'actions': 2, 'updates': 2, 'episodes': 1, 'level_actions': 2,
+                                 'elapsed_seconds': 4, 'actions_per_second': .5}}
+        self.append(first, second, {'event': 'validation', 'level': 1, 'actions': 80,
+                                   'episodes': 8, 'delta_error': .4},
+                    {'event': 'checkpoint', 'actions': 9805})
+        data = self.monitor.snapshot()
+        self.assertEqual([p['actions'] for p in data['progress_points']], [0, 2])
+        self.assertEqual(data['progress']['updates'], 2)
+        self.assertEqual(data['progress']['episodes'], 1)
+        self.assertEqual(data['progress']['actions_per_second'], .5)
+        self.assertEqual(data['progress']['elapsed_seconds'], 4)
+        self.assertEqual(data['validations'][0]['actions'], 2)
+        self.assertEqual(data['validations'][0]['validation_actions'], 80)
+        self.assertEqual(data['events'][-1]['actions'], 2)
+        self.assertEqual(data['run']['statistics_origin'], 'after_first_action')
+        # A restarted dashboard can begin at any complete progress record.
+        self.path.write_text(json.dumps(second) + '\n')
+        cold = LogMonitor(self.path).snapshot()
+        self.assertEqual(cold['progress']['actions'], 2)
+        self.assertEqual(cold['run']['statistics_origin'], 'after_first_action')
+        self.append({'event': 'initializing', 'statistics_origin': 'after_first_action'},
+                    {'event': 'resumed', 'actions': 12000})
+        restarted = self.monitor.snapshot()
+        self.assertIsNone(restarted['progress'].get('actions'))
+        self.assertEqual(restarted['progress_points'], [])
+        self.assertEqual(restarted['validations'], [])
+
     def test_incremental_partial_noise_and_validation_counters(self):
         self.append({'event': 'initializing', 'game': 'demo', 'levels': [1, 2],
                      'training': {'delta_error': .01}},

@@ -27,6 +27,7 @@ VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'la
                    'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs')
 CONFIG_KEYS = ('learning_rate', 'validate_every', 'consecutive_passes', 'delta_error',
                'latent_delta_mse', 'min_latent_std', 'collapse_std')
+STATISTICS_KEYS = ('actions', 'updates', 'episodes', 'level_actions', 'elapsed_seconds', 'actions_per_second')
 
 
 def number(value):
@@ -60,6 +61,7 @@ class LogMonitor:
         self.revision += 1
         self.run = {}
         self.progress = {}
+        self.total_actions = None
         self.progress_points = deque(maxlen=self.max_points)
         self.validations = deque(maxlen=self.max_points)
         self.events = deque(maxlen=12)
@@ -78,15 +80,26 @@ class LogMonitor:
             self.run['levels'] = [number(x) for x in row.get('levels', [])[:100]] if isinstance(row.get('levels'), list) else []
             self.run['training'] = numbers(row.get('training'), CONFIG_KEYS)
             self.run['compile'] = row.get('compile') is True
+            if row.get('statistics_origin') == 'after_first_action':
+                self.run['statistics_origin'] = 'after_first_action'
         elif event == 'ready':
             self.run['parameters'] = number(row.get('parameters'))
             self.phase = 'ready'
         elif event in ('progress', 'resumed', 'stopped'):
             actions = number(row.get('actions'))
-            previous = number(self.progress.get('actions'))
+            previous = self.total_actions
             if actions is not None and previous is not None and actions < previous:
                 self._reset()
+            self.total_actions = actions
             self.progress.update(numbers(row, PROGRESS_KEYS))
+            statistics = numbers(row.get('statistics'), STATISTICS_KEYS)
+            if statistics:
+                # Self-contained records also survive tail-only reads and a
+                # dashboard restart. All consumers share this action origin.
+                self.run['statistics_origin'] = 'after_first_action'
+                self.progress.update(statistics)
+            elif self.run.get('statistics_origin') == 'after_first_action':
+                self.progress.update(dict.fromkeys(STATISTICS_KEYS))
             if 'level' in row:
                 self.progress['level'] = number(row['level'])
             if event == 'progress':

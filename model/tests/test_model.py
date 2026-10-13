@@ -359,6 +359,45 @@ class NumericalTests(unittest.TestCase):
 
 
 class SDKTests(unittest.TestCase):
+    def test_statistics_start_after_first_completed_action_on_resume(self):
+        import json
+        clock = [0.]
+        class Environment:
+            observation = observation(1)
+            def step(self, action):
+                return observation(2)
+        class Environments:
+            def make(self, seed, level):
+                return Environment()
+        engine = Engine(WorldModel(NetworkConfig.small()),
+                        replace(TrainConfig(), max_steps=9805, max_episode_steps=2))
+        learner = Learner(engine)
+        update = learner.update
+        def timed_update(episodes):
+            result = update(episodes)
+            # Independent clock: warmup is 1100 s, later actions take 2 s.
+            clock[0] = 1100. if clock[0] == 0 else clock[0] + 2
+            return result
+        learner.update = timed_update
+        progress = dict(actions=9802, updates=1220, episodes=443, level_index=0,
+                        level_actions=9802, passes=0, best_error=1.)
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()) as output:
+            with patch('model.runner.time.monotonic', side_effect=lambda: clock[0]):
+                train(engine, learner, Environments(), {'levels': [1]}, progress,
+                      random.Random(1), Path(directory))
+            saved = checkpoint.load(Path(directory) / 'latest.pt')
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        points = [r.get('statistics', {}) for r in rows if r['event'] == 'progress']
+        self.assertEqual([p.get('actions') for p in points], [0, 1, 2])
+        self.assertEqual([p['actions_per_second'] for p in points], [None, .5, .5])
+        self.assertEqual([p['elapsed_seconds'] for p in points], [0, 2, 4])
+        self.assertEqual([p['updates'] for p in points], [0, 1, 2])
+        self.assertEqual([p['episodes'] for p in points], [0, 0, 1])
+        self.assertEqual(points[-1]['level_actions'], 2)
+        self.assertEqual(rows[-1]['statistics'], points[-1])
+        self.assertEqual(saved['progress']['actions'], 9805)
+        self.assertEqual(saved['progress']['updates'], 1223)
+
     def test_every_action_trains_terminal_before_releasing_episode(self):
         class Environment:
             def __init__(self, color):

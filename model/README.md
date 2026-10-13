@@ -275,9 +275,18 @@ mkdir -p model/runs/practice
 
 Consulta cada 2 segundos y muestra acciones, partidas iniciadas, actualizaciones,
 nivel, acciones/s, pico de memoria asignada por PyTorch y gráficas de pérdidas,
-errores de delta visual y latente, y diversidad del latente. TPS significa
-**acciones por segundo**, media desde el arranque del proceso; incluye validación
-y checkpoints. No son tokens/s ni una medida instantánea. Los errores de predictor
+errores de delta visual y latente, y diversidad del latente. Cada arranque,
+también al reanudar, establece un **punto limpio al terminar la primera acción y
+su actualización**. El panel cuenta desde ese instante las acciones, actualizaciones,
+partidas nuevas y acciones del nivel; las gráficas y marcas de validación/checkpoint
+usan el mismo origen. Antes de ese punto muestra que está preparando la medición;
+en el primer punto los contadores son cero y aún no hay TPS. Los contadores globales
+del checkpoint y las cadencias de aprendizaje/validación permanecen intactos.
+También reinicia la medición del pico de memoria GPU en ese punto.
+
+TPS significa **acciones por segundo desde el punto limpio**: excluye la carga y
+la primera acción, pero incluye validación, checkpoints y cualquier compilación
+posterior. No son tokens/s ni una medida instantánea. Los errores de predictor
 y decoder se actualizan cuando termina cada validación, a la cadencia configurada.
 Las acciones de validación no se suman al contador de entrenamiento. El selector
 de nivel evita mezclar validaciones de niveles distintos en una curva.
@@ -287,8 +296,10 @@ tipo en RAM (`--max-points`) y al abrir un log grande lee los últimos 8 MiB.
 No crea base de datos ni archivos de métricas. Reconoce truncado, sustitución del
 log y nuevos arranques; elimina entonces las curvas de la ejecución anterior.
 Si faltan datos recientes o el log desaparece, lo indica y reintenta; no confunde
-la disponibilidad del servidor web con la actividad del trainer. El log actual
-no incluye timestamps por evento, así que no se inventa un eje de tiempo pasado.
+la disponibilidad del servidor web con la actividad del trainer. Cada registro de
+progreso contiene estadísticas completas desde el punto limpio: reiniciar solo
+el panel o leer desde la mitad del log conserva ese origen. Los logs anteriores
+se identifican como acumulados y no se les inventa una duración de calentamiento.
 
 Para servirlo bajo el HTTPS existente, configura un proxy a su puerto local,
 conservando la barra final que elimina el prefijo al reenviar:
