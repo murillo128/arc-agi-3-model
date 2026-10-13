@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import math
 import os
 from pathlib import Path
 import struct
@@ -11,6 +12,8 @@ from uuid import uuid4
 
 from arc3.core.policy import Action, Observation, Policy
 from arc3.traces import write_attempt
+from arc3.traces._errors import MAX_UNCOMPRESSED_BYTES
+from arc3.traces._validation import diagnostics as validate_diagnostics, profile, representation
 from arc3.traces.types import Attempt, Observation as WireObservation
 
 
@@ -39,8 +42,22 @@ def observation_snapshot(observation: Observation) -> WireObservation:
 
 
 def _prediction_errors(step: dict) -> None:
-    """Compare only aligned real pixels; preserve mismatches without errors."""
+    """Merge owned metrics from frozen snapshots, never replay-training losses."""
     prediction = step.get("prediction", {})
+    if prediction.get("target") == "post_action_last_frame" and "representation" in step:
+        real = step.get("representation", {}).get("z")
+        for key, source in (("latent_mse", prediction.get("latent")),
+                            ("no_change_mse", prediction.get("dynamics", {}).get("z"))):
+            if real is not None and source is not None and source["shape"] == real["shape"]:
+                def values(tensor):
+                    if tensor["dtype"] == "u8":
+                        return tensor["data"]
+                    return [item[0] for item in struct.iter_unpack(
+                        "<f" if tensor["dtype"] == "f32" else "<e", tensor["data"])]
+                actual_values, predicted_values = values(real), values(source)
+                if actual_values and len(actual_values) == len(predicted_values):
+                    mse = math.fsum((a - b) ** 2 for a, b in zip(actual_values, predicted_values)) / len(actual_values)
+                    prediction.setdefault("errors", {})[key] = mse
     predicted = prediction.get("frames")
     actual = step["observation"]["frames"]
     if predicted is None or actual["shape"][0] == 0:
@@ -61,10 +78,10 @@ def _prediction_errors(step: dict) -> None:
     if len(values) != len(target):
         return  # Codec still rejects an invalid tensor, without invented errors.
     differences = [predicted_pixel - real_pixel for predicted_pixel, real_pixel in zip(values, target)]
-    prediction["errors"] = {
+    prediction.setdefault("errors", {}).update({
         "mae": sum(abs(value) for value in differences) / len(target),
         "mse": sum(value * value for value in differences) / len(target),
-    }
+    })
 
 
 class EvaluationRecorder:
@@ -75,7 +92,10 @@ class EvaluationRecorder:
     """
 
     def __init__(self, directory: str | Path, *, run_id: str, seed: int,
-                 sdk_version: str) -> None:
+                 sdk_version: str, format_minor: int = 0) -> None:
+        if type(format_minor) is not int or format_minor not in (0, 1):
+            raise ValueError("format_minor must be 0 or 1")
+        self.format_minor = format_minor
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
@@ -88,8 +108,13 @@ class EvaluationRecorder:
         self._started = 0.0
         self._real_actions = 0
         self._pending: dict = {}
+        self._policy: Policy | None = None
+        self._pre_action: Observation | None = None
 
-    def start(self, observation: Observation) -> None:
+    def start(self, observation: Observation, policy: Policy | None = None) -> None:
+        self._pending = {}
+        self._pre_action = None
+        self._policy = policy
         if self._game_id is not None and observation.game_id != self._game_id:
             raise ValueError("A trace session cannot change game_id")
         self._game_id = observation.game_id
@@ -108,10 +133,21 @@ class EvaluationRecorder:
             "initial_observation": observation_snapshot(observation),
             "steps": [],
         }
+        hook = getattr(policy, "trace_initial_diagnostics", None)
+        if hook is not None:
+            initial = deepcopy(hook(observation))
+            profile(initial, "initial diagnostics")
+            if not isinstance(initial, dict) or initial.keys() - {"initial_representation"}:
+                raise ValueError("Initial diagnostics permit only initial_representation")
+            if self.format_minor >= 1 and "initial_representation" in initial:
+                representation(initial["initial_representation"], "initial_representation", MAX_UNCOMPRESSED_BYTES)
+            self._attempt.update(initial)
         if observation.state in {"WIN", "GAME_OVER"}:
             self.finish("win" if observation.state == "WIN" else "game_over")
 
     def before_action(self, observation: Observation, action: Action, policy: Policy) -> None:
+        self._policy = policy
+        self._pre_action = observation
         self._pending = {"action": {"id": action.id, "data": dict(action.data)}}
         if action.id == 0:
             return
@@ -119,12 +155,22 @@ class EvaluationRecorder:
         if hook is not None:
             diagnostics = deepcopy(hook(observation, Action(action.id, dict(action.data))))
             if not isinstance(diagnostics, dict) or diagnostics.keys() - {
-                "decision", "prediction", "learning", "timing", "notes",
+                "decision", "prediction", "learning", "timing", "notes", "policy_mode",
             }:
                 raise ValueError("Diagnostics must contain only optional .arc3 step groups")
-            if "errors" in diagnostics.get("prediction", {}):
+            profile(diagnostics, "pre-action diagnostics")
+            errors = diagnostics.get("prediction", {}).get("errors", {})
+            owned_errors = ("mae", "mse", "latent_mse", "no_change_mse") if self.format_minor >= 1 else ("mae", "mse")
+            if any(key in errors for key in owned_errors):
                 raise ValueError("Prediction errors must be computed after the real action")
+            validate_diagnostics({**diagnostics, "observation": observation_snapshot(observation)},
+                                 "pending", observation_snapshot(observation), MAX_UNCOMPRESSED_BYTES,
+                                 minor=self.format_minor, observations=self._observations())
             self._pending.update(diagnostics)
+
+    def _observations(self) -> list[WireObservation]:
+        return [self._attempt["initial_observation"],
+                *(step["observation"] for step in self._attempt["steps"])]
 
     def after_action(self, action: Action, observation: Observation) -> None:
         if action.id == 0:
@@ -135,7 +181,7 @@ class EvaluationRecorder:
                     "reset_action": self._pending["action"],
                 }
                 self.finish("reset")
-            self.start(observation)
+            self.start(observation, self._policy)
             return
         if self._attempt is None:
             raise RuntimeError("An ordinary action requires an active attempt")
@@ -146,7 +192,33 @@ class EvaluationRecorder:
                 "observation": observation_snapshot(observation)}
         self._attempt["steps"].append(step)
         self._pending = {}
-        _prediction_errors(step)
+        pre_action, self._pre_action = self._pre_action, None
+        hook = getattr(self._policy, "trace_result_diagnostics", None)
+        try:
+            if hook is not None:
+                result = deepcopy(hook(pre_action, Action(step["action"]["id"], dict(step["action"]["data"])), observation))
+                profile(result, "result diagnostics")
+                if not isinstance(result, dict) or result.keys() - {"representation", "learning", "timing", "notes"}:
+                    raise ValueError("Result diagnostics permit only representation, learning, timing and notes")
+                if self.format_minor >= 1 and not observation.frame:
+                    result.pop("representation", None)
+                # Stage and validate before attachment so a hook failure cannot
+                # corrupt the already confirmed action/result or frozen prediction.
+                candidate = {**step, **result}
+                for key in ("learning", "timing"):
+                    if key in step and key in result and isinstance(result[key], dict):
+                        candidate[key] = {**step[key], **result[key]}
+                        if key == "learning" and self.format_minor >= 1 and "modules" in step[key] and isinstance(result[key].get("modules"), dict):
+                            candidate[key]["modules"] = {**step[key]["modules"], **result[key]["modules"]}
+                if "notes" in step and "notes" in result and isinstance(result["notes"], list):
+                    candidate["notes"] = step["notes"] + result["notes"]
+                validate_diagnostics(candidate, "result", self._observations()[-2], MAX_UNCOMPRESSED_BYTES,
+                                     minor=self.format_minor, observations=self._observations()[:-1])
+                step.update(candidate)
+        finally:
+            # Even a failing result hook retains and scores the confirmed pixels.
+            scoring = step if self.format_minor >= 1 else {k: v for k, v in step.items() if k != "representation"}
+            _prediction_errors(scoring)
         if observation.state in {"WIN", "GAME_OVER"}:
             self.finish("win" if observation.state == "WIN" else "game_over")
 
@@ -155,6 +227,8 @@ class EvaluationRecorder:
                 else self._attempt["initial_observation"])
 
     def finish(self, reason: str, *, detail: str | None = None) -> None:
+        self._pending = {}
+        self._pre_action = None
         if self._attempt is None:
             return
         last = self._last_observation()
@@ -174,7 +248,7 @@ class EvaluationRecorder:
         fd, temporary = tempfile.mkstemp(prefix=".arc3-", suffix=".tmp", dir=self.directory)
         os.close(fd)
         try:
-            write_attempt(temporary, attempt)
+            write_attempt(temporary, attempt, format_minor=self.format_minor)
             basename = f"{self.session_id}-{self._attempt_index:06d}"
             collision = 0
             while True:

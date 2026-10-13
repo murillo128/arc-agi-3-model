@@ -17,7 +17,7 @@ class Environment(Protocol):
 class AttemptObserver(Protocol):
     """Evaluation-only lifecycle seam; storage stays outside the action loop."""
 
-    def start(self, observation: Observation) -> None: ...
+    def start(self, observation: Observation, policy: Policy | None = None) -> None: ...
     def before_action(self, observation: Observation, action: Action, policy: Policy) -> None: ...
     def after_action(self, action: Action, observation: Observation) -> None: ...
     def finish(self, reason: str, *, detail: str | None = None) -> None: ...
@@ -72,7 +72,7 @@ def run_game(
 
     try:
         if attempt_observer is not None:
-            attempt_observer.start(observation)
+            attempt_observer.start(observation, policy)
         while True:
             if boundary(observation):
                 stop_reason = "training_level_boundary"

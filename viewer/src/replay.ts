@@ -23,7 +23,7 @@ export class Replay {
   frame = 0;
   playing = false;
   animating = false;
-  constructor(readonly attempt: Attempt) {}
+  constructor(readonly attempt: Attempt, readonly minor = 0) {}
   get end(): number { return this.attempt.steps.length + (this.attempt.termination.reset_action ? 1 : 0); }
   get resetBoundary(): boolean { return this.position > this.attempt.steps.length; }
   get step(): Step | undefined { return this.resetBoundary ? undefined : this.attempt.steps[this.position - 1]; }

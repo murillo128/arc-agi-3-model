@@ -1,5 +1,5 @@
 import { drawObservation } from './canvas';
-import { chartPoints, comparePrediction, diagnosticMetrics, latentSummary, MAX_CHART_STEPS, type Metric } from './diagnostics';
+import { chartPoints, comparePrediction, diagnosticMetrics, latentStateSummary, moduleSummary, observedAnimationChange, predictedVisualChange, MAX_CHART_STEPS, type Metric } from './diagnostics';
 import { actionName, observationChanges, type Replay } from './replay';
 import type { Attempt } from './types';
 
@@ -24,14 +24,17 @@ export class DiagnosticsView {
   }
   clear(): void {
     this.replay = undefined; this.metrics = []; this.lastPosition = this.lastFrame = -1;
-    for (const id of ['prediction-canvas', 'difference-canvas']) {
+    for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas']) {
       const canvas = element<HTMLCanvasElement>(id); canvas.width = canvas.height = 1; canvas.hidden = true;
     }
     element('diagnostic-chart').replaceChildren(); element('chart-values').replaceChildren();
     element('score-rows').replaceChildren(); element('metric-select').replaceChildren();
+    for (const id of ['prediction-info', 'prediction-values', 'difference-info', 'recorded-errors', 'latent-info',
+      'predicted-change-info', 'observed-change-info', 'learning-info', 'module-learning-info', 'policy-mode',
+      'chosen-action', 'selected-value', 'score-info', 'uncertainty-info', 'timing-info', 'rationale-info', 'inferred-event', 'chart-info']) element(id).textContent = 'Not recorded.';
   }
   display(replay: Replay): void {
-    this.clear(); this.replay = replay; this.metrics = diagnosticMetrics(replay.attempt);
+    this.clear(); this.replay = replay; this.metrics = diagnosticMetrics(replay.attempt, replay.minor);
     const select = element<HTMLSelectElement>('metric-select');
     for (const metric of this.metrics) {
       const option = document.createElement('option'); option.value = metric.key; option.textContent = metric.label; select.append(option);
@@ -60,8 +63,17 @@ export class DiagnosticsView {
     element('difference-info').textContent = visual.fraction === undefined ? 'Not available: no comparable decoded visual prediction.' :
       `Pixel disagreement fraction: ${visual.fraction} (${visual.disagreements}/${visual.total} pixels; ${(visual.fraction * 100).toFixed(2)}%)\nSelected real frame ${replay.frame} · exact palette-index values before display rounding. Red = disagreement; black = equal.`;
     element('prediction-values').textContent = visual.values ? JSON.stringify(visual.values) + '\nRow-major values, limited to the top-left 32 × 32.' : 'Not recorded for this frame.';
+    const predictedChange = predictedVisualChange(prediction, replay.observation, replay.frame, replay.minor);
+    const observedChange = replay.step ? observedAnimationChange(replay.observation, replay.frame, replay.preAction) : { message: 'Unavailable: no real action result at this position.' };
+    for (const [kind, change] of [['predicted', predictedChange], ['observed', observedChange]] as const) {
+      const canvas = element<HTMLCanvasElement>(`${kind}-change-canvas`);
+      drawObservation(canvas, change.observation, 0);
+      canvas.setAttribute('aria-label', change.message);
+      element(`${kind}-change-info`).textContent = change.message + (change.codes ? `\nChange codes (first 32, row-major): ${JSON.stringify(change.codes)}` : '');
+    }
     if (!positionChanged) return;
-    element('latent-info').textContent = latentSummary(prediction?.latent);
+    element('latent-info').textContent = latentStateSummary(replay.attempt, replay.position, replay.minor);
+    element('policy-mode').textContent = `Recorded policy mode: ${replay.minor >= 1 ? step?.policy_mode ?? 'Not recorded' : 'Not recorded'}`;
     const decision = step?.decision;
     element('chosen-action').textContent = step ? `${actionName(step.action)} · ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? 'RESET · executed closing boundary; no result recorded' : 'No action precedes the initial observation.';
     element('selected-value').textContent = `Recorded selected-action value estimate: ${numeric(decision?.selected_value)}`;
@@ -77,12 +89,14 @@ export class DiagnosticsView {
     });
     if (decision && decision.candidates.length > 256) element('score-info').append(` Showing first 256 of ${decision.candidates.length} candidates.`);
     element('uncertainty-info').textContent = `Prediction uncertainty: ${numeric(prediction?.uncertainty)} (recorded estimator units; public config below)\nAction entropy: ${numeric(decision?.action_entropy)} (nats)`;
-    element('recorded-errors').textContent = `Recorded target MAE (palette-index units): ${numeric(prediction?.errors?.mae)}\nRecorded target MSE (squared palette-index units): ${numeric(prediction?.errors?.mse)}\nThese target-wide recorded errors are separate from the viewer's selected-frame disagreement.`;
+    element('recorded-errors').textContent = `Recorded target MAE (palette-index units): ${numeric(prediction?.errors?.mae)}\nRecorded target MSE (squared palette-index units): ${numeric(prediction?.errors?.mse)}\nThese target-wide recorded errors are separate from the viewer's selected-frame disagreement.` +
+      (replay.minor >= 1 ? `\nFrozen prediction latent MSE: ${numeric(prediction?.errors?.latent_mse)}\nNo-change latent MSE: ${numeric(prediction?.errors?.no_change_mse)}\nLatent metrics use squared representation units; they are not pixel errors or training losses.` : '');
     const o = replay.observation;
     element('level-progress-info').textContent = `${o.levels_completed} / ${o.win_levels} public levels completed` + (replay.preAction && replay.preAction.levels_completed !== o.levels_completed ? ` · counter ${replay.preAction.levels_completed} → ${o.levels_completed}` : '') + (o.win_levels === 0 ? ' · target unavailable (zero)' : '');
     const progress = element<HTMLProgressElement>('level-progress'); progress.hidden = o.win_levels === 0;
     progress.max = o.win_levels || 1; progress.value = o.levels_completed;
     element('learning-info').textContent = `Optimizer updates: ${numeric(step?.learning?.updates)}\nLearning loss (recorded objective): ${numeric(step?.learning?.loss)}\nReplay size (entries): ${numeric(step?.learning?.replay_size)}`;
+    element('module-learning-info').textContent = moduleSummary(step, replay.minor);
     element('timing-info').textContent = step?.timing && Object.keys(step.timing).length ? shortText(Object.entries(step.timing).map(([key, value]) => `${key}: ${value} ms`).join('\n')) : 'Not recorded for this position.';
     element('rationale-info').textContent = step?.notes?.length ? `Recorded plain-text notes:\n${step.notes.slice(0, 20).map(shortText).join('\n')}${step.notes.length > 20 ? '\n[First 20 notes shown]' : ''}` : 'Recorded plain-text notes: Not recorded.';
     element('inferred-event').textContent = step && replay.preAction ? `Inferred by viewer from public observations: ${observationChanges(replay.preAction, step.observation)}` : 'Inferred by viewer: no recorded transition at this position.';
@@ -100,15 +114,22 @@ export class DiagnosticsView {
   }
   private plot(attempt: Attempt, metric: Metric, chart: Element): void {
     const from = element<HTMLInputElement>('chart-from').valueAsNumber, to = element<HTMLInputElement>('chart-to').valueAsNumber;
-    const points = chartPoints(attempt, metric, from, to);
+    const points = chartPoints(attempt, metric, from, to, this.replay?.minor);
     if (!points.length) { element('chart-info').textContent = `Choose an inclusive range of up to ${MAX_CHART_STEPS} recorded steps (zero-based).`; return; }
     const values = points.flatMap(point => point.value === undefined ? [] : [point.value]);
     const table = element('chart-values');
     points.forEach(point => {
-      const row = document.createElement('tr'), step = document.createElement('td'), value = document.createElement('td');
-      step.textContent = String(point.step); value.textContent = numeric(point.value); row.append(step, value); table.append(row);
+      const row = document.createElement('tr'), step = document.createElement('td'), value = document.createElement('td'), resets = document.createElement('td');
+      step.textContent = String(point.step); value.textContent = numeric(point.value); resets.textContent = point.resets?.join('\n') ?? ''; row.append(step, value, resets); table.append(row);
     });
     element('chart-info').textContent = `${metric.label} · steps ${points[0]!.step}–${points.at(-1)!.step} · ${values.length} recorded samples; ${points.length - values.length} missing. Gaps remain missing; values are not interpolated. Selected step: ${this.replay?.step?.index ?? 'none'}.`;
+    points.forEach((point, i) => {
+      if (!point.resets) return;
+      const px = 50 + (points.length === 1 ? 240 : i / (points.length - 1) * 480);
+      const marker = svgNode('path', { d: `M${px} 30 V160`, stroke: '#ffdc00', 'stroke-dasharray': '4 3' });
+      const title = svgNode('title', {}); title.textContent = `Actual reset at step ${point.step}: ${point.resets.join('; ')}`;
+      marker.append(title); chart.append(marker);
+    });
     if (!values.length) return;
     const min = Math.min(...values), max = Math.max(...values), scale = Math.max(Math.abs(min), Math.abs(max)) || 1;
     const span = max / scale - min / scale;

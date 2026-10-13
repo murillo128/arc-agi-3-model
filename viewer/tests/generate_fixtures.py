@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 from fixtures.generate_arc3 import generate  # noqa: E402
+from fixtures.diagnostics_v11 import extend_attempt, invalid_cases, replace  # noqa: E402
 from arc3.traces import Arc3Error, decode_attempt, encode_attempt  # noqa: E402
 
 OUTPUT = ROOT / "viewer" / ".fixtures"
@@ -283,7 +284,58 @@ for name, payload in (("diagnostics", diagnostics), ("latent-only", latent_only)
     decode_attempt(encoded)
     (OUTPUT / f"{name}.arc3").write_bytes(encoded)
 
+# v1.1: literal residual/decoder oracles, including differently sized z/h.
+v11_latent = extend_attempt(baseline, visual=False)
+v11_decoder = extend_attempt(baseline)
+for name, payload in (("v11-latent", v11_latent), ("v11-decoder", v11_decoder)):
+    encoded = encode_attempt(payload, format_minor=1)
+    add(name, encoded, True)
+    (OUTPUT / f"{name}.arc3").write_bytes(encoded)
+add("v11-optional-omission", encode_attempt(baseline, format_minor=1), True)
+add("v11-forward-minor", wire(v11_decoder, minor=65535), True)
+for name, path, replacement, error in invalid_cases():
+    payload = deepcopy(v11_decoder)
+    replace(payload, path, replacement)
+    add(f"v11-{name}", wire(payload, minor=1), error=error)
+for field in ("latent", "frames"):
+    payload = deepcopy(v11_decoder)
+    del payload["steps"][0]["prediction"][field]
+    add(f"v11-missing-{field}", wire(payload, minor=1), error="requires")
+unknown_v10 = deepcopy(baseline)
+unknown_v10["initial_representation"] = None
+unknown_v10["steps"][0].update({"representation": "unknown", "policy_mode": 42,
+                                "learning": {"modules": None}, "prediction": {
+    "target": "post_action_last_frame", "latent": multi["steps"][0]["prediction"]["latent"],
+    "dynamics": None, "visual_delta": None, "errors": {"latent_mse": "unknown", "no_change_mse": None},
+}})
+add("v10-new-names-unknown", encode_attempt(unknown_v10), True)
+(OUTPUT / "v10-new-names-unknown.arc3").write_bytes(encode_attempt(unknown_v10))
+after_empty = deepcopy(v11_decoder)
+empty_step = deepcopy(baseline["steps"][0])
+empty_step["observation"]["frames"] = {"dtype": "u8", "shape": [0, 0, 0], "data": b""}
+after_empty["steps"].insert(0, empty_step)
+after_empty["steps"][1]["index"] = 1
+after_empty["summary"]["real_actions"] = 2
+add("v11-reference-across-empty", encode_attempt(after_empty, format_minor=1), True)
+after_empty["steps"][1]["prediction"]["visual_delta"]["reference_position"] = 1
+add("v11-empty-reference", wire(after_empty, minor=1), error="nonempty causal")
+
+timeline = deepcopy(v11_decoder)
+timeline["metadata"]["config"] = {"provenance": "original synthetic diagnostics; no neural agent",
+                                     "world_model": {"loss_weights": {"latent_mse": 1, "sigreg": 0.1}, "units": "synthetic objective"},
+                                     "decoder": {"color_cross_entropy_weight": 1, "units": "nats"}}
+timeline["steps"].append({"index": 1, "action": {"id": 1, "data": {}},
+                          "policy_mode": "random", "observation": deepcopy(baseline["steps"][0]["observation"])})
+timeline["steps"].append({"index": 2, "action": {"id": 1, "data": {}}, "policy_mode": "learned",
+    "observation": deepcopy(baseline["steps"][0]["observation"]), "learning": {"modules": {
+        "world_model": {"updates": 0, "loss": 0.0},
+        "actor": {"updates": 1, "loss": -0.5, "reset_reason": "Synthetic actual reset <script>literal</script>"},
+        "critic": {"reset_reason": "Synthetic actual reset"},
+    }}})
+timeline["summary"]["real_actions"] = 3
+(OUTPUT / "v11-module-timeline.arc3").write_bytes(encode_attempt(timeline, format_minor=1))
+
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)
-print(f"Generated {len(vectors)} Python-checked vectors, 11 codec/UI samples and 3 verified recorder goldens in {OUTPUT}")
+print(f"Generated {len(vectors)} Python-checked vectors and codec/UI samples, retaining 3 verified recorder goldens in {OUTPUT}")

@@ -1,4 +1,4 @@
-"""Semantic validation owned by the frozen docs/arc3-format-v1.md contract."""
+"""Frozen v1.0 semantics plus minor-gated docs/arc3-format-v1.1.md additions."""
 
 from datetime import date
 import math
@@ -142,7 +142,104 @@ def action(value: object, path: str, available: list[int] | None = None) -> None
         fail(path + ".id", "action unavailable in pre-action observation")
 
 
-def diagnostics(step: dict, path: str, previous: dict, cap: int) -> None:
+def state_tensor(value: object, path: str, cap: int) -> None:
+    tensor(value, path, cap, rank=1)
+    if value["dtype"] != "f32":
+        fail(path + ".dtype", "state requires f32")
+
+
+def representation(value: object, path: str, cap: int) -> None:
+    mapping(value, path, ("z", "h"))
+    for key in ("z", "h"):
+        state_tensor(value[key], path + "." + key, cap)
+
+
+def extension_diagnostics(step: dict, path: str, cap: int, observations: list[dict]) -> None:
+    """Known 1.1 fields; minor 0 continues to treat these names as unknown."""
+    if "representation" in step:
+        representation(step["representation"], path + ".representation", cap)
+        if not step["observation"]["frames"]["shape"][0]:
+            fail(path + ".representation", "real representation requires a visual result")
+    if "policy_mode" in step:
+        enum(step["policy_mode"], path + ".policy_mode", ("random", "learned"))
+    prediction = step.get("prediction", {})
+    dest = path + ".prediction"
+    if "dynamics" in prediction:
+        value = prediction["dynamics"]
+        mapping(value, dest + ".dynamics", ("z", "h", "delta_z", "h_next"))
+        if prediction["target"] != "post_action_last_frame" or "latent" not in prediction:
+            fail(dest + ".dynamics", "requires latent and last-frame target")
+        for key in ("z", "h", "delta_z", "h_next"):
+            state_tensor(value[key], dest + ".dynamics." + key, cap)
+        state_tensor(prediction["latent"], dest + ".latent", cap)
+        if value["z"]["shape"] != value["delta_z"]["shape"] or value["z"]["shape"] != prediction["latent"]["shape"]:
+            fail(dest + ".dynamics", "latent dimensions must match")
+        if value["h"]["shape"] != value["h_next"]["shape"]:
+            fail(dest + ".dynamics", "memory dimensions must match")
+        # Numerical residual disagreement is a viewer diagnostic, not malformed.
+    for key, source in (("latent_mse", prediction.get("latent")),
+                        ("no_change_mse", prediction.get("dynamics", {}).get("z"))):
+        errors = prediction.get("errors", {})
+        if key in errors:
+            number(errors[key], dest + ".errors." + key, 0)
+            actual = step.get("representation", {}).get("z")
+            if prediction["target"] != "post_action_last_frame" or source is None or actual is None or source["shape"] != actual["shape"]:
+                fail(dest + ".errors." + key, "latent error requires matched real/predicted tensors and last-frame target")
+    if "visual_delta" in prediction:
+        value = prediction["visual_delta"]
+        location = dest + ".visual_delta"
+        mapping(value, location, ("reference_position", "reference_frame", "delta"))
+        if prediction["target"] != "post_action_last_frame" or "frames" not in prediction:
+            fail(location, "requires absolute frames and last-frame target")
+        integer(value["reference_position"], location + ".reference_position", 0, len(observations) - 1)
+        for key, maximum in (("reference_frame", 15), ("delta", 16)):
+            tensor(value[key], location + "." + key, cap, rank=2)
+            if value[key]["dtype"] != "u8" or any(v > maximum for v in value[key]["data"]):
+                fail(location + "." + key, "invalid u8 palette/KEEP code")
+        frames, reference, delta = prediction["frames"], value["reference_frame"], value["delta"]
+        if frames["dtype"] != "u8" or any(v > 15 for v in frames["data"]):
+            fail(dest + ".frames", "visual decoder requires u8 colors 0..15")
+        if frames["shape"] != reference["shape"] or delta["shape"] != reference["shape"]:
+            fail(location, "internal geometry must match")
+        observed = observations[value["reference_position"]]["frames"]
+        size = len(reference["data"])
+        if not observed["shape"][0] or observed["shape"][1:] != reference["shape"] or observed["data"][-size:] != reference["data"]:
+            fail(location, "reference must equal a nonempty causal observation's last frame")
+        if any((r if d == 16 else d) != p for r, d, p in zip(reference["data"], delta["data"], frames["data"])):
+            fail(location, "KEEP/replacement delta differs from absolute predicted board")
+    learning = step.get("learning", {})
+    if "modules" in learning:
+        modules = learning["modules"]
+        location = path + ".learning.modules"
+        mapping(modules, location)
+        if not modules:
+            fail(location, "expected nonempty module map")
+        for key in ("world_model", "decoder", "actor", "critic"):
+            if key not in modules:
+                continue
+            value, module_path = modules[key], location + "." + key
+            mapping(value, module_path)
+            if not any(k in value for k in ("updates", "loss", "losses", "reset_reason")):
+                fail(module_path, "module requires actual reported data")
+            if "updates" in value:
+                integer(value["updates"], module_path + ".updates", 0)
+            if "loss" in value:
+                number(value["loss"], module_path + ".loss")
+            if "losses" in value:
+                mapping(value["losses"], module_path + ".losses")
+                if not value["losses"]:
+                    fail(module_path + ".losses", "expected nonempty loss map")
+                for name, loss in value["losses"].items():
+                    text(name, module_path + ".losses key", identifier=True)
+                    number(loss, module_path + ".losses." + name)
+            if "reset_reason" in value:
+                if key not in ("actor", "critic"):
+                    fail(module_path + ".reset_reason", "reset events are actor/critic only")
+                text(value["reset_reason"], module_path + ".reset_reason", identifier=True)
+
+
+def diagnostics(step: dict, path: str, previous: dict, cap: int, *, minor: int = 0,
+                observations: list[dict] | None = None) -> None:
     if "decision" in step:
         value = step["decision"]
         dest = path + ".decision"
@@ -203,9 +300,11 @@ def diagnostics(step: dict, path: str, previous: dict, cap: int) -> None:
         array(step["notes"], path + ".notes")
         for note in step["notes"]:
             text(note, path + ".notes entry")
+    if minor >= 1:
+        extension_diagnostics(step, path, cap, observations if observations is not None else [previous])
 
 
-def validate_attempt(attempt: object, cap: int) -> None:
+def validate_attempt(attempt: object, cap: int, *, minor: int = 0) -> None:
     profile(attempt, "attempt")
     mapping(attempt, "attempt", ("metadata", "initial_observation", "steps", "termination", "summary"))
     metadata = attempt["metadata"]
@@ -235,6 +334,9 @@ def validate_attempt(attempt: object, cap: int) -> None:
 
     previous = attempt["initial_observation"]
     observation(previous, "initial_observation", cap)
+    if minor >= 1 and "initial_representation" in attempt:
+        representation(attempt["initial_representation"], "initial_representation", cap)
+    observations = [previous]
     array(attempt["steps"], "steps")
     for i, step in enumerate(attempt["steps"]):
         path = f"steps[{i}]"
@@ -246,8 +348,9 @@ def validate_attempt(attempt: object, cap: int) -> None:
             fail(path, "ordinary step after terminal or initialization state")
         action(step["action"], path + ".action", previous["available_actions"])
         observation(step["observation"], path + ".observation", cap)
-        diagnostics(step, path, previous, cap)
+        diagnostics(step, path, previous, cap, minor=minor, observations=observations)
         previous = step["observation"]
+        observations.append(previous)
 
     termination, summary = attempt["termination"], attempt["summary"]
     mapping(termination, "termination", ("reason", "final_state"))
