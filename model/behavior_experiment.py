@@ -35,7 +35,7 @@ def episode_seeds(split, count, offset=0):
 
 
 @torch.no_grad()
-def collect(engine, factory, level, seeds, steps, discount, records, policy=None, mode='q', epsilon=.25):
+def collect(engine, factory, level, seeds, steps, discount, records, policy=None, mode='q', epsilon=.25, round_index=None):
     """Store only causal pre-action latents; labels arrive from actual steps."""
     started, wins, actions = time.monotonic(), 0, 0
     for index, seed in enumerate(seeds):
@@ -76,12 +76,12 @@ def collect(engine, factory, level, seeds, steps, discount, records, policy=None
                                     torch.tensor(action.features()), event, target, geometry))
                     h, _ = engine.advance(last_z[None], h, engine.actions([action]))
         if (index + 1) % 16 == 0 or index + 1 == len(seeds):
-            emit('behavior_collection', episodes=index + 1, wins=wins, actions=actions,
+            emit('behavior_collection', round=round_index, episodes=index + 1, wins=wins, actions=actions,
                  records=len(records), seconds=round(time.monotonic() - started, 2))
     return {'episodes': len(seeds), 'wins': wins, 'actions': actions}
 
 
-def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compiled=False):
+def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compiled=False, round_index=None):
     if not records:
         raise ValueError('No real training records')
     heads.train()
@@ -91,8 +91,10 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
     for row in records:
         groups.setdefault(row[-1], []).append(row)
     rng, started = random.Random(seed), time.monotonic()
+    updates = 0
     for epoch in range(epochs):
         loss_sum, samples = 0., 0
+        component_sum = torch.zeros(3, device=engine.device)
         for geometry, rows in groups.items():
             indices = list(range(len(rows)))
             rng.shuffle(indices)
@@ -105,18 +107,23 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
                 p = engine.model.config.patch
                 opt.zero_grad(set_to_none=True)
                 with engine.autocast():
-                    loss = head_loss(forward, z, h, action, events, targets, *((s + p - 1) // p for s in geometry))
+                    loss, parts = head_loss(forward, z, h, action, events, targets, *((s + p - 1) // p for s in geometry), components=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(heads.parameters(), 10.)
                 opt.step()
+                updates += 1
+                component_sum += parts * len(selected)
                 loss_sum += float(loss.detach()) * len(selected)
                 samples += len(selected)
-        emit('behavior_fit', epoch=epoch + 1, loss=loss_sum / samples, seconds=round(time.monotonic() - started, 2))
+        event_ce, value_bce, q_bce = (component_sum / samples).tolist()
+        emit('behavior_fit', round=round_index, epoch=epoch + 1, epochs=epochs, updates=updates,
+             loss=loss_sum / samples, event_ce=event_ce, value_bce=value_bce, q_bce=q_bce,
+             records=len(records), seconds=round(time.monotonic() - started, 2))
     heads.eval()
 
 
 @torch.no_grad()
-def evaluate(engine, planner, factory, level, seeds, steps, mode):
+def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None):
     results, started = [], time.monotonic()
     for index, seed in enumerate(seeds):
         rng, env = random.Random(seed), factory.make(seed, level)
@@ -142,7 +149,7 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode):
                         'truncated': event == 0 and not obs.terminal, 'actions': actions,
                         'decision_seconds': decision_seconds})
         if (index + 1) % 16 == 0:
-            emit('behavior_evaluation_progress', policy=mode, horizon=planner.config.horizon,
+            emit('behavior_evaluation_progress', split=split, round=round_index, policy=mode, horizon=planner.config.horizon,
                  episodes=index + 1, wins=sum(r['success'] for r in results))
     total_actions = sum(r['actions'] for r in results)
     wins = sum(r['success'] for r in results)
@@ -152,7 +159,7 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode):
     rate = wins / n
     center = (rate + z*z/(2*n)) / (1 + z*z/n)
     radius = z * (rate*(1-rate)/n + z*z/(4*n*n))**.5 / (1+z*z/n)
-    report = {'policy': mode, 'horizon': planner.config.horizon, 'episodes': n, 'wins': wins,
+    report = {'split': split, 'round': round_index, 'policy': mode, 'horizon': planner.config.horizon, 'episodes': n, 'wins': wins,
               'win_rate': rate, 'wilson95': [center-radius, center+radius], 'actions': total_actions,
               'actions_per_success': total_actions / wins if wins else None,
               'seconds': seconds, 'actions_per_second': total_actions / max(seconds, 1e-9),
@@ -233,15 +240,17 @@ def main(argv=None):
     report = {'source_fingerprint': source, 'source_actions': source_actions,
               'config': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
               'development': [], 'collection': []}
-    emit('behavior_started', source=source, source_actions=source_actions, world_trainable=sum(p.numel() for p in net.parameters() if p.requires_grad))
+    emit('behavior_started', game=args.game, level=args.level, device=args.device,
+         compile=args.device == 'cuda', mode='evaluation_only' if args.heads else 'training',
+         source=source, source_actions=source_actions, world_trainable=sum(p.numel() for p in net.parameters() if p.requires_grad))
     if args.heads:
         saved = load_heads(args.heads, heads, source)
         planner.config = PlanConfig(**saved['planner'])
         seeds = episode_seeds('final', args.final_episodes, args.seed_offset)
         mode = saved['report']['selected']['policy']
         report['selected'] = saved['report']['selected']
-        report['final_random'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, 'random')
-        report['final_learned'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, mode)
+        report['final_random'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, 'random', split='evaluation_only')
+        report['final_learned'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, mode, split='evaluation_only')
         report['world_unchanged'] = fingerprint(net) == source
         if not report['world_unchanged']:
             raise RuntimeError('Frozen world-model invariant violated')
@@ -250,7 +259,7 @@ def main(argv=None):
              random_wins=report['final_random']['wins'], learned_wins=report['final_learned']['wins'])
         return
     development = episode_seeds('dev', args.dev_episodes, args.seed_offset)
-    baseline = evaluate(engine, planner, factory, args.level, development, args.steps, 'random')
+    baseline = evaluate(engine, planner, factory, args.level, development, args.steps, 'random', split='development')
     report['development_random'] = baseline
     best, best_weights, chosen = None, None, None
     for iteration in range(args.rounds):
@@ -263,13 +272,13 @@ def main(argv=None):
         collection = collect(engine, factory, args.level,
                              episode_seeds('train', args.train_episodes, args.seed_offset + iteration * args.train_episodes),
                              args.steps, config.discount, records, policy,
-                             mode=chosen['policy'] if chosen else 'q')
+                             mode=chosen['policy'] if chosen else 'q', round_index=iteration + 1)
         report['collection'].append(collection)
         fit(engine, heads, records, args.epochs, args.batch_size, args.learning_rate,
-            123 + iteration, compiled=args.device == 'cuda')
+            123 + iteration, compiled=args.device == 'cuda', round_index=iteration + 1)
         for mode, horizon in [('q', 1)] + [('mpc', h) for h in args.horizons]:
             planner.config = PlanConfig(horizon=horizon, beam=args.beam)
-            result = evaluate(engine, planner, factory, args.level, development, args.steps, mode)
+            result = evaluate(engine, planner, factory, args.level, development, args.steps, mode, split='development', round_index=iteration + 1)
             result['iteration'] = iteration + 1
             report['development'].append(result)
             key = (result['wins'], -result['actions'], -result['decision_ms'])
@@ -281,8 +290,8 @@ def main(argv=None):
     planner.config = PlanConfig(horizon=chosen['horizon'], beam=args.beam)
     report['selected'] = {k: chosen[k] for k in ('iteration', 'policy', 'horizon')}
     final_seeds = episode_seeds('final', args.final_episodes, args.seed_offset)
-    report['final_random'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, 'random')
-    report['final_learned'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, chosen['policy'])
+    report['final_random'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, 'random', split='final')
+    report['final_learned'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, chosen['policy'], split='final')
     report['world_unchanged'] = fingerprint(net) == source
     if not report['world_unchanged'] or any(p.grad is not None for p in net.parameters()):
         raise RuntimeError('Frozen world-model invariant violated')

@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 from fixtures.generate_arc3 import generate  # noqa: E402
 from fixtures.diagnostics_v11 import extend_attempt, invalid_cases, replace  # noqa: E402
+from fixtures.planning_v11 import with_plan, invalid_plans  # noqa: E402
 from arc3.traces import Arc3Error, decode_attempt, encode_attempt  # noqa: E402
 
 OUTPUT = ROOT / "viewer" / ".fixtures"
@@ -335,6 +336,17 @@ timeline["steps"].append({"index": 2, "action": {"id": 1, "data": {}}, "policy_m
 timeline["summary"]["real_actions"] = 3
 (OUTPUT / "v11-module-timeline.arc3").write_bytes(encode_attempt(timeline, format_minor=1))
 
+planned = with_plan(baseline)
+encoded_plan = encode_attempt(planned, format_minor=1)
+add('v11-planning', encoded_plan, True)
+(OUTPUT / 'v11-planning.arc3').write_bytes(encoded_plan)
+for name, path, replacement, error in invalid_plans():
+    invalid = deepcopy(planned)
+    replace(invalid, path, replacement)
+    add(f'planning-{name}', wire(invalid, minor=1), error=error)
+unknown_plan = deepcopy(baseline)
+unknown_plan['steps'][0]['planning'] = None
+add('v10-planning-unknown', encode_attempt(unknown_plan), True)
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)

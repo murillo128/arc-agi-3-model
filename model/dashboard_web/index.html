@@ -14,6 +14,26 @@
     <div class="connection"><span id="connection" role="status">Conectando…</span><small id="freshness">Actualización automática cada 2 s</small></div>
   </header>
   <p id="notice" class="notice" hidden></p>
+  <section aria-labelledby="behavior-title">
+    <div class="toolbar"><div><h2 id="behavior-title">Goal y planner · modelo del mundo congelado</h2><p id="behavior-status" class="muted" role="status">No se ha configurado un log de comportamiento.</p></div>
+      <label>Evaluaciones <select id="behavior-split"><option value="final">Finales</option><option value="development">Desarrollo</option><option value="evaluation_only">Evaluación aislada</option><option value="unspecified">Log anterior · fase no registrada</option></select></label></div>
+    <p id="behavior-info" class="muted"></p>
+    <div class="metrics">
+      <article><h2>Recogida · ronda actual</h2><strong id="behavior-actions">—</strong><small id="behavior-episodes">Acciones reales para aprender los readouts</small></article>
+      <article><h2>Aprendizaje de goal / valor</h2><strong id="behavior-loss">—</strong><small id="behavior-epoch">Pérdida total · no es porcentaje de error</small></article>
+      <article><h2>Éxito · último aprendido</h2><strong id="behavior-win">—</strong><small id="behavior-wins">Esperando evaluación</small></article>
+      <article><h2>Éxito · referencia al azar</h2><strong id="behavior-random">—</strong><small id="behavior-random-wins">Comparar solo con las mismas semillas y presupuesto</small></article>
+      <article><h2>Coste de decidir</h2><strong id="behavior-ms">—</strong><small>ms por acción · última evaluación aprendida</small></article>
+      <article><h2>Velocidad de evaluación</h2><strong id="behavior-tps">—</strong><small>acciones/s · incluye actualizar el estado real</small></article>
+    </div>
+    <div class="charts behavior-charts">
+      <article class="chart-card"><h3>Aprendizaje del goal y valor <span>pérdidas CE / BCE</span></h3><p>Eventos: progreso, continuación y GAME_OVER. V: valor del estado. Q: valor de una acción. Eje X: épocas registradas, acumulando rondas.</p><div id="behavior-loss-chart-legend" class="legend"></div><div class="plot"><canvas id="behavior-loss-chart" role="img" aria-label="Pérdidas del goal, valor y acción"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Éxito en el juego <span>% de partidas con progreso / victoria</span></h3><p>Evaluaciones separadas por fase y política. Eje X: evaluaciones registradas de la fase seleccionada. No mide el error del predictor.</p><div id="behavior-win-chart-legend" class="legend"></div><div class="plot"><canvas id="behavior-win-chart" role="img" aria-label="Victorias del planner y de las acciones aleatorias"></canvas><output class="tooltip" hidden></output></div></article>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>Fase / ronda</th><th>Política</th><th>Victorias</th><th>Éxito · intervalo 95%</th><th>Acciones / victoria</th><th>ms / decisión</th><th>acciones/s</th></tr></thead><tbody id="behavior-table"></tbody></table></div>
+    <p class="muted">El goal es progreso/victoria señalado por el SDK, no una imagen objetivo. Las estimaciones aprendidas aún no están calibradas. Los recuentos de evaluación no se suman al entrenamiento.</p>
+  </section>
+  <div class="toolbar"><h2>Predictor y representación · entrenamiento del mundo</h2></div>
   <section class="metrics" aria-label="Estado del entrenamiento">
     <article><h2>Nivel</h2><strong id="level">—</strong><small id="level-actions">—</small></article>
     <article><h2>Jugadas / acciones</h2><strong id="actions">—</strong><small id="episodes">— partidas iniciadas</small></article>

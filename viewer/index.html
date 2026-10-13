@@ -36,6 +36,17 @@
           <div class="transport"><button id="restart" type="button">↺ Restart</button><button id="previous" type="button">← Previous</button><button id="play" class="primary" type="button" aria-pressed="false">▶ Play episode</button><button id="next" type="button">Next →</button><label for="episode-speed">Playback speed</label><select id="episode-speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select><label for="observation-select">Jump to position</label><input id="observation-select" type="number" min="0" value="0" step="1" /></div>
           <p class="keyboard-hint">← / → previous / next · Space play / pause · Home restart · End last position. Interactive controls keep their own keys.</p>
         </section>
+        <section class="panel" aria-labelledby="planning-title">
+          <div class="panel-heading"><h3 id="planning-title">GOAL &amp; SELECTED PLAN</h3><span>Recorded before the action</span></div>
+          <p id="goal-info" class="panel-hint">Not recorded.</p>
+          <dl id="goal-values" class="goal-values" hidden>
+            <div><dt>Current state V</dt><dd id="goal-value"></dd></div><div><dt>Selected action / plan score</dt><dd id="goal-score"></dd></div>
+            <div><dt>Immediate progress estimate</dt><dd id="goal-progress"></dd></div><div><dt>Immediate GAME_OVER estimate</dt><dd id="goal-failure"></dd></div>
+          </dl>
+          <p id="plan-info"></p><p class="panel-hint">V and scores are discounted success estimates, not calibrated win percentages. Event probabilities are model estimates, not verified outcomes.</p>
+          <ol id="plan-steps" class="plan-steps" aria-label="Selected planned actions"></ol>
+          <p id="plan-outcome" class="boundary-info"></p>
+        </section>
         <section class="panel delta-panel" aria-labelledby="delta-title">
           <div class="panel-heading"><h3 id="delta-title">ACTION DELTAS</h3><span>Compared against the same reference</span></div>
           <div class="delta-grid">

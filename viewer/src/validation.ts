@@ -102,12 +102,40 @@ function representation(value: Input, path: string, cap: number): WireMap {
   for (const key of ['z', 'h']) stateTensor(r[key], `${path}.${key}`, cap);
   return r;
 }
+function planning(value: Input, path: string, executed: WireMap): void {
+  const p = map(value, path, ['objective', 'mode', 'horizon', 'beam', 'discount', 'state_value', 'selected_score', 'steps']);
+  choice(p.objective, `${path}.objective`, ['sdk_level_progress']);
+  choice(p.mode, `${path}.mode`, ['q', 'mpc']);
+  integer(p.horizon, `${path}.horizon`, 1, 64); integer(p.beam, `${path}.beam`, 1);
+  for (const key of ['discount', 'state_value', 'selected_score']) {
+    const v = number(p[key], `${path}.${key}`, 0);
+    if (v > 1 || (key === 'discount' && v === 0)) fail(`${path}.${key}`, 'value outside probability/discount range');
+  }
+  const steps = array(p.steps, `${path}.steps`);
+  if (steps.length !== p.horizon || (p.mode === 'q' && p.horizon !== 1)) fail(`${path}.steps`, 'plan length must equal horizon; Q has one action');
+  steps.forEach((entry, i) => {
+    const dest = `${path}.steps[${i}]`, item = map(entry, dest, ['action', 'continue', 'progress', 'game_over']);
+    action(item.action, `${dest}.action`, [1, 2, 3, 4, 5, 6, 7]);
+    for (const key of ['continue', 'progress', 'game_over', 'successor_value']) if (Object.hasOwn(item, key)) {
+      const v = number(item[key], `${dest}.${key}`);
+      if (v < 0 || v > 1) fail(`${dest}.${key}`, 'probability/value outside [0, 1]');
+    }
+    const sum = ['continue', 'progress', 'game_over'].reduce((s, k) => s + number(item[k], `${dest}.${k}`), 0);
+    if (Math.abs(sum - 1) > 1e-5) fail(dest, 'event probabilities must sum to one');
+    if ((p.mode === 'mpc') !== Object.hasOwn(item, 'successor_value')) fail(dest, 'only MPC records the imagined successor value');
+  });
+  const first = (steps[0] as WireMap).action as WireMap;
+  const a = first.data as WireMap, b = executed.data as WireMap;
+  if (first.id !== executed.id || Object.keys(a).length !== Object.keys(b).length || Object.keys(a).some(k => a[k] !== b[k]))
+    fail(`${path}.steps[0].action`, 'first planned action differs from executed action');
+}
 function extensionDiagnostics(step: WireMap, path: string, cap: number, observations: WireMap[]): void {
   if (Object.hasOwn(step, 'representation')) {
     representation(step.representation, `${path}.representation`, cap);
     if (!(((step.observation as WireMap).frames as WireMap).shape as number[])[0]) fail(`${path}.representation`, 'real representation requires a visual result');
   }
   if (Object.hasOwn(step, 'policy_mode')) choice(step.policy_mode, `${path}.policy_mode`, ['random', 'learned']);
+  if (Object.hasOwn(step, 'planning')) planning(step.planning, `${path}.planning`, step.action as WireMap);
   const p = (step.prediction ?? {}) as WireMap, dest = `${path}.prediction`;
   if (Object.hasOwn(p, 'dynamics')) {
     const d = map(p.dynamics, `${dest}.dynamics`, ['z', 'h', 'delta_z', 'h_next']);

@@ -3,6 +3,7 @@ import { compareVisualDeltas, KEEP } from './visual-deltas';
 import { chartPoints, comparePrediction, diagnosticMetrics, latentStateSummary, moduleSummary, observedAnimationChange, predictedVisualChange, MAX_CHART_STEPS, type Metric } from './diagnostics';
 import { actionName, observationChanges, type Replay } from './replay';
 import type { Attempt } from './types';
+import { planningView } from './planning';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 function numeric(value: number | undefined): string { return value === undefined ? 'Not recorded' : String(value); }
@@ -32,6 +33,9 @@ export class DiagnosticsView {
     }
     element('diagnostic-chart').replaceChildren(); element('chart-values').replaceChildren();
     element('score-rows').replaceChildren(); element('metric-select').replaceChildren();
+    element('plan-steps').replaceChildren();
+    element('goal-values').hidden = true;
+    for (const id of ['goal-info', 'plan-info', 'plan-outcome']) element(id).textContent = 'Not recorded.';
     for (const id of ['prediction-info', 'prediction-values', 'difference-info', 'recorded-errors', 'latent-info',
       'predicted-change-info', 'observed-change-info', 'real-delta-info', 'predicted-delta-info', 'delta-difference-info', 'learning-info', 'module-learning-info', 'policy-mode',
       'chosen-action', 'selected-value', 'score-info', 'uncertainty-info', 'timing-info', 'rationale-info', 'inferred-event', 'chart-info']) element(id).textContent = 'Not recorded.';
@@ -82,6 +86,7 @@ export class DiagnosticsView {
       element(`${id}-info`).textContent = delta.message + (delta.observation && warning ? `\n${warning}` : '');
     }
     if (!positionChanged) return;
+    this.renderPlan(replay);
     element('latent-info').textContent = latentStateSummary(replay.attempt, replay.position, replay.minor);
     element('policy-mode').textContent = `Recorded policy mode: ${replay.minor >= 1 ? step?.policy_mode ?? 'Not recorded' : 'Not recorded'}`;
     const decision = step?.decision;
@@ -111,6 +116,36 @@ export class DiagnosticsView {
     element('rationale-info').textContent = step?.notes?.length ? `Recorded plain-text notes:\n${step.notes.slice(0, 20).map(shortText).join('\n')}${step.notes.length > 20 ? '\n[First 20 notes shown]' : ''}` : 'Recorded plain-text notes: Not recorded.';
     element('inferred-event').textContent = step && replay.preAction ? `Inferred by viewer from public observations: ${observationChanges(replay.preAction, step.observation)}` : 'Inferred by viewer: no recorded transition at this position.';
     this.renderChart();
+  }
+  private renderPlan(replay: Replay): void {
+    const view = planningView(replay.step, replay.preAction, replay.minor);
+    const list = element('plan-steps'); list.replaceChildren();
+    element('goal-values').hidden = !view;
+    if (!view) {
+      for (const id of ['goal-info', 'plan-info', 'plan-outcome']) element(id).textContent = 'Not recorded for this position.';
+      return;
+    }
+    const p = view.plan, percent = (n: number) => `${(n * 100).toFixed(2)}%`;
+    element('goal-info').textContent = 'Goal proxy: SDK level progress / WIN. Learned from real outcomes. No target image or symbolic rule is recorded.';
+    element('goal-value').textContent = p.state_value.toFixed(4);
+    element('goal-score').textContent = p.selected_score.toFixed(4);
+    element('goal-progress').textContent = percent(p.steps[0]!.progress);
+    element('goal-failure').textContent = percent(p.steps[0]!.game_over);
+    element('plan-info').textContent = `${p.mode === 'q' ? 'Direct Q choice · no imagined trajectory' : 'Latent MPC'} · horizon ${p.horizon} · beam ${p.beam} · discount ${p.discount}. Captured before this action. Later steps are conditional predictions; the agent observes and replans after the first action. Future legality is assumed, not observed.`;
+    element('plan-outcome').textContent = `Real result of the first action: ${view.outcome}.`;
+    for (const item of view.steps) {
+      const li = document.createElement('li'), title = document.createElement('h4'), status = document.createElement('p');
+      title.textContent = item.label; status.textContent = item.status; li.append(title, status);
+      for (const [label, probability] of [['Progress', item.progress], ['Continue', item.continue], ['GAME_OVER', item.game_over]] as const) {
+        const row = document.createElement('label'), meter = document.createElement('meter');
+        row.textContent = `${label}: ${percent(probability)}`;
+        meter.min = 0; meter.max = 1; meter.value = probability; meter.setAttribute('aria-label', `${label} estimate`);
+        row.append(meter); li.append(row);
+      }
+      if (item.successor_value !== undefined) { const value = document.createElement('p');
+        value.textContent = `Imagined successor V: ${item.successor_value.toFixed(4)}`; li.append(value); }
+      list.append(li);
+    }
   }
   private renderChart(): void {
     const replay = this.replay;

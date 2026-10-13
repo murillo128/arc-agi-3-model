@@ -154,6 +154,37 @@ def representation(value: object, path: str, cap: int) -> None:
         state_tensor(value[key], path + "." + key, cap)
 
 
+def planning(value: object, path: str, executed: dict) -> None:
+    mapping(value, path, ('objective', 'mode', 'horizon', 'beam', 'discount', 'state_value', 'selected_score', 'steps'))
+    enum(value['objective'], path + '.objective', ('sdk_level_progress',))
+    enum(value['mode'], path + '.mode', ('q', 'mpc'))
+    integer(value['horizon'], path + '.horizon', 1, 64)
+    integer(value['beam'], path + '.beam', 1)
+    for key in ('discount', 'state_value', 'selected_score'):
+        number(value[key], path + '.' + key)
+        if not 0 <= value[key] <= 1 or (key == 'discount' and value[key] == 0):
+            fail(path + '.' + key, 'value outside probability/discount range')
+    array(value['steps'], path + '.steps')
+    if len(value['steps']) != value['horizon'] or (value['mode'] == 'q' and value['horizon'] != 1):
+        fail(path + '.steps', 'plan length must equal horizon; Q has one action')
+    for i, item in enumerate(value['steps']):
+        dest = f'{path}.steps[{i}]'
+        mapping(item, dest, ('action', 'continue', 'progress', 'game_over'))
+        action(item['action'], dest + '.action')  # future legality is not observed
+        for key in ('continue', 'progress', 'game_over', 'successor_value'):
+            if key in item:
+                number(item[key], dest + '.' + key)
+                if not 0 <= item[key] <= 1:
+                    fail(dest + '.' + key, 'probability/value outside [0, 1]')
+        if abs(sum(item[k] for k in ('continue', 'progress', 'game_over')) - 1) > 1e-5:
+            fail(dest, 'event probabilities must sum to one')
+        if (value['mode'] == 'mpc') != ('successor_value' in item):
+            fail(dest, 'only MPC records the imagined successor value')
+    first = value['steps'][0]['action']
+    if first['id'] != executed['id'] or first['data'] != executed['data']:
+        fail(path + '.steps[0].action', 'first planned action differs from executed action')
+
+
 def extension_diagnostics(step: dict, path: str, cap: int, observations: list[dict]) -> None:
     """Known 1.1 fields; minor 0 continues to treat these names as unknown."""
     if "representation" in step:
@@ -162,6 +193,8 @@ def extension_diagnostics(step: dict, path: str, cap: int, observations: list[di
             fail(path + ".representation", "real representation requires a visual result")
     if "policy_mode" in step:
         enum(step["policy_mode"], path + ".policy_mode", ("random", "learned"))
+    if 'planning' in step:
+        planning(step['planning'], path + '.planning', step['action'])
     prediction = step.get("prediction", {})
     dest = path + ".prediction"
     if "dynamics" in prediction:

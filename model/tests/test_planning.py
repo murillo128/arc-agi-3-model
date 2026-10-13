@@ -19,6 +19,8 @@ from model.environment import Factory
 from model.learning import Engine, State
 from model.networks import WorldModel
 from model.planning import GoalValue, PlanConfig, Planner, candidates, fingerprint, freeze, outcome, returns
+from model.behavior_trace import record_episode
+from arc3.traces import encode_attempt, decode_attempt
 
 
 def obs(state='NOT_FINISHED', completed=0):
@@ -127,6 +129,15 @@ class Contracts(unittest.TestCase):
         self.assertEqual(before, fingerprint(net))
         self.assertTrue(all(torch.equal(hbefore[k], v) for k, v in heads.state_dict().items()))
         self.assertTrue(a['results'][0]['truncated'] or a['results'][0]['game_over'] or a['wins'])
+        attempt = record_episode(engine, planner, factory, 2, 91991, 2, 'mpc', before)
+        decoded = decode_attempt(encode_attempt(attempt, format_minor=1))
+        self.assertEqual(decoded['summary']['real_actions'], len(attempt['steps']))
+        for step in decoded['steps']:
+            self.assertEqual(step['planning']['steps'][0]['action'], step['action'])
+            self.assertEqual(step['planning']['horizon'], 1)
+            self.assertNotIn('learning', step)
+        self.assertEqual(before, fingerprint(net))
+        self.assertTrue(all(torch.equal(hbefore[k], v) for k, v in heads.state_dict().items()))
 
     def test_latent_planning_oracle_and_independent_memory(self):
         # Two real choices: action 1 moves latent x left, action 2 right.
@@ -152,6 +163,19 @@ class Contracts(unittest.TestCase):
         planner = Planner(FakeEngine(), Readout(), PlanConfig(horizon=2, beam=2))
         chosen = planner.choose(state, replace(obs(), available_actions=(1, 2)), random.Random(5))
         self.assertEqual(chosen.id, 2)
+        diagnostics = {}
+        traced = planner.choose(state, replace(obs(), available_actions=(1, 2)), random.Random(5), diagnostics=diagnostics)
+        self.assertEqual(traced, chosen)
+        plan = diagnostics['planning']
+        self.assertEqual([s['action']['id'] for s in plan['steps']], [2, 2])
+        self.assertEqual(plan['horizon'], 2)
+        self.assertAlmostEqual(plan['state_value'], .5)
+        self.assertAlmostEqual(plan['steps'][0]['successor_value'], .7310586, places=6)
+        self.assertAlmostEqual(plan['selected_score'], .95 ** 2 * .8807971, places=6)
+        q_trace = {}
+        planner.choose(state, replace(obs(), available_actions=(1, 2)), random.Random(5), 'q', q_trace)
+        self.assertEqual(q_trace['planning']['horizon'], 1)
+        self.assertNotIn('successor_value', q_trace['planning']['steps'][0])
         self.assertEqual(state.z.item(), 0.)
         self.assertEqual(state.h.item(), 0.)
 

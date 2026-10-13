@@ -26,10 +26,16 @@ export interface Prediction {
 export type ModuleName = 'world_model' | 'decoder' | 'actor' | 'critic';
 export interface ModuleLearning { updates?: number; loss?: number; losses?: Record<string, number>; reset_reason?: string }
 export interface Learning { updates?: number; loss?: number; replay_size?: number; modules?: Partial<Record<ModuleName, ModuleLearning>> }
+export interface Planning {
+  objective: 'sdk_level_progress'; mode: 'q' | 'mpc'; horizon: number; beam: number;
+  discount: number; state_value: number; selected_score: number;
+  steps: { action: Action; continue: number; progress: number; game_over: number; successor_value?: number }[];
+}
 export interface Step {
   index: number; action: Action; observation: Observation; decision?: Decision; prediction?: Prediction;
   learning?: Learning; timing?: Record<string, number>; notes?: string[];
   representation?: Representation; policy_mode?: 'random' | 'learned';
+  planning?: Planning;
 }
 export interface Termination {
   reason: 'win' | 'game_over' | 'reset' | 'action_budget' | 'timeout' | 'error' | 'interrupted' | 'training_level_boundary';

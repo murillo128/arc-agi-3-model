@@ -9,7 +9,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from model.dashboard import LogMonitor, MAX_LINE, MAX_READ, make_server
+from model.dashboard import LogMonitor, BehaviorMonitor, MAX_LINE, MAX_READ, make_server
 
 
 class DashboardTests(unittest.TestCase):
@@ -181,7 +181,9 @@ class DashboardTests(unittest.TestCase):
 
     def test_actual_http_assets_metrics_and_fixed_read_only_routes(self):
         self.append({'event': 'progress', 'actions': 256, 'updates': 28})
-        server = make_server(('127.0.0.1', 0), self.monitor)
+        behavior_path = self.path.with_name('behavior.log')
+        behavior_path.write_text('{"event":"behavior_collection","actions":7,"episodes":2}\n')
+        server = make_server(('127.0.0.1', 0), self.monitor, BehaviorMonitor(behavior_path))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
@@ -196,7 +198,9 @@ class DashboardTests(unittest.TestCase):
                 body = response.read()
                 self.assertTrue(body)
                 if route == '/api/state':
-                    self.assertEqual(json.loads(body)['progress']['actions'], 256)
+                    data = json.loads(body)
+                    self.assertEqual(data['progress']['actions'], 256)
+                    self.assertEqual(data['behavior']['progress']['collection']['actions'], 7)
         self.append({'event': 'progress', 'actions': 288})
         with urlopen(base + '/api/state') as response:
             self.assertEqual(json.load(response)['progress']['actions'], 288)
@@ -204,6 +208,39 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + route)
             self.assertEqual(error.exception.code, 404)
+
+    def test_behavior_logs_isolate_splits_rounds_missing_values_and_restarts(self):
+        monitor = BehaviorMonitor(self.path, max_points=3)
+        self.append({'event': 'behavior_started', 'world_trainable': 0, 'level': 2},
+                    {'event': 'behavior_collection', 'round': 1, 'actions': 20, 'episodes': 3},
+                    {'event': 'behavior_fit', 'round': 1, 'epoch': 1, 'loss': 2., 'event_ce': .8, 'value_bce': .6, 'q_bce': .6},
+                    {'event': 'behavior_evaluation', 'split': 'development', 'policy': 'random', 'episodes': 10, 'wins': 2, 'actions': 90},
+                    {'event': 'behavior_evaluation', 'split': 'final', 'policy': 'mpc', 'episodes': 20, 'wins': 7, 'wilson95': [.18, .57]},
+                    {'event': 'behavior_finished', 'world_unchanged': True})
+        data = monitor.snapshot()
+        self.assertEqual(data['progress']['collection']['actions'], 20)
+        self.assertEqual([r['split'] for r in data['evaluations']], ['development', 'final'])
+        self.assertEqual(data['evaluations'][1]['wilson95'], [.18, .57])
+        self.assertNotIn('decision_ms', data['evaluations'][1])
+        self.assertEqual(data['phase'], 'behavior_finished')
+        self.assertTrue(data['run']['world_unchanged'])
+        self.append({'event': 'behavior_started', 'world_trainable': 0},
+                    {'event': 'behavior_fit', 'epoch': 1, 'loss': 0.},
+                    {'event': 'behavior_evaluation', 'wins': 0, 'episodes': 2})
+        data = monitor.snapshot()
+        self.assertNotIn('collection', data['progress'])
+        self.assertEqual(data['fits'][0]['loss'], 0.)
+        self.assertNotIn('event_ce', data['fits'][0])
+        self.assertEqual(data['evaluations'][0]['split'], 'unspecified')
+        for i in range(6):
+            self.append({'event': 'behavior_fit', 'epoch': i + 2, 'loss': 1.})
+        self.assertEqual([r['epoch'] for r in monitor.snapshot()['fits']], [5, 6, 7])
+        # Replacement without a start event also establishes a new lifetime.
+        self.path.write_text('{"event":"behavior_collection","actions":1}\n')
+        data = monitor.snapshot()
+        self.assertEqual(data['fits'], [])
+        self.assertEqual(data['evaluations'], [])
+        self.assertEqual(data['progress']['collection']['actions'], 1)
 
 
 if __name__ == '__main__':

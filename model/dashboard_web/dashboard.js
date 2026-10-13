@@ -30,7 +30,8 @@ class Chart {
     this.canvas.addEventListener('pointermove', event => this.hover(event));
     this.canvas.addEventListener('pointerleave', () => { this.tip.hidden = true; });
   }
-  set(series, threshold, suffix = '') {
+  set(series, threshold, suffix = '', axis = 'acción') {
+    this.axis = axis;
     this.series = series;
     this.threshold = threshold;
     this.suffix = suffix;
@@ -53,6 +54,7 @@ class Chart {
     const ctx = this.canvas.getContext('2d'); ctx.scale(dpr, dpr);
     const points = this.series.flatMap(s => s.points).filter(p => finite(p.x) && finite(p.y));
     if (!points.length) {
+      this.bounds = null;
       ctx.fillStyle = '#8da39a'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
       ctx.fillText('Esperando suficientes datos de esta serie…', width / 2, height / 2); return;
     }
@@ -99,7 +101,7 @@ class Chart {
     const lines = this.series.map(s => {
       const valid = s.points.filter(p => finite(p.x) && finite(p.y));
       const p = valid.reduce((best, point) => !best || Math.abs(point.x - desired) < Math.abs(best.x - desired) ? point : best, null);
-      return p ? `${s.name}: ${scalar(p.y)}${this.suffix} · acción ${fmt(p.x)}` : `${s.name}: sin datos`;
+      return p ? `${s.name}: ${scalar(p.y)}${this.suffix} · ${this.axis} ${fmt(p.x)}` : `${s.name}: sin datos`;
     });
     this.tip.textContent = lines.join('\n'); this.tip.hidden = false;
   }
@@ -107,6 +109,7 @@ class Chart {
 const charts = Object.fromEntries(['delta', 'changes', 'loss', 'speed', 'spread', 'latent', 'total'].map(id => [id, new Chart(id)]));
 
 function render(data) {
+  renderBehavior(data.behavior);
   const p = data.progress, run = data.run, config = run.training || {};
   const clean = run.statistics_origin === 'after_first_action';
   $('statistics-origin').textContent = clean
@@ -213,6 +216,62 @@ function drawCharts(currentLevel) {
   charts.latent.set([series('MSE del delta', validation, r => r.latent_delta_mse)], config.latent_delta_mse);
   charts.total.set([series('Pérdida total', progress, r => r.loss?.loss)]);
 }
+const behaviorCharts = {loss: new Chart('behavior-loss-chart'), wins: new Chart('behavior-win-chart')};
+const splitNames = {final: 'Final', development: 'Desarrollo', evaluation_only: 'Aislada', unspecified: 'No registrada'};
+const behaviorPhases = {behavior_started: 'Preparando', behavior_collection: 'Recogiendo experiencia real',
+  behavior_fit: 'Entrenando goal / valor', behavior_evaluation_progress: 'Evaluando',
+  behavior_evaluation: 'Evaluación recibida', behavior_finished: 'Experimento terminado', waiting: 'Esperando datos'};
+function policyName(row) { return row.policy === 'random' ? 'Azar' : row.policy === 'q' ? 'Q' : `MPC · ${fmt(row.horizon)} pasos`; }
+let behaviorFilterManual = false;
+function renderBehavior(b) {
+  if (!behaviorFilterManual && b?.evaluations.length) $('behavior-split').value = b.evaluations.at(-1).split;
+  const split = $('behavior-split').value;
+  const rows = (b?.evaluations || []).filter(r => r.split === split);
+  const learned = rows.findLast(r => r.policy !== 'random'), baseline = rows.findLast(r => r.policy === 'random');
+  const collection = b?.progress.collection, fit = b?.progress.fit;
+  const evaluation = b?.progress.evaluation;
+  const complete = b?.phase === 'behavior_finished';
+  const stale = b?.source.age_seconds > 60;
+  $('behavior-status').textContent = !b ? 'No se ha configurado un log de comportamiento.' : !b.source.available
+    ? 'Log de comportamiento no disponible; se reintentará.' : complete ? 'Experimento terminado'
+    : stale ? 'Sin datos recientes; el log no confirma que siga activo.' : behaviorPhases[b.phase] || 'Recibiendo métricas';
+  $('behavior-info').textContent = b ? [b.run.game, finite(b.run.level) ? `Nivel ${b.run.level}` : null,
+    b.run.device?.toUpperCase(), b.run.world_trainable === 0 ? 'Encoder, predictor y decoder congelados' : null,
+    b.run.world_unchanged === true ? 'Pesos del mundo verificados sin cambios' : null,
+    b.run.world_unchanged === false ? 'FALLO: cambiaron los pesos del mundo' : null,
+    b.source.available ? `Log actualizado hace ${fmt(b.source.age_seconds)} s` : null,
+    b.phase === 'behavior_evaluation_progress' ? `${splitNames[evaluation?.split] || 'Fase no registrada'} · ${policyName(evaluation || {})} · ${fmt(evaluation?.wins)}/${fmt(evaluation?.episodes)} victorias` : null,
+    b.source.tail_limited ? 'Solo tramo reciente del log' : null].filter(Boolean).join(' · ') : '';
+  $('behavior-actions').textContent = fmt(collection?.actions);
+  $('behavior-episodes').textContent = `Ronda ${fmt(collection?.round)} · ${fmt(collection?.episodes)} partidas · ${fmt(collection?.wins)} victorias · ${fmt(collection?.records)} transiciones en memoria`;
+  $('behavior-loss').textContent = scalar(fit?.loss);
+  $('behavior-epoch').textContent = `Ronda ${fmt(fit?.round)} · época ${fmt(fit?.epoch)}/${fmt(fit?.epochs)} · ${fmt(fit?.updates)} actualizaciones de la ronda`;
+  $('behavior-win').textContent = pct(learned?.win_rate);
+  $('behavior-wins').textContent = learned ? `${policyName(learned)} · ${fmt(learned.wins)}/${fmt(learned.episodes)} · ${splitNames[split]}` : 'Sin evaluación aprendida en esta fase';
+  $('behavior-random').textContent = pct(baseline?.win_rate);
+  $('behavior-random-wins').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitNames[split]}` : 'Sin evaluación al azar en esta fase';
+  $('behavior-ms').textContent = fmt(learned?.decision_ms, 2);
+  $('behavior-tps').textContent = fmt(learned?.actions_per_second, 2);
+  const fits = b?.fits || [];
+  behaviorCharts.loss.set([['Total', 'loss'], ['Eventos', 'event_ce'], ['Valor V', 'value_bce'], ['Acción Q', 'q_bce']].map(([name, key]) =>
+    ({name, points: fits.map((r, i) => ({x: i + 1, y: r[key]}))})), undefined, '', 'época registrada');
+  behaviorCharts.wins.set([...new Set(rows.map(policyName))].slice(0, 4).map(name =>
+    ({name, points: rows.flatMap((r, i) => policyName(r) === name ? [{x: i + 1, y: percentValue(r.win_rate)}] : [])})), undefined, ' %', 'evaluación');
+  const body = $('behavior-table'); body.replaceChildren();
+  for (const r of rows.slice(-100)) {
+    const tr = document.createElement('tr');
+    for (const value of [`${splitNames[r.split] || 'No registrada'} / ${fmt(r.round)}`, policyName(r),
+      `${fmt(r.wins)}/${fmt(r.episodes)}`, `${pct(r.win_rate)} · ${r.wilson95?.map(pct).join('–') || '—'}`,
+      fmt(r.actions_per_success, 1), fmt(r.decision_ms, 2), fmt(r.actions_per_second, 2)]) {
+      const td = document.createElement('td'); td.textContent = value; tr.append(td);
+    }
+    body.append(tr);
+  }
+  if (!rows.length) { const tr = document.createElement('tr'), td = document.createElement('td');
+    td.colSpan = 7; td.textContent = 'Sin evaluaciones en esta fase. Los logs antiguos se muestran en «fase no registrada».'; tr.append(td); body.append(tr); }
+}
+$('behavior-split').addEventListener('change', () => { behaviorFilterManual = true; renderBehavior(state?.behavior); });
+
 for (const id of ['window', 'validation-level']) $(id).addEventListener('change', () => { chartRevision = ''; if (state) render(state); });
 
 async function poll() {

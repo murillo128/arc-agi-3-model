@@ -85,7 +85,8 @@ configuración. El replay de latentes reales es FIFO en RAM, máximo 8192
 transiciones por defecto (aproximadamente 4 GiB para este modelo), y desaparece
 al salir. La memoria recurrente `h` se reinicia por partida. Se imprimen eventos
 JSON de recogida, ajuste y evaluación. No escribe al dashboard del trainer del
-mundo ni arranca automáticamente el currículo anterior.
+mundo ni arranca automáticamente el currículo anterior. El dashboard puede leer
+su log independiente mediante `--behavior-log`, como se describe abajo.
 
 Para evaluar esos readouts sin entrenamiento adicional:
 
@@ -624,6 +625,51 @@ el límite/interrupción correspondiente. Una varianza alta por sí sola no
 garantiza representaciones útiles: también deben bajar los errores visuales.
 
 ## Panel web en directo
+
+Para mostrar también goal y planner, pasa ambos logs independientes:
+
+```sh
+.venv/bin/python -m model.dashboard --log model/runs/current.log \
+  --behavior-log model/runs/goal-planner/current.log
+```
+
+La sección de comportamiento muestra recogida de acciones/partidas por ronda,
+época y actualizaciones, pérdidas de eventos (CE), V y Q (BCE), victorias frente
+al azar, intervalo de Wilson, acciones por victoria, ms de decisión y acciones/s.
+Las pérdidas no son porcentajes de error. Se filtran desarrollo, evaluación final
+y evaluación aislada; sus acciones nunca se suman al contador del mundo ni a la
+recogida. Los nuevos eventos incluyen ronda y fase, y se actualizan al completar
+cada bloque de 16 partidas o cada época. El estado terminado sigue siendo
+terminado aunque el log envejezca. Cada log reinicia su ventana por separado.
+
+Logs previos al desglose conservan solo sus métricas registradas: sin inventar
+componentes de pérdida ni fase de evaluación. Se muestran bajo «fase no
+registrada». El panel no reanuda procesos ni crea un historial adicional.
+
+### Exportar el goal y el plan al viewer
+
+```sh
+.venv/bin/python -m model.behavior_trace \
+  --checkpoint model/runs/active-training/latest.pt \
+  --heads model/runs/goal-planner/more-experience/heads.pt \
+  --seed 9200517 --level 2 \
+  --output model/runs/goal-planner/new-plan.arc3
+```
+
+Ejecuta una partida de inspección con pesos congelados, sin aprendizaje, y exige
+una ruta nueva. El archivo 1.1 conserva observaciones, acciones y el delta visual
+predicho; añade `planning` con la rama elegida **antes** de ejecutar. El viewer
+muestra V, score, probabilidades de progreso/GAME_OVER y cada acción del plan.
+Solo se ejecuta la primera, después se observa y replantea. No se inventa una
+imagen objetivo. `Q` muestra una sola elección sin trayectoria imaginada; el
+horizonte MPC se lee del checkpoint de comportamiento. `--device cpu` permite
+inspección sin CUDA. La CLI sigue limitada a los dos juegos sintéticos admitidos.
+
+El primer sample de esta extensión, seed 9200517, tuvo 24 acciones y GAME_OVER
+con el MPC de horizonte 1 guardado; se verificaron intactos pesos del mundo y
+del evaluador. Es una muestra de inspección, no una evaluación de rendimiento.
+
+### Métricas del mundo
 
 El panel lee los eventos JSON del log existente, sin cargar el modelo, usar GPU,
 interrumpir el entrenamiento ni guardar otra copia del historial:

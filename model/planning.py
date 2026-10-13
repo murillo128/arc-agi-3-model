@@ -115,11 +115,13 @@ class Planner:
         return tuple((side + p - 1) // p for side in geometry)
 
     @torch.no_grad()
-    def choose(self, state, observation, rng, mode='mpc'):
+    def choose(self, state, observation, rng, mode='mpc', diagnostics=None):
         if state.z is None or state.geometry is None:
             raise ValueError('Planning requires a confirmed visual state')
         if mode not in {'q', 'mpc'}:
             raise ValueError('Unknown learned policy')
+        if diagnostics is not None and self.config.horizon > 64:
+            raise ValueError('Recorded plans support at most 64 steps')
         choices = candidates(observation, rng, self.config.clicks)
         action = self.engine.actions(choices)
         count = len(choices)
@@ -128,16 +130,27 @@ class Planner:
         survival = torch.ones_like(score)
         first = torch.zeros(1, dtype=torch.long, device=z.device)
         best = None
+        paths, estimates = None, None
         with self.engine.autocast():
             for depth in range(1 if mode == 'q' else self.config.horizon):
                 branches = z.shape[0]
                 z = z.repeat_interleave(count, 0)
                 h = h.repeat_interleave(count, 0)
                 actions = action.repeat(branches, 1)
-                _, outputs = self.readout(z, h, actions, *self.shape(state.geometry))
+                current_value, outputs = self.readout(z, h, actions, *self.shape(state.geometry))
+                probabilities = outputs[:, :3].float().softmax(-1) if mode != 'q' or diagnostics is not None else None
+                if diagnostics is not None:
+                    ids = torch.arange(count, device=z.device).repeat(branches)[:, None]
+                    paths = ids if depth == 0 else torch.cat((paths.repeat_interleave(count, 0), ids), 1)
+                    if depth == 0:
+                        initial_value = float(current_value[0].float().sigmoid())
                 if mode == 'q':
-                    return choices[int(outputs[:, 3].argmax())]
-                probabilities = outputs[:, :3].float().softmax(-1)
+                    index = int(outputs[:, 3].argmax())
+                    if diagnostics is not None:
+                        ranked = outputs[:, 3].float().sigmoid()
+                        self._diagnostics(diagnostics, choices, mode, initial_value, ranked, index,
+                                          paths, probabilities[:, None, :], None, torch.arange(count))
+                    return choices[index]
                 score = score.repeat_interleave(count) + survival.repeat_interleave(count) * probabilities[:, 1]
                 survival = survival.repeat_interleave(count) * self.config.discount * probabilities[:, 0]
                 first = (torch.arange(count, device=z.device) if depth == 0 else first.repeat_interleave(count))
@@ -145,16 +158,46 @@ class Planner:
                 zeros = torch.zeros((len(z), 12), device=z.device)
                 value, _ = self.readout(z, h, zeros, *self.shape(state.geometry))
                 ranked = score + survival * value.float().sigmoid()
-                best = choices[int(first[ranked.argmax()])]
+                index = int(ranked.argmax())
+                best = choices[int(first[index])]
+                if diagnostics is not None:
+                    step_values = torch.cat((probabilities, value.float().sigmoid()[:, None]), -1)[:, None, :]
+                    estimates = step_values if depth == 0 else torch.cat((estimates.repeat_interleave(count, 0), step_values), 1)
+                    if depth == self.config.horizon - 1:
+                        self._diagnostics(diagnostics, choices, mode, initial_value, ranked, index,
+                                          paths, estimates[:, :, :3], estimates[:, :, 3], first)
                 keep = ranked.topk(min(self.config.beam, len(ranked))).indices
                 z, h, score, survival, first = z[keep], h[keep], score[keep], survival[keep], first[keep]
+                if diagnostics is not None:
+                    paths, estimates = paths[keep], estimates[keep]
         return best
 
+    def _diagnostics(self, dest, choices, mode, initial_value, ranked, index, paths, probabilities, values, first):
+        """Snapshot the chosen branch from this search, before executing anything."""
+        def wire(action):
+            return {'id': action.id, 'data': dict(action.data)}
+        steps = []
+        for depth, choice in enumerate(paths[index].tolist()):
+            p = probabilities[index, depth].tolist()
+            step = {'action': wire(choices[choice]), 'continue': p[0], 'progress': p[1], 'game_over': p[2]}
+            if values is not None:
+                step['successor_value'] = float(values[index, depth])
+            steps.append(step)
+        scores = {}
+        for root, score in zip(first.tolist(), ranked.tolist()):
+            scores[root] = max(scores.get(root, -float('inf')), score)
+        dest.update(planning={'objective': 'sdk_level_progress', 'mode': mode,
+                              'horizon': len(steps), 'beam': self.config.beam, 'discount': self.config.discount,
+                              'state_value': initial_value, 'selected_score': float(ranked[index]), 'steps': steps},
+                    decision={'score_type': 'value', 'selected_value': float(ranked[index]),
+                              'candidates': [{'action': wire(choices[i]), 'score': s} for i, s in scores.items()]})
 
-def head_loss(heads, z, h, actions, events, targets, rows, columns):
+
+def head_loss(heads, z, h, actions, events, targets, rows, columns, *, components=False):
     value, output = heads(z, h, actions, rows, columns)
     # Unweighted event likelihood preserves its probability interpretation.
     event = F.cross_entropy(output[:, :3].float(), events)
     critic = F.binary_cross_entropy_with_logits(value.float(), targets)
     q = F.binary_cross_entropy_with_logits(output[:, 3].float(), targets)
-    return event + critic + q
+    total = event + critic + q
+    return (total, torch.stack((event.detach(), critic.detach(), q.detach()))) if components else total

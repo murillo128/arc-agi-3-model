@@ -175,6 +175,8 @@ const metrics: Metric[] = [
 export function diagnosticMetrics(attempt: Attempt, minor = 0): Metric[] {
   const available = [...metrics];
   if (minor >= 1) {
+    for (const key of ['state_value', 'selected_score'] as const) available.push({ key: `planning.${key}`, label: `Planner ${key} (discounted value)`, read: step => step.planning?.[key] });
+    for (const key of ['progress', 'game_over'] as const) available.push({ key: `planning.${key}`, label: `Goal ${key} (estimated probability)`, read: step => step.planning?.steps[0]?.[key] });
     for (const key of ['latent_mse', 'no_change_mse'] as const) available.push({ key: `prediction.${key}`, label: `Prediction ${key} (squared latent units)`, read: step => step.prediction?.errors?.[key] });
     for (const name of MODULE_NAMES) {
       for (const key of ['loss', 'updates'] as const) available.push({ key: `modules.${name}.${key}`, label: `${name} ${key} (reported per step)`, read: step => step.learning?.modules?.[name]?.[key] });
