@@ -7,6 +7,17 @@ from arcengine import GameAction
 
 from .data import Observation
 
+SYNTHETIC_LEVELS = {'sc01-v1': 5, 'si01-v1': 5}
+
+
+def training_boundary(factory, observation):
+    """Keep the public final level out of local development learning."""
+    if not getattr(factory, 'reserve_final_level', False):
+        return False
+    if observation.win_levels < 2:
+        raise ValueError('SDK training needs at least two known public levels')
+    return observation.levels_completed >= observation.win_levels - 1
+
 
 class Environment:
     def __init__(self, wrapper):
@@ -20,16 +31,19 @@ class Environment:
 
 
 class Factory:
-    def __init__(self, game_id, environments_dir, mode='offline'):
+    def __init__(self, game_id, environments_dir, mode='offline', *, reserve_final_level=False):
         self.game_id = game_id
         self.environments_dir = Path(environments_dir).resolve()
         self.arcade = open_arcade(mode, str(self.environments_dir))
+        self.reserve_final_level = reserve_final_level
 
     def make(self, seed, level=None):
         wrapper = self.arcade.make(self.game_id, seed=seed, save_recording=False)
         if wrapper is None:
             raise RuntimeError(f'SDK could not load {self.game_id}')
         if level is not None:
+            if self.reserve_final_level:
+                raise ValueError('Public SDK training uses native levels only')
             self._isolate_synthetic_level(wrapper, level)
         return Environment(wrapper)
 
@@ -38,7 +52,7 @@ class Factory:
         # pinned capability is restricted to this repository's synthetic games.
         from arc_agi.local_wrapper import LocalEnvironmentWrapper
 
-        counts = {'sc01-v1': 5, 'si01-v1': 3}
+        counts = SYNTHETIC_LEVELS
         root = Path(__file__).resolve().parents[1] / 'games'
         if (self.environments_dir != root or self.game_id not in counts or
                 not isinstance(wrapper, LocalEnvironmentWrapper) or version('arcengine') != '0.9.3'):

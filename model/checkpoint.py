@@ -7,8 +7,6 @@ import torch
 
 
 def save(path, learner, progress, run, rng):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {'network': asdict(learner.model.config), 'training': asdict(learner.engine.config),
                'runtime': {'fp8': bool(learner.engine.fp8_layers), 'optimizer_bits': learner.engine.optimizer_bits},
                'weights': learner.model.state_dict(),
@@ -16,6 +14,13 @@ def save(path, learner, progress, run, rng):
                'progress': dict(progress), 'run': dict(run), 'rng': rng.getstate(),
                'python_rng': random.getstate(), 'torch_rng': torch.get_rng_state(),
                'cuda_rng': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []}
+    write(path, payload)
+
+
+def write(path, payload):
+    """Also used for atomic curriculum transfer without touching learned tensors."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
     try:
         with temporary.open('wb') as stream:
