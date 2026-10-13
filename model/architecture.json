@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision": "latent-residual-sdk-implementation",
+  "architecture_revision": "spatial-latent-joint-delta-learning",
   "name": "ARC3 agent architecture",
   "scope": "high_level_world_model_and_behavior_components",
   "coverage": "partial",
@@ -27,7 +27,7 @@
     },
     {
       "name": "T",
-      "meaning": "Tokens of a single attention call; spatial patches or three predictor conditioning tokens."
+      "meaning": "Attention token count: P encoder patches, or P+2 predictor tokens (patches plus global memory and action)."
     },
     {
       "name": "P",
@@ -60,6 +60,10 @@
     {
       "name": "W_pad",
       "meaning": "Decoder padded width 4*ceil(W/4); crop to native W."
+    },
+    {
+      "name": "Q",
+      "meaning": "Uniformly sampled matching patch positions for SIGReg: min(P,16). Statistics still average over M real observations."
     }
   ],
   "nodes": [
@@ -189,7 +193,7 @@
           "direction": "input",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -203,7 +207,7 @@
           "direction": "output",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -224,7 +228,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_batch",
@@ -259,7 +263,7 @@
           "label": "real_predicted_state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "predicted_batch",
@@ -274,6 +278,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "PredictedActionMask {probabilities: float32[8], threshold: 0.5}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
@@ -322,7 +333,7 @@
           "direction": "output",
           "label": "state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_batch",
@@ -525,7 +536,7 @@
           "direction": "output",
           "label": "embedding",
           "shape": null,
-          "value_type": "ObservationEmbedding {z: float32[1024], visual_valid, observation_id}"
+          "value_type": "ObservationEmbedding {z: float32[P,1024], visual_valid, observation_id}"
         },
         {
           "id": "real_batch",
@@ -579,10 +590,10 @@
         },
         {
           "name": "parameter_count",
-          "value": 91521792
+          "value": 91525376
         }
       ],
-      "description": "Implemented VisualEncoder in model/networks.py: shared live/replay weights, 12 spatial Transformer blocks at width 768 and 12 heads, ordered within-response animation aggregation with hidden size 1024, linear z[1024]. Categorical frame/delta features, positional encodings, recurrent cell and patch masking are ARC-specific adaptations of the prior JEPA blueprint. 91521792 parameters. Training uses full observed prefixes, frame microbatches and activation checkpointing. No future frames enter a live call. No checkpoint is bound in this architecture file.",
+      "description": "Shared spatial encoder: each patch concatenates all 16 pixel feature vectors (35 channels per pixel), projects 560 to 768, adds positions and applies 12 Transformer blocks. Retain every patch, apply LayerNorm, scan animation frames with a shared per-patch recurrent cell, project to 1024 and LayerNorm. Result z[P,1024], P=ceil(H/4)*ceil(W/4). Both live and replay paths share weights; no spatial pooling.",
       "parent_id": "world.representation",
       "children": [
         "world.encoder.live",
@@ -606,7 +617,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -620,7 +631,7 @@
           "direction": "input",
           "label": "real_predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "experience",
@@ -649,6 +660,13 @@
           "direction": "input",
           "shape": null,
           "value_type": "PredictedStateBatch {states, transition_ids, mask}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
@@ -700,7 +718,7 @@
           "direction": "input",
           "label": "embedding",
           "shape": null,
-          "value_type": "ObservationEmbedding {z: float32[1024], visual_valid, observation_id}"
+          "value_type": "ObservationEmbedding {z: float32[P,1024], visual_valid, observation_id}"
         },
         {
           "id": "observation",
@@ -714,7 +732,7 @@
           "direction": "output",
           "label": "state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_batch",
@@ -758,7 +776,7 @@
           "direction": "input",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -772,7 +790,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -786,7 +804,7 @@
           "direction": "output",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -800,7 +818,7 @@
           "direction": "output",
           "label": "real_predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "training_batch",
@@ -852,7 +870,7 @@
           "direction": "input",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -866,7 +884,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -880,14 +898,14 @@
           "direction": "output",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_predicted_state",
           "direction": "output",
           "label": "real_predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "training_batch",
@@ -920,7 +938,7 @@
           "value": 128
         }
       ],
-      "description": "Continuous residual simulator with z[1024], h[2048] and a 128-feature action embedding. Advance recurrent memory, run the six-block width-768 delta predictor, then sum d_hat[1024] with the original z. Real/query/replay/observed-memory calls share their corresponding logical parameters; no pixels or categorical RSSM state is introduced. Sizes are chosen for capacity without a local-GPU budget, not taken as a performance guarantee.",
+      "description": "Continuous residual simulator with z[P,1024], h[2048] and a 128-feature action embedding. Advance recurrent memory, run the six-block width-768 delta predictor, then sum d_hat[P,1024] with the original z. Real/query/replay/observed-memory calls share their corresponding logical parameters; no pixels or categorical RSSM state is introduced. Sizes are chosen for capacity without a local-GPU budget, not taken as a performance guarantee.",
       "parent_id": "world.dynamics",
       "operation": "latent_dynamics_prediction",
       "children": [
@@ -940,7 +958,7 @@
           "direction": "input",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -954,7 +972,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -968,14 +986,14 @@
           "label": "query_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "real_context",
           "label": "real_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "training_batch",
@@ -1030,14 +1048,14 @@
           "label": "query_context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "real_context",
           "label": "real_context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "query_delta",
@@ -1100,7 +1118,7 @@
           "value": 45778432
         }
       ],
-      "description": "Six-block, width-768, 12-head Transformer over state/memory/action tokens, then LayerNorm and linear 768 -> 1024 latent-delta readout. The shared calls for real prediction, query and training all emit d_hat[1024]. Residual Add still computes z_hat=z+d_hat in the unnormalized continuous latent space. Depth/width are our capacity target, not a claim to reproduce V-JEPA2-AC or to be empirically optimal.",
+      "description": "Six-block, width-768, 12-head Transformer over state/memory/action tokens, then LayerNorm and linear 768 -> 1024 latent-delta readout. The shared calls for real prediction, query and training all emit d_hat[P,1024]. Residual Add still computes z_hat=z+d_hat in the unnormalized continuous latent space. Depth/width are our capacity target, not a claim to reproduce V-JEPA2-AC or to be empirically optimal.",
       "children": [
         "predictor.latent.query",
         "predictor.latent.real",
@@ -1118,7 +1136,7 @@
           "label": "query_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_delta",
@@ -1132,14 +1150,14 @@
           "label": "query_context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "real_state",
           "label": "real_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_delta",
@@ -1153,21 +1171,21 @@
           "label": "real_context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "predicted_state",
           "direction": "output",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_predicted_state",
           "direction": "output",
           "label": "real_predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "training_batch",
@@ -1203,7 +1221,7 @@
       "attributes": [],
       "operation": "latent_residual_add",
       "formula": "predicted_state.z = query_state.z + query_delta; predicted_state.h = query_context.h; real_predicted_state.z = real_state.z + real_delta; real_predicted_state.h = real_context.h; predicted_batch.states.z = training_batch.states.z + training_delta.d_hat; predicted_batch.states.h = training_context.contexts.h",
-      "description": "For each independent real, query or training call, sum the original z[1024] and continuous d_hat[1024] elementwise. Return advanced h[2048] from the matching recurrent context and unchanged episode identity. NO LayerNorm, sigmoid, clipping, projection or visual decoder after the sum. A zero delta exactly preserves z. The encoded real successor is used only in the training objective, never in this inference sum."
+      "description": "For each independent real, query or training call, sum the original z[P,1024] and continuous d_hat[P,1024] elementwise. Return advanced h[2048] from the matching recurrent context and unchanged episode identity. NO LayerNorm, sigmoid, clipping, projection or visual decoder after the sum. A zero delta exactly preserves z. The encoded real successor is used only in the training objective, never in this inference sum."
     },
     {
       "id": "world.decoder",
@@ -1215,7 +1233,7 @@
           "label": "real_predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "observation",
@@ -1244,6 +1262,20 @@
           "direction": "input",
           "shape": null,
           "value_type": "PredictedStateBatch {states, transition_ids, mask}"
+        },
+        {
+          "id": "encoded_batch",
+          "label": "encoded_batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "EncodedSequenceBatch {z, sequence_index, observation_mask, transition_mask}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
@@ -1290,7 +1322,7 @@
           "value": 57688576
         }
       ],
-      "description": "Implemented VisualDecoder in model/networks.py and independent optimizer in model/learning.py. 8 Transformer blocks, width768, 12 heads, 57688576 parameters. Receive detached z_hat; broadcast its projection over deterministic spatial positions; predict 16 color logits per native pixel. Decode only for validation/inspection and its own training objective, never inside latent dynamics. Compare the decoded board with the immutable pre-action reference to obtain categorical delta KEEP16/new color0..15. Reference pixels never enter the neural readout; only its geometry is required. No environment-action input and no gradient into the encoder/predictor.",
+      "description": "Shared visual readout from z[P,1024] to 16 per-pixel color logits, with exact native geometry and canonical KEEP/replacement deltas. Used both for predicted successors and real-successor reconstruction. Joint real-data training teaches encoder and predictor as well as decoder; this readout is outside latent imagination.",
       "parent_id": "agent",
       "children": [
         "world.decoder.learning",
@@ -1323,7 +1355,7 @@
           "direction": "input",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -1376,7 +1408,7 @@
           "label": "predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "predicted_valid_actions",
@@ -1429,7 +1461,7 @@
           "direction": "input",
           "label": "real_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -1443,7 +1475,7 @@
           "direction": "input",
           "label": "real_predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "experience",
@@ -1509,12 +1541,19 @@
           "direction": "input",
           "shape": null,
           "value_type": "PredictedStateBatch {states, transition_ids, mask}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Own the primary shared parameter set and optimizer. Differentiate real predicted successors versus real encoded successors plus SIGReg; apply one update after all forwards and monitoring finish. Phase-one trainables: shared visual encoder (including animation aggregator), shared recurrent dynamics, residual Transformer. The decoder has a separate active real-data optimizer with detached latent inputs. Continuation/action-mask heads and actor/critic retain their future optimizers.",
+      "description": "Own encoder/dynamics parameters and AdamW. Receive visual VJPs from the decoder and combine them with latent residual and diversity losses. All forwards and gradients use the same pre-update weights. Check and clip primary and decoder gradients separately before stepping their disjoint optimizers.",
       "parent_id": "world.learner",
       "children": [
         "world.model_state.objective",
@@ -1533,7 +1572,7 @@
           "direction": "input",
           "label": "state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -1559,7 +1598,7 @@
           "direction": "input",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -1580,7 +1619,7 @@
           "direction": "output",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -1627,7 +1666,7 @@
           "direction": "input",
           "label": "state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -1713,7 +1752,7 @@
           "direction": "input",
           "label": "state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -1739,7 +1778,7 @@
           "direction": "input",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -1774,7 +1813,7 @@
           "direction": "output",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -1864,7 +1903,7 @@
           "direction": "input",
           "label": "query_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -1878,7 +1917,7 @@
           "direction": "input",
           "label": "predicted_state",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "goal",
@@ -2029,13 +2068,20 @@
           "label": "regularization",
           "direction": "input",
           "shape": null,
-          "value_type": "RepresentationPenalty {sigreg: float32}"
+          "value_type": "RepresentationPenalty {sigreg: float32, variance_floor: float32}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Temporal latent regression with SIGReg. L=0.98*MSE+0.02*SIGReg. Both observed encoder branches differentiate; imagined trajectories never supervise the model. Only visual encoder, recurrent dynamics and residual predictor are updated in phase one. All forward passes use the same pre-update weights.",
+      "description": "Joint primary objective: .98 latent residual MSE + .02 position-aware SIGReg + 10 variance hinge, plus visual-prediction and real-reconstruction gradients supplied by the decoder. Both visual branches have weight 1. Real observations define all targets.",
       "children": [
         "world.model_state.objective.alignment",
         "world.model_state.objective.regression",
@@ -2111,7 +2157,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented WorldModel parameter ownership. One shared encoder (91521792 parameters), recurrent dynamics (19150720) and latent Transformer (45778432). Independent decoder (57688576). Linear weights use truncated normal std .02 clipped to +/-2 std, delta projection std .001, biases zero, LayerNorm gamma1/beta0. AdamW moments, weights, configuration, counters and RNG are saved atomically in latest.pt/best.pt; no replay is persisted. Optional state rebuilding uses real prefixes, never a stale latent cache. No architecture parameter bindings are made to the previous LMEX checkpoint."
+      "description": "Implemented WorldModel parameter ownership. One shared encoder (91525376 parameters), recurrent dynamics (19150720) and latent Transformer (45778432). Jointly trained decoder with disjoint optimizer ownership (57688576). Linear weights use truncated normal std .02 clipped to +/-2 std, delta projection std .001, biases zero, LayerNorm gamma1/beta0. AdamW moments, weights, configuration, counters and RNG are saved atomically in latest.pt/best.pt; no replay is persisted. Optional state rebuilding uses real prefixes, never a stale latent cache. No architecture parameter bindings are made to the previous LMEX checkpoint."
     },
     {
       "id": "behavior.actor.policy",
@@ -2124,7 +2170,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -2610,7 +2656,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -2636,7 +2682,7 @@
           "label": "predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "continuation",
@@ -2671,7 +2717,7 @@
           "label": "query_state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -2764,7 +2810,7 @@
           "label": "regularization",
           "direction": "output",
           "shape": null,
-          "value_type": "RepresentationPenalty {sigreg: float32}"
+          "value_type": "RepresentationPenalty {sigreg: float32, variance_floor: float32}"
         }
       ],
       "parameter_ids": [],
@@ -2776,7 +2822,10 @@
         "world.model_state.regularizer.projections",
         "world.model_state.regularizer.characteristic",
         "world.model_state.regularizer.gaussian",
-        "world.model_state.regularizer.integral"
+        "world.model_state.regularizer.integral",
+        "world.model_state.regularizer.positions",
+        "world.model_state.regularizer.variance",
+        "world.model_state.regularizer.penalty"
       ]
     },
     {
@@ -2815,7 +2864,7 @@
           "label": "encoded",
           "direction": "output",
           "shape": null,
-          "value_type": "EncodedObservations {z: float32[...,1024], ids, masks}"
+          "value_type": "EncodedObservations {z: float32[...,P,1024], ids, masks}"
         }
       ],
       "parameter_ids": [],
@@ -2843,7 +2892,8 @@
         "world.encoder.live.scan",
         "world.encoder.live.temporal",
         "world.encoder.live.latent",
-        "world.encoder.live.output"
+        "world.encoder.live.output",
+        "world.encoder.live.latent_norm"
       ]
     },
     {
@@ -8483,7 +8533,7 @@
       "id": "world.encoder.live.pool",
       "parent_id": "world.encoder.live",
       "kind": "operation",
-      "label": "Spatial Pooling",
+      "label": "Patch LayerNorm",
       "ports": [
         {
           "id": "tokens",
@@ -8529,6 +8579,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -8537,9 +8591,19 @@
       ],
       "parameter_ids": [],
       "references": [],
-      "attributes": [],
-      "operation": "pool",
-      "formula": "frames = masked_mean(tokens, mask)"
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-06
+        },
+        {
+          "name": "normalized_dim",
+          "value": 768
+        }
+      ],
+      "operation": "layer_norm",
+      "formula": "frames = layer_norm(tokens, eps) * mask[..., None]",
+      "description": "Preserve every patch in row-major order. Normalize features per patch and mask padding; no spatial pooling."
     },
     {
       "id": "world.encoder.live.scan",
@@ -8555,6 +8619,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8579,6 +8647,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8592,6 +8664,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8609,6 +8685,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8622,6 +8702,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8638,7 +8722,7 @@
           "value": 1024
         }
       ],
-      "description": "Initialize animation memory to zero independently for each observation. Feed every frame embedding in order to the recurrent cell and expose final only after the last frame. Repeated frames still advance memory. This is a temporal state loop, not a join waiting for h_next before initialization. Empty observations bypass the cell and remain invalid. Keep gradients through all observed frames.",
+      "description": "Scan the real animation frames in temporal order independently at each patch position. Initialize [P,1024] animation memory to zero for every new SDK response. No pooling or mixing of spatial positions in the recurrent cell.",
       "operation": "scan",
       "formula": "x, h, final = ordered_scan(frames, metadata, h_next)"
     },
@@ -8658,6 +8742,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -8673,6 +8761,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8686,6 +8778,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8737,6 +8833,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -8752,6 +8852,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8765,6 +8869,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8795,6 +8903,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1792
             }
@@ -8808,6 +8920,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8860,6 +8976,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8873,6 +8993,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8913,6 +9037,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8926,6 +9054,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -8956,6 +9088,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -8969,6 +9105,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9021,6 +9161,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 3072
             }
@@ -9034,6 +9178,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9051,6 +9199,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9064,6 +9216,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9094,6 +9250,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9107,6 +9267,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9137,6 +9301,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9152,6 +9320,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9165,6 +9337,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9195,6 +9371,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9208,6 +9388,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9238,6 +9422,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9251,6 +9439,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9286,6 +9478,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9299,6 +9495,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9316,6 +9516,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9329,6 +9533,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9359,6 +9567,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9372,6 +9584,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -9404,7 +9620,7 @@
           "value": 0
         }
       ],
-      "description": "Shared visual encoder readout W[1024,1024], b[1024] from the final animation memory to continuous z[1024]. No final LayerNorm/L2 norm or sigmoid on z; SIGReg controls the real representation distribution.",
+      "description": "Shared per-patch readout from animation memory 1024 to latent features 1024. The following explicit LayerNorm normalizes each patch; no spatial pooling. Neither normalization nor decoding follows the predictor residual sum.",
       "operation": "latent",
       "formula": "out = linear(x)"
     },
@@ -9424,6 +9640,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -9441,13 +9661,13 @@
           "label": "encoded",
           "direction": "output",
           "shape": null,
-          "value_type": "EncodedObservations {z: float32[...,1024], ids, masks}"
+          "value_type": "EncodedObservations {z: float32[...,P,1024], ids, masks}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Live returns embedding=z with validity/identity metadata; replay returns differentiable encoded_batch.z and aligned sequence/observation/transition masks. Initial and missing observations preserve their explicit masks; no generated samples.",
+      "description": "One z[P,1024] per observed animation response, with exact native grid geometry. Every patch retains its own latent; individual pixel values are not averaged.",
       "operation": "output",
       "formula": "encoded = restore_observation_order(z, metadata)"
     },
@@ -9469,7 +9689,7 @@
           "label": "encoded",
           "direction": "output",
           "shape": null,
-          "value_type": "EncodedObservations {z: float32[...,1024], ids, masks}"
+          "value_type": "EncodedObservations {z: float32[...,P,1024], ids, masks}"
         }
       ],
       "parameter_ids": [],
@@ -9497,7 +9717,8 @@
         "world.encoder.replay.scan",
         "world.encoder.replay.temporal",
         "world.encoder.replay.latent",
-        "world.encoder.replay.output"
+        "world.encoder.replay.output",
+        "world.encoder.replay.latent_norm"
       ]
     },
     {
@@ -15137,7 +15358,7 @@
       "id": "world.encoder.replay.pool",
       "parent_id": "world.encoder.replay",
       "kind": "operation",
-      "label": "Spatial Pooling",
+      "label": "Patch LayerNorm",
       "ports": [
         {
           "id": "tokens",
@@ -15183,6 +15404,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -15191,9 +15416,19 @@
       ],
       "parameter_ids": [],
       "references": [],
-      "attributes": [],
-      "operation": "pool",
-      "formula": "frames = masked_mean(tokens, mask)"
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-06
+        },
+        {
+          "name": "normalized_dim",
+          "value": 768
+        }
+      ],
+      "operation": "layer_norm",
+      "formula": "frames = layer_norm(tokens, eps) * mask[..., None]",
+      "description": "Preserve every patch in row-major order. Normalize features per patch and mask padding; no spatial pooling."
     },
     {
       "id": "world.encoder.replay.scan",
@@ -15209,6 +15444,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15233,6 +15472,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15246,6 +15489,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15263,6 +15510,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15276,6 +15527,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15292,7 +15547,7 @@
           "value": 1024
         }
       ],
-      "description": "Initialize animation memory to zero independently for each observation. Feed every frame embedding in order to the recurrent cell and expose final only after the last frame. Repeated frames still advance memory. This is a temporal state loop, not a join waiting for h_next before initialization. Empty observations bypass the cell and remain invalid. Keep gradients through all observed frames.",
+      "description": "Scan the real animation frames in temporal order independently at each patch position. Initialize [P,1024] animation memory to zero for every new SDK response. No pooling or mixing of spatial positions in the recurrent cell.",
       "operation": "scan",
       "formula": "x, h, final = ordered_scan(frames, metadata, h_next)"
     },
@@ -15312,6 +15567,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -15327,6 +15586,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15340,6 +15603,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15391,6 +15658,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -15406,6 +15677,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15419,6 +15694,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15449,6 +15728,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1792
             }
@@ -15462,6 +15745,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15514,6 +15801,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15527,6 +15818,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15567,6 +15862,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15580,6 +15879,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15610,6 +15913,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15623,6 +15930,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15675,6 +15986,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 3072
             }
@@ -15688,6 +16003,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15705,6 +16024,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15718,6 +16041,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15748,6 +16075,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15761,6 +16092,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15791,6 +16126,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15806,6 +16145,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15819,6 +16162,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15849,6 +16196,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15862,6 +16213,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15892,6 +16247,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15905,6 +16264,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15940,6 +16303,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15953,6 +16320,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -15970,6 +16341,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -15983,6 +16358,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -16013,6 +16392,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -16026,6 +16409,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -16058,7 +16445,7 @@
           "value": 0
         }
       ],
-      "description": "Shared visual encoder readout W[1024,1024], b[1024] from the final animation memory to continuous z[1024]. No final LayerNorm/L2 norm or sigmoid on z; SIGReg controls the real representation distribution.",
+      "description": "Shared per-patch readout from animation memory 1024 to latent features 1024. The following explicit LayerNorm normalizes each patch; no spatial pooling. Neither normalization nor decoding follows the predictor residual sum.",
       "operation": "latent",
       "formula": "out = linear(x)"
     },
@@ -16078,6 +16465,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -16095,13 +16486,13 @@
           "label": "encoded",
           "direction": "output",
           "shape": null,
-          "value_type": "EncodedObservations {z: float32[...,1024], ids, masks}"
+          "value_type": "EncodedObservations {z: float32[...,P,1024], ids, masks}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Live returns embedding=z with validity/identity metadata; replay returns differentiable encoded_batch.z and aligned sequence/observation/transition masks. Initial and missing observations preserve their explicit masks; no generated samples.",
+      "description": "One z[P,1024] per observed animation response, with exact native grid geometry. Every patch retains its own latent; individual pixel values are not averaged.",
       "operation": "output",
       "formula": "encoded = restore_observation_order(z, metadata)"
     },
@@ -16116,7 +16507,7 @@
           "label": "query_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -16130,7 +16521,7 @@
           "label": "query_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -16145,7 +16536,8 @@
         "predictor.recurrent.query.action_gelu",
         "predictor.recurrent.query.condition",
         "predictor.recurrent.query.cell",
-        "predictor.recurrent.query.context"
+        "predictor.recurrent.query.context",
+        "predictor.recurrent.query.memory_summary"
       ]
     },
     {
@@ -16159,7 +16551,7 @@
           "label": "query_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "query_action",
@@ -16176,6 +16568,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -17201,6 +17597,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -17248,7 +17648,7 @@
           "label": "query_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -17269,7 +17669,7 @@
           "label": "real_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -17283,7 +17683,7 @@
           "label": "real_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -17298,7 +17698,8 @@
         "predictor.recurrent.real.action_gelu",
         "predictor.recurrent.real.condition",
         "predictor.recurrent.real.cell",
-        "predictor.recurrent.real.context"
+        "predictor.recurrent.real.context",
+        "predictor.recurrent.real.memory_summary"
       ]
     },
     {
@@ -17312,7 +17713,7 @@
           "label": "real_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -17329,6 +17730,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -18354,6 +18759,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -18401,7 +18810,7 @@
           "label": "real_context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -18444,7 +18853,8 @@
         "predictor.recurrent.training.action_gelu",
         "predictor.recurrent.training.condition",
         "predictor.recurrent.training.cell",
-        "predictor.recurrent.training.context"
+        "predictor.recurrent.training.context",
+        "predictor.recurrent.training.memory_summary"
       ]
     },
     {
@@ -18468,6 +18878,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -19493,6 +19907,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -19561,14 +19979,14 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "delta",
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
@@ -19604,7 +20022,7 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "z",
@@ -19614,6 +20032,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -19681,6 +20103,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -19694,6 +20120,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -19876,6 +20306,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -19950,17 +20384,17 @@
       "references": [],
       "attributes": [
         {
-          "name": "token_count",
-          "value": 3
+          "name": "context_tokens",
+          "value": 2
         },
         {
           "name": "embedding_dim",
           "value": 768
         }
       ],
-      "description": "Stack state, advanced-memory and action tokens, each projected to 768, then add learned role embeddings [3,768]. Exactly three valid tokens per one-step call. This token count is independent of latent width and encoder patch count.",
+      "description": "Keep P patch tokens and append one advanced-memory token and one action token. Add three shared learned role embeddings (patch, memory, action). T=P+2; all patches interact through attention.",
       "operation": "tokens",
-      "formula": "tokens, mask = stack_with_role_embeddings(z, h, action)"
+      "formula": "tokens, mask = concatenate_patch_memory_action_tokens(z, h, action)"
     },
     {
       "id": "predictor.latent.query.block0",
@@ -22680,7 +23114,7 @@
       "id": "predictor.latent.query.select",
       "parent_id": "predictor.latent.query",
       "kind": "operation",
-      "label": "State Token",
+      "label": "Patch Tokens",
       "ports": [
         {
           "id": "tokens",
@@ -22711,6 +23145,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -22721,12 +23159,12 @@
       "references": [],
       "attributes": [
         {
-          "name": "state_token",
-          "value": 0
+          "name": "context_tokens",
+          "value": 2
         }
       ],
       "operation": "select",
-      "formula": "x = tokens[:, state_token, :]"
+      "formula": "x = tokens[:, :-context_tokens, :]"
     },
     {
       "id": "predictor.latent.query.norm",
@@ -22744,6 +23182,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -22757,6 +23199,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -22797,6 +23243,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -22810,6 +23260,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -22862,6 +23316,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -22879,13 +23337,13 @@
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Continuous d_hat has exactly 1024 coordinates in the same learned space as z. No clipping, renormalization or decoding here.",
+      "description": "Predict a continuous residual d_hat[P,1024] aligned with every current patch. The residual addition retains the full z shape, without clipping or normalization after addition.",
       "operation": "output",
       "formula": "delta = pack_latent_delta(d_hat, metadata)"
     },
@@ -22900,14 +23358,14 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "delta",
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
@@ -22943,7 +23401,7 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "z",
@@ -22953,6 +23411,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -23020,6 +23482,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -23033,6 +23499,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -23215,6 +23685,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -23289,17 +23763,17 @@
       "references": [],
       "attributes": [
         {
-          "name": "token_count",
-          "value": 3
+          "name": "context_tokens",
+          "value": 2
         },
         {
           "name": "embedding_dim",
           "value": 768
         }
       ],
-      "description": "Stack state, advanced-memory and action tokens, each projected to 768, then add learned role embeddings [3,768]. Exactly three valid tokens per one-step call. This token count is independent of latent width and encoder patch count.",
+      "description": "Keep P patch tokens and append one advanced-memory token and one action token. Add three shared learned role embeddings (patch, memory, action). T=P+2; all patches interact through attention.",
       "operation": "tokens",
-      "formula": "tokens, mask = stack_with_role_embeddings(z, h, action)"
+      "formula": "tokens, mask = concatenate_patch_memory_action_tokens(z, h, action)"
     },
     {
       "id": "predictor.latent.real.block0",
@@ -26019,7 +26493,7 @@
       "id": "predictor.latent.real.select",
       "parent_id": "predictor.latent.real",
       "kind": "operation",
-      "label": "State Token",
+      "label": "Patch Tokens",
       "ports": [
         {
           "id": "tokens",
@@ -26050,6 +26524,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -26060,12 +26538,12 @@
       "references": [],
       "attributes": [
         {
-          "name": "state_token",
-          "value": 0
+          "name": "context_tokens",
+          "value": 2
         }
       ],
       "operation": "select",
-      "formula": "x = tokens[:, state_token, :]"
+      "formula": "x = tokens[:, :-context_tokens, :]"
     },
     {
       "id": "predictor.latent.real.norm",
@@ -26083,6 +26561,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -26096,6 +26578,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -26136,6 +26622,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -26149,6 +26639,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -26201,6 +26695,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -26218,13 +26716,13 @@
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Continuous d_hat has exactly 1024 coordinates in the same learned space as z. No clipping, renormalization or decoding here.",
+      "description": "Predict a continuous residual d_hat[P,1024] aligned with every current patch. The residual addition retains the full z shape, without clipping or normalization after addition.",
       "operation": "output",
       "formula": "delta = pack_latent_delta(d_hat, metadata)"
     },
@@ -26239,14 +26737,14 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "delta",
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
@@ -26282,7 +26780,7 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "z",
@@ -26292,6 +26790,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -26359,6 +26861,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -26372,6 +26878,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -26554,6 +27064,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -26628,17 +27142,17 @@
       "references": [],
       "attributes": [
         {
-          "name": "token_count",
-          "value": 3
+          "name": "context_tokens",
+          "value": 2
         },
         {
           "name": "embedding_dim",
           "value": 768
         }
       ],
-      "description": "Stack state, advanced-memory and action tokens, each projected to 768, then add learned role embeddings [3,768]. Exactly three valid tokens per one-step call. This token count is independent of latent width and encoder patch count.",
+      "description": "Keep P patch tokens and append one advanced-memory token and one action token. Add three shared learned role embeddings (patch, memory, action). T=P+2; all patches interact through attention.",
       "operation": "tokens",
-      "formula": "tokens, mask = stack_with_role_embeddings(z, h, action)"
+      "formula": "tokens, mask = concatenate_patch_memory_action_tokens(z, h, action)"
     },
     {
       "id": "predictor.latent.training.block0",
@@ -29358,7 +29872,7 @@
       "id": "predictor.latent.training.select",
       "parent_id": "predictor.latent.training",
       "kind": "operation",
-      "label": "State Token",
+      "label": "Patch Tokens",
       "ports": [
         {
           "id": "tokens",
@@ -29389,6 +29903,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -29399,12 +29917,12 @@
       "references": [],
       "attributes": [
         {
-          "name": "state_token",
-          "value": 0
+          "name": "context_tokens",
+          "value": 2
         }
       ],
       "operation": "select",
-      "formula": "x = tokens[:, state_token, :]"
+      "formula": "x = tokens[:, :-context_tokens, :]"
     },
     {
       "id": "predictor.latent.training.norm",
@@ -29422,6 +29940,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -29435,6 +29957,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -29475,6 +30001,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 768
             }
@@ -29488,6 +30018,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -29540,6 +30074,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -29557,13 +30095,13 @@
           "label": "delta",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentDelta {d_hat: float32[1024], ids, mask}"
+          "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Continuous d_hat has exactly 1024 coordinates in the same learned space as z. No clipping, renormalization or decoding here.",
+      "description": "Predict a continuous residual d_hat[P,1024] aligned with every current patch. The residual addition retains the full z shape, without clipping or normalization after addition.",
       "operation": "output",
       "formula": "delta = pack_latent_delta(d_hat, metadata)"
     },
@@ -29578,7 +30116,7 @@
           "label": "embedding",
           "direction": "input",
           "shape": null,
-          "value_type": "ObservationEmbedding {z: float32[1024], visual_valid, observation_id}"
+          "value_type": "ObservationEmbedding {z: float32[P,1024], visual_valid, observation_id}"
         },
         {
           "id": "observation",
@@ -29592,7 +30130,7 @@
           "label": "state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -29615,7 +30153,7 @@
           "label": "embedding",
           "direction": "input",
           "shape": null,
-          "value_type": "ObservationEmbedding {z: float32[1024], visual_valid, observation_id}"
+          "value_type": "ObservationEmbedding {z: float32[P,1024], visual_valid, observation_id}"
         },
         {
           "id": "observation",
@@ -29629,14 +30167,14 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "previous_state",
           "label": "previous_state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "executed_action",
@@ -29650,7 +30188,7 @@
           "label": "state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -29671,7 +30209,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "action",
@@ -29685,7 +30223,7 @@
           "label": "context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -29700,7 +30238,8 @@
         "world.latent_state.live.dynamics.action_gelu",
         "world.latent_state.live.dynamics.condition",
         "world.latent_state.live.dynamics.cell",
-        "world.latent_state.live.dynamics.context"
+        "world.latent_state.live.dynamics.context",
+        "world.latent_state.live.dynamics.memory_summary"
       ]
     },
     {
@@ -29714,7 +30253,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "action",
@@ -29731,6 +30270,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -30756,6 +31299,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -30803,7 +31350,7 @@
           "label": "context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -30875,14 +31422,14 @@
           "label": "context",
           "direction": "input",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         },
         {
           "id": "previous_state",
           "label": "previous_state",
           "direction": "output",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "executed_action",
@@ -30917,7 +31464,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "action",
@@ -30931,7 +31478,7 @@
           "label": "context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -30946,7 +31493,8 @@
         "world.latent_state.replay.dynamics.action_gelu",
         "world.latent_state.replay.dynamics.condition",
         "world.latent_state.replay.dynamics.cell",
-        "world.latent_state.replay.dynamics.context"
+        "world.latent_state.replay.dynamics.context",
+        "world.latent_state.replay.dynamics.memory_summary"
       ]
     },
     {
@@ -30960,7 +31508,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "action",
@@ -30977,6 +31525,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -32002,6 +32554,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -32049,7 +32605,7 @@
           "label": "context",
           "direction": "output",
           "shape": null,
-          "value_type": "RecurrentContext {z: float32[1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+          "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
         }
       ],
       "parameter_ids": [],
@@ -32080,6 +32636,10 @@
             {
               "kind": "symbol",
               "name": "M"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -32116,6 +32676,10 @@
               "name": "M"
             },
             {
+              "kind": "symbol",
+              "name": "Q"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -32129,6 +32693,10 @@
             {
               "kind": "symbol",
               "name": "M"
+            },
+            {
+              "kind": "symbol",
+              "name": "Q"
             },
             {
               "kind": "symbol",
@@ -32166,6 +32734,10 @@
             },
             {
               "kind": "symbol",
+              "name": "Q"
+            },
+            {
+              "kind": "symbol",
               "name": "S"
             }
           ]
@@ -32175,6 +32747,10 @@
           "label": "real",
           "direction": "output",
           "shape": [
+            {
+              "kind": "symbol",
+              "name": "Q"
+            },
             {
               "kind": "symbol",
               "name": "S"
@@ -32190,6 +32766,10 @@
           "label": "imag",
           "direction": "output",
           "shape": [
+            {
+              "kind": "symbol",
+              "name": "Q"
+            },
             {
               "kind": "symbol",
               "name": "S"
@@ -32217,7 +32797,7 @@
           "value": 3.0
         }
       ],
-      "description": "Frequencies are linspace(0,3,17). Explicit outer broadcast [M,S,17]; average over M distinct observations, not features or frequency. No data centering/whitening that would conceal collapsed latents.",
+      "description": "Compute empirical characteristic functions across the M real observations at each sampled position, in FP32. Keep position and direction axes separate; never treat distinct position embeddings as independent observations.",
       "operation": "characteristic",
       "formula": "real = mean(cos(projected * frequencies), samples); imag = mean(sin(projected * frequencies), samples)"
     },
@@ -32232,6 +32812,10 @@
           "label": "real",
           "direction": "input",
           "shape": [
+            {
+              "kind": "symbol",
+              "name": "Q"
+            },
             {
               "kind": "symbol",
               "name": "S"
@@ -32249,6 +32833,10 @@
           "shape": [
             {
               "kind": "symbol",
+              "name": "Q"
+            },
+            {
+              "kind": "symbol",
               "name": "S"
             },
             {
@@ -32262,6 +32850,10 @@
           "label": "error",
           "direction": "output",
           "shape": [
+            {
+              "kind": "symbol",
+              "name": "Q"
+            },
             {
               "kind": "symbol",
               "name": "S"
@@ -32305,6 +32897,10 @@
           "shape": [
             {
               "kind": "symbol",
+              "name": "Q"
+            },
+            {
+              "kind": "symbol",
               "name": "S"
             },
             {
@@ -32323,6 +32919,10 @@
               "name": "M"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -32332,8 +32932,7 @@
           "id": "regularization",
           "label": "regularization",
           "direction": "output",
-          "shape": null,
-          "value_type": "RepresentationPenalty {sigreg: float32}"
+          "shape": []
         }
       ],
       "parameter_ids": [],
@@ -32352,7 +32951,7 @@
           "value": 3.0
         }
       ],
-      "description": "Integrate error with weight exp(-t^2/2) over [-3,3] using symmetry: dt=3/16; positive-half trapezoid weights 2*dt internally and dt at endpoints. Multiply by M, average over directions. Return differentiable {sigreg}. This copies the mathematical statistic, not an empirical performance guarantee.",
+      "description": "Symmetric Gaussian-windowed integral over [-3,3]: twice the positive-half trapezoid with 17 knots. Multiply by real observation count M, average over directions and sampled positions. Bucket by native geometry and weight bucket penalties by observation count. Only buckets with at least two real observations contribute.",
       "operation": "integral",
       "formula": "regularization = sample_count(z) * mean(trapezoid_symmetric_gaussian(error))"
     },
@@ -32442,7 +33041,7 @@
           "label": "regularization",
           "direction": "input",
           "shape": null,
-          "value_type": "RepresentationPenalty {sigreg: float32}"
+          "value_type": "RepresentationPenalty {sigreg: float32, variance_floor: float32}"
         },
         {
           "id": "loss",
@@ -32457,11 +33056,15 @@
         {
           "name": "sigreg_weight",
           "value": 0.02
+        },
+        {
+          "name": "variance_weight",
+          "value": 10.0
         }
       ],
       "description": "Coefficient is a starting choice requiring empirical tuning; not a reproduction claim.",
       "operation": "total",
-      "formula": "loss = (1 - sigreg_weight) * prediction + sigreg_weight * regularization.sigreg"
+      "formula": "loss = (1 - sigreg_weight) * prediction + sigreg_weight * regularization.sigreg + variance_weight * regularization.variance_floor"
     },
     {
       "id": "world.model_state.objective.backward",
@@ -32488,14 +33091,21 @@
           "direction": "output",
           "shape": null,
           "value_type": "Gradients (named tensors)"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Differentiate only the declared encoder/dynamics/delta parameter set, including real-prefix recurrence. Skip update if no valid targets or fewer than 32 regularizer examples. Preserve autograd through conceptual graph ports.",
+      "description": "Combine latent-objective gradients with both visual branch VJPs through the original encoder/dynamics graphs. Full-prefix temporal recurrence participates. Decoder parameter gradients are accumulated by the decoder learner; optimizer ownership stays disjoint.",
       "operation": "backward",
-      "formula": "gradients = grad(loss, parameters)"
+      "formula": "gradients = grad(loss, parameters) + latent_vjp(visual_gradients, parameters)"
     },
     {
       "id": "world.model_state.optimizer.clip",
@@ -32563,7 +33173,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0003
+          "value": 0.0001
         },
         {
           "name": "beta1",
@@ -32869,7 +33479,7 @@
           "label": "predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "parameters",
@@ -33652,7 +34262,7 @@
           "label": "predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "parameters",
@@ -34184,12 +34794,26 @@
           "direction": "output",
           "shape": null,
           "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, patch_classifier}"
+        },
+        {
+          "id": "encoded_batch",
+          "label": "encoded_batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "EncodedSequenceBatch {z, sequence_index, observation_mask, transition_mask}"
+        },
+        {
+          "id": "visual_gradients",
+          "label": "visual_gradients",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Active decoder fitting path for each real replay batch with eligible predicted successors and actual final-board targets. Match IDs, detach predicted z_hat, run the same decoder as inference, compute masked color cross entropy, backpropagate only decoder parameters, clip and step its own AdamW. Complete causal pre-action scoring first; compute the shared world and decoder forwards/losses from their respective pre-update parameters before applying updates. The decoder can train with random behavior and needs no goal, imagined trajectory, actor or critic. Insufficient world-model regularizer data may delay the upstream predicted_batch producer; the decoder itself requires only a nonempty valid supervised batch. No decoder loss enters the primary latent loss.",
+      "description": "Joint real-delta supervision and auxiliary real-successor reconstruction, using the same decoder parameters. Each branch has weight 1. Chunk decoder backward, accumulate latent VJPs, then propagate them through encoder/predictor once before either optimizer steps. Own decoder parameters use a separate AdamW; visual gradients also train encoder/dynamics.",
       "children": [
         "world.decoder.learning.parameters",
         "world.decoder.learning.targets",
@@ -34270,13 +34894,20 @@
           "label": "batch",
           "direction": "output",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "encoded_batch",
+          "label": "encoded_batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "EncodedSequenceBatch {z, sequence_index, observation_mask, transition_mask}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Prepare supervised decoder examples from aligned real transitions. Only actual completed actions with valid same-geometry before/after boards are eligible. Separate the detached latent input from the real target pixels. This fitting path is part of the initial random-action phase.",
+      "description": "Build two matched branches with the same actual before/after boards: predicted successor latents and freshly encoded real successor latents. Keep gradients through both branches. The effective decoder batch contains twice the number of real transitions, with branch identities.",
       "children": [
         "world.decoder.learning.targets.alignment",
         "world.decoder.learning.targets.latent",
@@ -34297,7 +34928,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "parameters",
@@ -34317,7 +34948,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Distinct training invocation of all eight decoder Transformer blocks plus the shared latent projection, final norm and patch classifier. Every corresponding layer/tensor is shared with inference; copies in this graph are calls, not additional parameters. Inputs are detached z[1024] and native reference geometry, outputs are aligned differentiable 16-color logits. Targets remain exclusively on the loss branch.",
+      "description": "Shared decoder training invocation on both predicted and real successor latents [B,P,1024]. All eight blocks, input projection, final norm and per-patch 16-pixel classifiers share weights with inference. Both input branches receive gradients; target colors are used only in the loss.",
       "children": [
         "world.decoder.learning.readout.inputs",
         "world.decoder.learning.readout.queries",
@@ -34339,7 +34970,7 @@
       "id": "world.decoder.learning.loss",
       "parent_id": "world.decoder.learning",
       "kind": "group",
-      "label": "Pixel Cross Entropy",
+      "label": "Visual Delta Objective",
       "ports": [
         {
           "id": "logits",
@@ -34353,7 +34984,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "loss",
@@ -34365,20 +34996,21 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented balanced native-pixel cross entropy. Per frame, when both changed and unchanged cells exist, average their mean negative log likelihoods with equal weight. Otherwise use ordinary per-frame mean. Then average frames. This prevents background area from dominating while still penalizing spurious changes. No sigmoid, learned KEEP class or label smoothing.",
+      "description": "Sum the balanced real-delta NLL of predicted successors and reconstructed real successors. Each branch weight is 1; changed/unchanged cell means each have weight .5 when both sets are nonempty. Never differentiate discrete argmax metrics.",
       "children": [
         "world.decoder.learning.loss.unpack",
         "world.decoder.learning.loss.log_softmax",
         "world.decoder.learning.loss.labels",
         "world.decoder.learning.loss.nll",
-        "world.decoder.learning.loss.mean"
+        "world.decoder.learning.loss.mean",
+        "world.decoder.learning.loss.delta_probabilities"
       ]
     },
     {
       "id": "world.decoder.learning.grad",
       "parent_id": "world.decoder.learning",
       "kind": "operation",
-      "label": "Decoder Gradients",
+      "label": "Joint Visual Gradients",
       "ports": [
         {
           "id": "loss",
@@ -34399,14 +35031,28 @@
           "direction": "output",
           "shape": null,
           "value_type": "DecoderGradients (named float32 tensors)"
+        },
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "latent_gradients",
+          "label": "latent_gradients",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Differentiate the real color cross-entropy with respect to exactly the 134 shared decoder parameter tensors. Detached z[1024] prevents gradients into the world-model encoder, memory or latent predictor. Discrete output/metrics remain outside backpropagation. Do not count the materialized training call as another parameter set.",
+      "description": "Accumulate decoder parameter gradients and latent gradients for both prediction and reconstruction branches. Send latent VJPs back through the shared encoder/dynamics computation graph; validate both parameter gradient sets before either optimizer step.",
       "operation": "grad",
-      "formula": "gradients = grad(loss, parameters)"
+      "formula": "gradients, latent_gradients = grad(loss, parameters, batch.z)"
     },
     {
       "id": "world.decoder.learning.optimizer",
@@ -34447,7 +35093,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0003
+          "value": 0.0001
         },
         {
           "name": "beta1",
@@ -34499,7 +35145,7 @@
           "label": "real_predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "z",
@@ -34509,6 +35155,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -34545,6 +35195,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -34613,7 +35267,7 @@
           "value": 10000.0
         }
       ],
-      "description": "Project z[1024] to a width-768 condition, broadcast over native output patches, add fixed 2D coordinates, and feed the eight-block spatial decoder. Only reference geometry is a neural input; no before/after colors are concatenated into the decoder features.",
+      "description": "Project each of P distinct patch latents from 1024 to 768, preserve native patch alignment and add fixed 2D coordinates. The neural readout receives only latents and geometry; reference/target color values remain outside its features.",
       "children": [
         "world.decoder.queries.geometry",
         "world.decoder.queries.latent_projection",
@@ -37735,7 +38389,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -37800,7 +38454,7 @@
           "label": "state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "valid_actions",
@@ -44672,7 +45326,7 @@
           "label": "real_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "real_action",
@@ -44686,7 +45340,7 @@
           "label": "real_predicted_state",
           "direction": "input",
           "shape": null,
-          "value_type": "LatentState {z: float32[1024], h: float32[2048], episode_context}"
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
         },
         {
           "id": "experience",
@@ -44802,6 +45456,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -44822,6 +45480,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -44854,7 +45516,7 @@
           "value": 0
         }
       ],
-      "description": "Shared decoder latent conditioning W[768,1024], b[768]. Select the same logical decoder parameter set for the entire invocation. Its output is an internal image-readout feature; z_hat used by the simulator remains z[1024].",
+      "description": "Shared learned projection 1024 to 768 applied independently to each aligned patch latent.",
       "operation": "latent_projection",
       "formula": "condition = linear(z, parameters.latent_projection)"
     },
@@ -44862,7 +45524,7 @@
       "id": "world.decoder.queries.broadcast",
       "parent_id": "world.decoder.queries",
       "kind": "operation",
-      "label": "Spatial Broadcast",
+      "label": "Patch Alignment",
       "ports": [
         {
           "id": "condition",
@@ -44872,6 +45534,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -44909,9 +45575,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Broadcast the same conditioned latent to every patch position; no new learnable parameter and no tensor of generated pixels.",
-      "operation": "broadcast",
-      "formula": "spatial = broadcast_over_patches(condition, geometry)"
+      "description": "Preserve the P distinct latent tokens in native row-major patch order; verify geometry. No broadcasting of a global latent and no spatial averaging.",
+      "operation": "align",
+      "formula": "spatial = align_patch_grid(condition, geometry)"
     },
     {
       "id": "world.decoder.queries.positions",
@@ -45354,6 +46020,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "AlignedRealTransitions {before, actual_action, after, predicted_state, identities}"
+        },
+        {
+          "id": "encoded_batch",
+          "label": "encoded_batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "EncodedSequenceBatch {z, sequence_index, observation_mask, transition_mask}"
         }
       ],
       "parameter_ids": [],
@@ -45361,13 +46034,13 @@
       "attributes": [],
       "description": "One-to-one match of episode/transition IDs. Include the exact prediction z_hat=z+d_hat for that before/action pair. Exclude initialization, episode-reset crossings, missing frames and missing predictions. Select the last actual before frame as reference and last actual after frame as target; retain all intermediate frames in real replay but do not invent decoder targets for them. Reject geometry mismatch for this same-grid output contract; bucket retained records by H,W.",
       "operation": "alignment",
-      "formula": "records = match_real_transition_ids(real_batch, predicted_batch)"
+      "formula": "records = align_real_predicted_and_encoded_successors(real_batch, predicted_batch, encoded_batch)"
     },
     {
       "id": "world.decoder.learning.targets.latent",
       "parent_id": "world.decoder.learning.targets",
       "kind": "operation",
-      "label": "Predicted Latents",
+      "label": "Predicted and Real Latents",
       "ports": [
         {
           "id": "records",
@@ -45386,6 +46059,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -45395,15 +46072,15 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Read the current training forward predicted successor z, not target-encoder z and not h. No hidden reconstruction branch that substitutes the real successor embedding.",
+      "description": "Two aligned branches: predicted z_hat for causal delta learning and observed z_next for reconstruction. Both retain their computation graph; real pixels alone define labels.",
       "operation": "latent",
-      "formula": "z_hat = predicted_successor_latents(records)"
+      "formula": "z_hat = concatenate(predicted_successor_latents(records), real_successor_latents(records))"
     },
     {
       "id": "world.decoder.learning.targets.detach",
       "parent_id": "world.decoder.learning.targets",
       "kind": "operation",
-      "label": "Stop Gradient",
+      "label": "Latent Gradient Bridge",
       "ports": [
         {
           "id": "z_hat",
@@ -45413,6 +46090,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -45430,6 +46111,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -45439,9 +46124,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Freeze numerical latent inputs for this decoder step. Decoder loss cannot update encoder, animation memory, recurrent dynamics or residual predictor. Preserve decoder-weight gradients; do not put the decoder forward under no_grad.",
-      "operation": "detach",
-      "formula": "z = detach_clone(z_hat)"
+      "description": "Accumulate decoder microbatch gradients on a temporary leaf, then explicitly propagate the accumulated VJP through the original predicted and real successor tensors once. This is mathematically joint backpropagation, not stop-gradient.",
+      "operation": "gradient_bridge",
+      "formula": "z = autograd_bridge(z_hat)"
     },
     {
       "id": "world.decoder.learning.targets.boards",
@@ -45572,6 +46257,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -45634,13 +46323,13 @@
           "label": "batch",
           "direction": "output",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Concrete record: detached z[B,1024], int64 labels[B,H,W], bool pixel_mask[B,H,W], immutable reference_frame[B,H,W], geometry and transition IDs. No encoder/predictor parameters or autograd edges to them.",
+      "description": "Pack branch identities, differentiable per-patch latents, repeated real before/after boards, native geometry and masks. No imagined target labels.",
       "operation": "batch",
       "formula": "batch = pack_decoder_batch(z, labels, reference, identities, mask)"
     },
@@ -45655,7 +46344,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "z",
@@ -45665,6 +46354,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -45690,7 +46383,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Select only the detached z, before geometry/reference metadata and transition IDs. Labels and pixel_mask remain on the loss branch; the neural readout does not consume label values.",
+      "description": "Select differentiable spatial latents and native reference geometry. Actual before/after colors never enter the neural decoder; only the loss and output delta interpretation use them.",
       "operation": "inputs",
       "formula": "z, reference, identities = decoder_inputs(batch)"
     },
@@ -45708,6 +46401,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -45776,7 +46473,7 @@
           "value": 10000.0
         }
       ],
-      "description": "Project z[1024] to a width-768 condition, broadcast over native output patches, add fixed 2D coordinates, and feed the eight-block spatial decoder. Only reference geometry is a neural input; no before/after colors are concatenated into the decoder features.",
+      "description": "Project each of P distinct patch latents from 1024 to 768, preserve native patch alignment and add fixed 2D coordinates. The neural readout receives only latents and geometry; reference/target color values remain outside its features.",
       "children": [
         "world.decoder.learning.readout.queries.geometry",
         "world.decoder.learning.readout.queries.latent_projection",
@@ -48773,6 +49470,10 @@
               "name": "B"
             },
             {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
               "kind": "constant",
               "value": 1024
             }
@@ -48793,6 +49494,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -48825,7 +49530,7 @@
           "value": 0
         }
       ],
-      "description": "Shared decoder latent conditioning W[768,1024], b[768]. Select the same logical decoder parameter set for the entire invocation. Its output is an internal image-readout feature; z_hat used by the simulator remains z[1024].",
+      "description": "Shared learned projection 1024 to 768 applied independently to each aligned patch latent.",
       "operation": "latent_projection",
       "formula": "condition = linear(z, parameters.latent_projection)"
     },
@@ -48833,7 +49538,7 @@
       "id": "world.decoder.learning.readout.queries.broadcast",
       "parent_id": "world.decoder.learning.readout.queries",
       "kind": "operation",
-      "label": "Spatial Broadcast",
+      "label": "Patch Alignment",
       "ports": [
         {
           "id": "condition",
@@ -48843,6 +49548,10 @@
             {
               "kind": "symbol",
               "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
             },
             {
               "kind": "constant",
@@ -48880,9 +49589,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Broadcast the same conditioned latent to every patch position; no new learnable parameter and no tensor of generated pixels.",
-      "operation": "broadcast",
-      "formula": "spatial = broadcast_over_patches(condition, geometry)"
+      "description": "Preserve the P distinct latent tokens in native row-major patch order; verify geometry. No broadcasting of a global latent and no spatial averaging.",
+      "operation": "align",
+      "formula": "spatial = align_patch_grid(condition, geometry)"
     },
     {
       "id": "world.decoder.learning.readout.queries.positions",
@@ -49368,7 +50077,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "tensor",
@@ -49470,14 +50179,14 @@
       "id": "world.decoder.learning.loss.labels",
       "parent_id": "world.decoder.learning.loss",
       "kind": "operation",
-      "label": "Safe Target Indices",
+      "label": "Real Visual Delta",
       "ports": [
         {
           "id": "batch",
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "labels",
@@ -49503,23 +50212,19 @@
       "references": [],
       "attributes": [
         {
-          "name": "safe_index",
-          "value": 0
-        },
-        {
-          "name": "colors",
+          "name": "keep_id",
           "value": 16
         }
       ],
-      "description": "Require each valid label to be in 0..15. Replace only masked-out labels with a safe gather index before indexing logits; these cells contribute zero loss. Do not clamp an invalid unmasked label into an invented color.",
+      "description": "Ground-truth delta from real before/after pixels, independent of all learned representations.",
       "operation": "labels",
-      "formula": "labels = where(batch.pixel_mask, batch.labels, safe_index)"
+      "formula": "labels = where(batch.labels == batch.reference_frame, keep_id, batch.labels)"
     },
     {
       "id": "world.decoder.learning.loss.nll",
       "parent_id": "world.decoder.learning.loss",
       "kind": "operation",
-      "label": "Target Color Likelihood",
+      "label": "Target Delta Likelihood",
       "ports": [
         {
           "id": "log_prob",
@@ -49540,7 +50245,7 @@
             },
             {
               "kind": "constant",
-              "value": 16
+              "value": 17
             }
           ]
         },
@@ -49593,7 +50298,7 @@
       ],
       "description": "Gather the true final color of each valid real cell. Target is an integer class, not a normalized grayscale value or one independently sigmoid-activated channel. Masked-out safe indices are excluded by the subsequent mean. label_smoothing=0.",
       "operation": "nll",
-      "formula": "nll = -gather_color(log_prob, labels)"
+      "formula": "nll = -gather_delta(log_prob, labels)"
     },
     {
       "id": "world.decoder.learning.loss.mean",
@@ -49625,7 +50330,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "loss",
@@ -49644,7 +50349,7 @@
       ],
       "description": "Split valid pixels by labels != reference_frame, using batch metadata already supplied. If both groups are nonempty, give each group half the frame loss; if either group is empty use the ordinary mean. Average selected real frames; decoder microbatches accumulate this exact mean before one optimizer step.",
       "operation": "mean",
-      "formula": "loss = mean_frames(balanced_pixel_nll(nll, batch, changed_weight))"
+      "formula": "loss = sum_branches(mean_frames(balanced_pixel_nll(nll, batch, changed_weight)))"
     },
     {
       "id": "world.decoder.learning.optimizer.finite",
@@ -49930,7 +50635,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0003
+          "value": 0.0001
         }
       ],
       "description": "Apply additive update once to decoder parameters using the same pre-update weights that generated the logits. lr is constant for this online baseline; no unchosen warmup/scheduler is implied.",
@@ -49955,7 +50660,7 @@
           "label": "batch",
           "direction": "input",
           "shape": null,
-          "value_type": "DecoderBatch {z: float32[B,1024] detached, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
         },
         {
           "id": "loss",
@@ -49967,7 +50672,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Detached training-batch diagnostics: cross entropy, valid-pixel count, overall final-board pixel accuracy, exact-board accuracy, changed-cell accuracy, and binary change precision/recall relative to before. Mark changed-cell accuracy undefined when no true cells changed; report zero-denominator precision/recall as undefined with their counts. Include no-change baseline accuracy so mostly static boards do not hide failure. These are replay fitting metrics, not held-out or pre-action prediction quality. Store as diagnostic state, never as a loss or replay record.",
+      "description": "Report balanced predicted-delta NLL and real-successor reconstruction NLL separately. Frozen validation reports causal delta error, reconstruction delta error and across-observation latent spread independently. Training metrics never become replay targets.",
       "operation": "metrics",
       "formula": "record_decoder_fit_metrics(logits, batch, loss)"
     },
@@ -49995,7 +50700,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented frozen validation in runner.py and metrics.py. Capture prediction before executing action; compare categorical deltas against the final real response. Error = incorrect cells / union of real and predicted changes. Missing changes, spurious changes and wrong colors count; unchanged background does not dilute the denominator. No-change correct transitions have zero error but do not satisfy the changed-transition coverage minimum. Report counts and latent MSE separately from wins/game overs. Skipped outcomes prevent progression.",
+      "description": "Frozen diagnostic reporting separates causal predicted visual delta error from real-latent reconstruction delta error. Both compare KEEP/replacement labels against real before/after frames on the union of actual/predicted changes. Real successor reconstruction is evaluated after scoring the causal prediction, never fed into it.",
       "operation": "monitor",
       "formula": "score_next_real_outcome(predicted_delta, observation)"
     },
@@ -104278,6 +104983,608 @@
       "attributes": [],
       "operation": "mlp_residual",
       "formula": "out = x + branch"
+    },
+    {
+      "id": "world.encoder.live.latent_norm",
+      "parent_id": "world.encoder.live",
+      "kind": "operation",
+      "label": "Latent LayerNorm",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-06
+        },
+        {
+          "name": "normalized_dim",
+          "value": 1024
+        }
+      ],
+      "operation": "latent_norm",
+      "formula": "out = layer_norm(x, eps)"
+    },
+    {
+      "id": "world.encoder.replay.latent_norm",
+      "parent_id": "world.encoder.replay",
+      "kind": "operation",
+      "label": "Latent LayerNorm",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-06
+        },
+        {
+          "name": "normalized_dim",
+          "value": 1024
+        }
+      ],
+      "operation": "latent_norm",
+      "formula": "out = layer_norm(x, eps)"
+    },
+    {
+      "id": "predictor.recurrent.query.memory_summary",
+      "parent_id": "predictor.recurrent.query",
+      "kind": "operation",
+      "label": "Global Memory Context",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "summary",
+          "label": "summary",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_axis",
+          "value": 1
+        }
+      ],
+      "operation": "memory_summary",
+      "formula": "summary = mean(z, patch_axis)",
+      "description": "Only summarizes the global recurrent memory input. Full z[P,1024] also passes unchanged to the latent predictor and residual addition."
+    },
+    {
+      "id": "predictor.recurrent.real.memory_summary",
+      "parent_id": "predictor.recurrent.real",
+      "kind": "operation",
+      "label": "Global Memory Context",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "summary",
+          "label": "summary",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_axis",
+          "value": 1
+        }
+      ],
+      "operation": "memory_summary",
+      "formula": "summary = mean(z, patch_axis)",
+      "description": "Only summarizes the global recurrent memory input. Full z[P,1024] also passes unchanged to the latent predictor and residual addition."
+    },
+    {
+      "id": "predictor.recurrent.training.memory_summary",
+      "parent_id": "predictor.recurrent.training",
+      "kind": "operation",
+      "label": "Global Memory Context",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "summary",
+          "label": "summary",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_axis",
+          "value": 1
+        }
+      ],
+      "operation": "memory_summary",
+      "formula": "summary = mean(z, patch_axis)",
+      "description": "Only summarizes the global recurrent memory input. Full z[P,1024] also passes unchanged to the latent predictor and residual addition."
+    },
+    {
+      "id": "world.latent_state.live.dynamics.memory_summary",
+      "parent_id": "world.latent_state.live.dynamics",
+      "kind": "operation",
+      "label": "Global Memory Context",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "summary",
+          "label": "summary",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_axis",
+          "value": 1
+        }
+      ],
+      "operation": "memory_summary",
+      "formula": "summary = mean(z, patch_axis)",
+      "description": "Only summarizes the global recurrent memory input. Full z[P,1024] also passes unchanged to the latent predictor and residual addition."
+    },
+    {
+      "id": "world.latent_state.replay.dynamics.memory_summary",
+      "parent_id": "world.latent_state.replay.dynamics",
+      "kind": "operation",
+      "label": "Global Memory Context",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "summary",
+          "label": "summary",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_axis",
+          "value": 1
+        }
+      ],
+      "operation": "memory_summary",
+      "formula": "summary = mean(z, patch_axis)",
+      "description": "Only summarizes the global recurrent memory input. Full z[P,1024] also passes unchanged to the latent predictor and residual addition."
+    },
+    {
+      "id": "world.decoder.learning.loss.delta_probabilities",
+      "parent_id": "world.decoder.learning.loss",
+      "kind": "operation",
+      "label": "Canonical Delta Probabilities",
+      "ports": [
+        {
+          "id": "log_prob",
+          "label": "log_prob",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        },
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "delta_log_prob",
+          "label": "delta_log_prob",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 17
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "keep_id",
+          "value": 16
+        }
+      ],
+      "operation": "delta_probabilities",
+      "formula": "delta_log_prob = replace_reference_color_with_KEEP(log_prob, batch.reference_frame, keep_id)",
+      "description": "KEEP receives the probability of the reference color; replacing a pixel with that same color has probability zero. Other replacement-color probabilities remain unchanged. These 17 canonical labels are a bijective relabeling of 16 possible final colors, so the NLL equals final-color CE."
+    },
+    {
+      "id": "world.model_state.regularizer.positions",
+      "parent_id": "world.model_state.regularizer",
+      "kind": "operation",
+      "label": "Matching Patch Positions",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "M"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "sampled",
+          "label": "sampled",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "M"
+            },
+            {
+              "kind": "symbol",
+              "name": "Q"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "max_positions",
+          "value": 16
+        }
+      ],
+      "operation": "positions",
+      "formula": "sampled = sample_same_positions(z, max_positions)",
+      "description": "Select up to 16 positions uniformly without replacement and use the SAME positions in all real observations in a geometry bucket. Regularization statistics average over observations, never over positions to manufacture diversity."
+    },
+    {
+      "id": "world.model_state.regularizer.variance",
+      "parent_id": "world.model_state.regularizer",
+      "kind": "operation",
+      "label": "Observation Variance Floor",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "M"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "variance_floor",
+          "label": "variance_floor",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "target_std",
+          "value": 1.0
+        },
+        {
+          "name": "eps",
+          "value": 1e-08
+        },
+        {
+          "name": "observation_axis",
+          "value": 0
+        },
+        {
+          "name": "correction",
+          "value": 0
+        }
+      ],
+      "operation": "variance",
+      "formula": "variance_floor = mean(relu(target_std - sqrt(var(z, observation_axis) + eps)))",
+      "description": "VICReg-style variance hinge applied at each matching patch position across real observations, with a smaller epsilon for this low-variance regime. No batch normalization/whitening of the representations; reported spread uses the actual latents."
+    },
+    {
+      "id": "world.model_state.regularizer.penalty",
+      "parent_id": "world.model_state.regularizer",
+      "kind": "operation",
+      "label": "Representation Penalty",
+      "ports": [
+        {
+          "id": "sigreg",
+          "label": "sigreg",
+          "direction": "input",
+          "shape": []
+        },
+        {
+          "id": "variance_floor",
+          "label": "variance_floor",
+          "direction": "input",
+          "shape": []
+        },
+        {
+          "id": "regularization",
+          "label": "regularization",
+          "direction": "output",
+          "shape": null,
+          "value_type": "RepresentationPenalty {sigreg: float32, variance_floor: float32}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "penalty",
+      "formula": "regularization = {sigreg, variance_floor}"
     }
   ],
   "edges": [
@@ -108220,7 +109527,7 @@
     {
       "id": "detail.328",
       "source": {
-        "node_id": "world.encoder.live.latent",
+        "node_id": "world.encoder.live.latent_norm",
         "port_id": "out"
       },
       "target": {
@@ -110056,7 +111363,7 @@
     {
       "id": "detail.481",
       "source": {
-        "node_id": "world.encoder.replay.latent",
+        "node_id": "world.encoder.replay.latent_norm",
         "port_id": "out"
       },
       "target": {
@@ -110180,7 +111487,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "predictor.recurrent.query.condition",
+        "node_id": "predictor.recurrent.query.memory_summary",
         "port_id": "z"
       },
       "kind": "data"
@@ -110588,7 +111895,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "predictor.recurrent.real.condition",
+        "node_id": "predictor.recurrent.real.memory_summary",
         "port_id": "z"
       },
       "kind": "data"
@@ -110984,7 +112291,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "predictor.recurrent.training.condition",
+        "node_id": "predictor.recurrent.training.memory_summary",
         "port_id": "z"
       },
       "kind": "data"
@@ -114128,7 +115435,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "world.latent_state.live.dynamics.condition",
+        "node_id": "world.latent_state.live.dynamics.memory_summary",
         "port_id": "z"
       },
       "kind": "data"
@@ -114608,7 +115915,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "world.latent_state.replay.dynamics.condition",
+        "node_id": "world.latent_state.replay.dynamics.memory_summary",
         "port_id": "z"
       },
       "kind": "data"
@@ -114980,7 +116287,7 @@
         "port_id": "z"
       },
       "target": {
-        "node_id": "world.model_state.regularizer.projections",
+        "node_id": "world.model_state.regularizer.positions",
         "port_id": "z"
       },
       "kind": "data"
@@ -115048,7 +116355,7 @@
     {
       "id": "detail.897",
       "source": {
-        "node_id": "world.model_state.regularizer.integral",
+        "node_id": "world.model_state.regularizer.penalty",
         "port_id": "regularization"
       },
       "target": {
@@ -121468,8 +122775,8 @@
     {
       "id": "decoder.detail.1432",
       "source": {
-        "node_id": "world.decoder.learning.loss.log_softmax",
-        "port_id": "log_prob"
+        "node_id": "world.decoder.learning.loss.delta_probabilities",
+        "port_id": "delta_log_prob"
       },
       "target": {
         "node_id": "world.decoder.learning.loss.nll",
@@ -136150,6 +137457,306 @@
       "target": {
         "node_id": "world.decoder.learning.readout.block7",
         "port_id": "mask"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2656",
+      "source": {
+        "node_id": "world.encoder.live.latent",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "world.encoder.live.latent_norm",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2657",
+      "source": {
+        "node_id": "world.encoder.replay.latent",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "world.encoder.replay.latent_norm",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2658",
+      "source": {
+        "node_id": "predictor.recurrent.query.memory_summary",
+        "port_id": "summary"
+      },
+      "target": {
+        "node_id": "predictor.recurrent.query.condition",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2659",
+      "source": {
+        "node_id": "predictor.recurrent.real.memory_summary",
+        "port_id": "summary"
+      },
+      "target": {
+        "node_id": "predictor.recurrent.real.condition",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2660",
+      "source": {
+        "node_id": "predictor.recurrent.training.memory_summary",
+        "port_id": "summary"
+      },
+      "target": {
+        "node_id": "predictor.recurrent.training.condition",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2661",
+      "source": {
+        "node_id": "world.latent_state.live.dynamics.memory_summary",
+        "port_id": "summary"
+      },
+      "target": {
+        "node_id": "world.latent_state.live.dynamics.condition",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2662",
+      "source": {
+        "node_id": "world.latent_state.replay.dynamics.memory_summary",
+        "port_id": "summary"
+      },
+      "target": {
+        "node_id": "world.latent_state.replay.dynamics.condition",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2663",
+      "source": {
+        "node_id": "world.representation",
+        "port_id": "encoded_batch"
+      },
+      "target": {
+        "node_id": "world.decoder",
+        "port_id": "encoded_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2664",
+      "source": {
+        "node_id": "world.decoder",
+        "port_id": "encoded_batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning",
+        "port_id": "encoded_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2665",
+      "source": {
+        "node_id": "world.decoder.learning",
+        "port_id": "encoded_batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.targets",
+        "port_id": "encoded_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2666",
+      "source": {
+        "node_id": "world.decoder.learning.targets",
+        "port_id": "encoded_batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.targets.alignment",
+        "port_id": "encoded_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2667",
+      "source": {
+        "node_id": "world.decoder.learning.loss.log_softmax",
+        "port_id": "log_prob"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.loss.delta_probabilities",
+        "port_id": "log_prob"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2668",
+      "source": {
+        "node_id": "world.decoder.learning.loss",
+        "port_id": "batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.loss.delta_probabilities",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2669",
+      "source": {
+        "node_id": "world.decoder.learning.targets",
+        "port_id": "batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.grad",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2670",
+      "source": {
+        "node_id": "world.decoder.learning.grad",
+        "port_id": "latent_gradients"
+      },
+      "target": {
+        "node_id": "world.decoder.learning",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2671",
+      "source": {
+        "node_id": "world.decoder.learning",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world.decoder",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2672",
+      "source": {
+        "node_id": "world.decoder",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world_model",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2673",
+      "source": {
+        "node_id": "world_model",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world.learner",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2674",
+      "source": {
+        "node_id": "world.learner",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world.model_state",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2675",
+      "source": {
+        "node_id": "world.model_state",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world.model_state.objective",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2676",
+      "source": {
+        "node_id": "world.model_state.objective",
+        "port_id": "visual_gradients"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.backward",
+        "port_id": "visual_gradients"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2677",
+      "source": {
+        "node_id": "world.model_state.regularizer.positions",
+        "port_id": "sampled"
+      },
+      "target": {
+        "node_id": "world.model_state.regularizer.projections",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2678",
+      "source": {
+        "node_id": "world.model_state.regularizer.observations",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "world.model_state.regularizer.variance",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2679",
+      "source": {
+        "node_id": "world.model_state.regularizer.integral",
+        "port_id": "regularization"
+      },
+      "target": {
+        "node_id": "world.model_state.regularizer.penalty",
+        "port_id": "sigreg"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "joint.2680",
+      "source": {
+        "node_id": "world.model_state.regularizer.variance",
+        "port_id": "variance_floor"
+      },
+      "target": {
+        "node_id": "world.model_state.regularizer.penalty",
+        "port_id": "variance_floor"
       },
       "kind": "data"
     }
@@ -161371,5 +162978,5 @@
       ]
     }
   ],
-  "incomplete_reason": "Executable phase-one encoder, recurrent residual predictor, independent visual decoder and random SDK curriculum in model/. Actor/critic/goal/reward/imagination training, policy adapters and auxiliary heads are future components. The diagram describes the base profile. No checkpoint tensor bindings or trained-weight claims are supplied."
+  "incomplete_reason": "Executable spatial encoder, recurrent residual predictor, jointly trained visual decoder and random SDK curriculum in model/. Actor/critic/goal/reward/imagination training and auxiliary heads are future components. Base profile; no checkpoint bindings or convergence claim."
 }

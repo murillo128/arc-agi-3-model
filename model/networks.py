@@ -1,4 +1,4 @@
-"""Shared visual encoder, recurrent residual simulator, and independent decoder."""
+"""Shared visual encoder, recurrent residual simulator, and visual decoder."""
 import math
 import torch
 from torch import nn
@@ -64,8 +64,10 @@ class VisualEncoder(nn.Module):
         self.config = c
         self.patch = nn.Linear(c.patch * c.patch * 35, c.width)
         self.blocks = nn.ModuleList(Block(c.width, c.heads) for _ in range(c.encoder_depth))
+        self.spatial_norm = nn.LayerNorm(c.width, eps=1e-6)
         self.temporal = RecurrentCell(c.width, c.animation_memory)
         self.latent = nn.Linear(c.animation_memory, c.latent)
+        self.latent_norm = nn.LayerNorm(c.latent, eps=1e-6)
 
     def spatial(self, features, checkpoint_blocks=False):
         c = self.config
@@ -78,13 +80,14 @@ class VisualEncoder(nn.Module):
         tokens = tokens + positions(h // p, w // p, c.width, tokens.device, tokens.dtype)
         for block in self.blocks:
             tokens = checkpoint(block, tokens, valid, use_reentrant=False) if checkpoint_blocks and self.training else block(tokens, valid)
-        return (tokens * valid[:, :, None]).sum(1) / valid.sum(1, keepdim=True).clamp_min(1)
+        # Retain every patch and its position. No spatial averaging before z.
+        return self.spatial_norm(tokens) * valid[:, :, None]
 
     def aggregate(self, frames):
-        h = frames.new_zeros(1, self.config.animation_memory)
+        h = frames.new_zeros(frames.shape[1], self.config.animation_memory)
         for frame in frames:
-            h = self.temporal(frame[None], h)
-        return self.latent(h)[0].float()
+            h = self.temporal(frame, h)
+        return self.latent_norm(self.latent(h)).float()
 
 
 class Dynamics(nn.Module):
@@ -104,15 +107,19 @@ class Dynamics(nn.Module):
 
     def advance(self, z, h, action):
         a = F.gelu(self.action_norm(self.action_embedding(action)))
-        return self.cell(torch.cat((z, a), -1), h), a
+        # Only the global recurrent context is pooled. The prediction/residual
+        # path retains all spatial tokens unchanged.
+        return self.cell(torch.cat((z.mean(1), a), -1), h), a
 
     def forward(self, z, h, action):
         h_next, a = self.advance(z, h, action)
-        x = torch.stack((self.state_token(z), self.memory_token(h_next), self.action_token(a)), 1) + self.roles
+        x = torch.cat((self.state_token(z) + self.roles[0],
+                       (self.memory_token(h_next) + self.roles[1])[:, None],
+                       (self.action_token(a) + self.roles[2])[:, None]), 1)
         mask = torch.ones(x.shape[:2], dtype=torch.bool, device=x.device)
         for block in self.blocks:
-            x = block(x, mask)
-        delta = self.delta(self.norm(x[:, 0])).float()
+            x = checkpoint(block, x, mask, use_reentrant=False) if self.training else block(x, mask)
+        delta = self.delta(self.norm(x[:, :z.shape[1]])).float()
         return z.float() + delta, h_next.float(), delta
 
 
@@ -130,7 +137,7 @@ class VisualDecoder(nn.Module):
         p = c.patch
         r, col = (height + p - 1) // p, (width + p - 1) // p
         condition = self.latent_projection(z)
-        tokens = condition[:, None] + positions(r, col, c.width, z.device, condition.dtype)
+        tokens = condition + positions(r, col, c.width, z.device, condition.dtype)
         mask = torch.ones((b, r * col), dtype=torch.bool, device=z.device)
         for block in self.blocks:
             tokens = checkpoint(block, tokens, mask, use_reentrant=False) if checkpoint_blocks and self.training else block(tokens, mask)
@@ -178,10 +185,29 @@ class WorldModel(nn.Module):
 
 
 def sigreg(z, slices=1024):
-    """LeJEPA-style ECF regularization over distinct real observations, float32."""
+    """ECF over real observations at matching positions, never mixing positions.
+
+    Uniformly sample at most 16 spatial positions to bound sketch memory. This
+    prevents positional codes alone from masquerading as observation diversity.
+    The 2-D vector case is useful for the independent numerical oracle.
+    """
     z = z.float()
-    directions = F.normalize(torch.randn(z.shape[1], slices, device=z.device), dim=0)
+    if z.ndim == 2:
+        z = z[:, None, :]
+    selected = torch.randperm(z.shape[1], device=z.device)[:16]
+    z = z[:, selected]
+    directions = F.normalize(torch.randn(z.shape[-1], slices, device=z.device), dim=0)
     t = torch.linspace(0, 3, 17, device=z.device)
     projected = (z @ directions)[..., None] * t
     discrepancy = (projected.cos().mean(0) - torch.exp(-t.square() / 2)).square() + projected.sin().mean(0).square()
-    return (torch.trapezoid(discrepancy * torch.exp(-t.square() / 2), t, dim=-1) * z.shape[0]).mean()
+    # Integrand is even: the positive half represents both [-3, 0] and [0, 3].
+    return (2 * torch.trapezoid(discrepancy * torch.exp(-t.square() / 2), t, dim=-1) * z.shape[0]).mean()
+
+
+def variance_floor(z):
+    """VICReg-style variance hinge across observations, separately per position.
+
+    Supplies a stronger restoring gradient near small but nonzero variance than
+    the ECF discrepancy alone. It does not whiten or rescale reported latents.
+    """
+    return F.relu(1 - torch.sqrt(z.float().var(0, correction=0) + 1e-8)).mean()

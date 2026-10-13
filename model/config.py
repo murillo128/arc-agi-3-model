@@ -31,7 +31,8 @@ class NetworkConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
+    variance_weight: float = 10.
     train_every: int = 32
     updates_per_train: int = 1
     batch_episodes: int = 1
@@ -49,6 +50,9 @@ class TrainConfig:
     delta_error: float = 0.01
     latent_delta_mse: float = 0.01
     min_latent_std: float = 0.1
+    collapse_std: float = 0.01
+    collapse_patience: int = 3
+    collapse_after_updates: int = 256
     consecutive_passes: int = 3
     checkpoint_every: int = 1000
     max_level_steps: int = 100_000
@@ -58,7 +62,7 @@ class TrainConfig:
         for k, v in asdict(self).items():
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
-            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std'}:
+            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:

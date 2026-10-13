@@ -13,7 +13,7 @@ from .config import NetworkConfig, TrainConfig
 from .data import Episode, Replay, random_action
 from .environment import Factory
 from .learning import Engine, Learner
-from .metrics import Metrics
+from .metrics import Metrics, delta_counts
 from .networks import WorldModel
 
 
@@ -30,6 +30,7 @@ def validation(engine, factory, levels, seed):
     start = time.monotonic()
     for level in levels:
         metrics, wins, losses, actions = Metrics(), 0, 0, 0
+        reconstruction_wrong, reconstruction_union, reconstruction_transitions = 0, 0, 0
         for index in range(c.validation_episodes):
             episode_seed = 2 * ((seed * 100003 + (level or 0) * 1009 + index) % (2 ** 30)) + 1
             rng = random.Random(episode_seed)
@@ -37,7 +38,7 @@ def validation(engine, factory, levels, seed):
             observation = env.observation
             state = engine.initial(observation)
             if state.z is not None:
-                metrics.observe_latent(state.z.cpu().numpy())
+                metrics.observe_latent(state.z.cpu().numpy(), observation.final.shape)
             for _ in range(c.validation_steps):
                 if observation.terminal:
                     break
@@ -48,10 +49,18 @@ def validation(engine, factory, levels, seed):
                 next_state = engine.observe(state, action, next_observation)
                 after = next_observation.final
                 if next_state.z is not None and after is not None:
-                    metrics.observe_latent(next_state.z.cpu().numpy())
+                    metrics.observe_latent(next_state.z.cpu().numpy(), after.shape)
                 if prediction is not None and after is not None and before.shape == after.shape:
                     metrics.add(before, after, prediction[0], state.z.cpu().numpy(),
                                 next_state.z.cpu().numpy(), prediction[1])
+                    # Diagnostic readout from the REAL successor, evaluated only
+                    # after scoring the causal prediction. Never feed it back.
+                    with torch.no_grad(), engine.autocast():
+                        reconstruction = engine.decode(next_state.z[None], *after.shape).argmax(-1)[0]
+                    wrong, union, _ = delta_counts(before, after, reconstruction.cpu().numpy())
+                    reconstruction_wrong += wrong
+                    reconstruction_union += union
+                    reconstruction_transitions += 1
                 else:
                     metrics.skipped += 1
                 observation, state = next_observation, next_state
@@ -59,14 +68,16 @@ def validation(engine, factory, levels, seed):
             wins += observation.state == 'WIN'
             losses += observation.state == 'GAME_OVER'
         report = metrics.report() | {'passes': metrics.passes(c), 'wins': wins, 'game_overs': losses,
-                                      'actions': actions, 'episodes': c.validation_episodes}
+                                      'actions': actions, 'episodes': c.validation_episodes,
+                                      'decoder_delta_error': reconstruction_wrong / max(1, reconstruction_union),
+                                      'decoder_transitions': reconstruction_transitions}
         results[str(level)] = report
         emit('validation', level=level, **report)
     emit('validation_finished', seconds=round(time.monotonic() - start, 3))
     return results
 
 
-def train(engine, learner, factory, run, progress, rng, output):
+def train(engine, learner, factory, run, progress, rng, output, stop_after_level=False):
     c = engine.config
     replay = Replay(c.replay_episodes, c.replay_bytes)
     levels = run['levels']
@@ -76,9 +87,9 @@ def train(engine, learner, factory, run, progress, rng, output):
     latest_update = None
     reason = 'action_limit'
     try:
-        while progress['actions'] < c.max_steps and progress['level_index'] < len(levels):
+        while (not c.max_steps or progress['actions'] < c.max_steps) and progress['level_index'] < len(levels):
             level = levels[progress['level_index']]
-            if progress['level_actions'] >= c.max_level_steps:
+            if c.max_level_steps and progress['level_actions'] >= c.max_level_steps:
                 reason = 'level_limit_without_convergence'
                 break
             if episode is None:
@@ -111,6 +122,15 @@ def train(engine, learner, factory, run, progress, rng, output):
             if progress['actions'] % c.validate_every == 0:
                 reports = validation(engine, factory, levels[:progress['level_index'] + 1], run['seed'])
                 current = reports[str(level)]
+                progress['healthy_latent_seen'] = progress.get('healthy_latent_seen', False) or current['latent_std'] >= c.min_latent_std
+                monitor_collapse = progress['healthy_latent_seen'] or progress['updates'] >= c.collapse_after_updates
+                progress['collapse_streak'] = (progress.get('collapse_streak', 0) + 1
+                    if monitor_collapse and current['latent_std'] < c.collapse_std else 0)
+                if progress['collapse_streak'] >= c.collapse_patience:
+                    reason = 'encoder_collapsed'
+                    emit('encoder_collapsed', level=level, latent_std=current['latent_std'],
+                         threshold=c.collapse_std, consecutive=progress['collapse_streak'])
+                    break
                 if current['delta_error'] < progress['best_error']:
                     progress['best_error'] = current['delta_error']
                     checkpoint.save(output / 'best.pt', learner, progress, run, rng)
@@ -121,9 +141,13 @@ def train(engine, learner, factory, run, progress, rng, output):
                 if progress['passes'] >= c.consecutive_passes:
                     emit('level_converged', level=level, actions=progress['level_actions'])
                     progress.update(level_index=progress['level_index'] + 1,
-                                    level_actions=0, passes=0, best_error=1.)
+                                    level_actions=0, passes=0, best_error=1., collapse_streak=0,
+                                    healthy_latent_seen=False)
                     # Old real episodes remain in RAM for mixed rehearsal.
                     episode = None
+                    if stop_after_level:
+                        reason = 'level_converged'
+                        break
             if progress['actions'] % c.checkpoint_every == 0:
                 checkpoint.save(output / 'latest.pt', learner, progress, run, rng)
                 emit('checkpoint', path=str(output / 'latest.pt'), actions=progress['actions'])
@@ -152,6 +176,7 @@ def parser():
     p.add_argument('--device', default='auto')
     p.add_argument('--compile', action=argparse.BooleanOptionalAction, default=None)
     p.add_argument('--threads', type=int, default=4)
+    p.add_argument('--stop-after-level', action='store_true', help='Stop after the current level passes all gates')
     for field in fields(TrainConfig):
         p.add_argument('--' + field.name.replace('_', '-'), type=type(field.default), default=None)
     return p
@@ -218,6 +243,7 @@ def main(argv=None):
                 group['lr'] = training.learning_rate
         if overrides:
             progress['passes'] = 0  # previous gates used the saved configuration
+            progress['collapse_streak'] = 0
             progress['best_error'] = 1.
         emit('resumed', **progress, note='Fresh seeded episode and empty RAM replay')
-    train(engine, learner, factory, run, progress, rng, args.output.resolve())
+    train(engine, learner, factory, run, progress, rng, args.output.resolve(), args.stop_after_level)

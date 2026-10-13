@@ -29,16 +29,16 @@ de modo. El rendimiento depende del hardware y de las longitudes de las partidas
 No se afirma que compile siempre sea más rápido; evita recompilar usando la misma
 configuración. Se registra el tiempo total, incluido el arranque, en el progreso.
 
-El modelo **base** tiene 214.139.520 parámetros:
+El modelo **base** tiene 214.143.104 parámetros:
 
 | Componente | Configuración | Parámetros |
 |---|---|---:|
-| Visual encoder | 12 bloques, ancho 768, 12 cabezas, patches 4×4; memoria de animación 1024 | 91.521.792 |
-| Dynamics | Memoria 2048; predictor de 6 bloques, ancho 768; latente 1024 | 64.929.152 |
+| Visual encoder | 12 bloques, ancho 768, 12 cabezas; memoria de animación 1024 por patch | 91.525.376 |
+| Dynamics | Memoria global 2048; predictor de 6 bloques, ancho 768; latente P×1024 | 64.929.152 |
 | Visual decoder | 8 bloques, ancho 768, 12 cabezas; 16 colores | 57.688.576 |
 
 `--profile small --device cpu --no-compile` usa la misma computación con
-74.776 parámetros para desarrollo. No es un sustituto de capacidad equivalente.
+74.872 parámetros para desarrollo. No es un sustituto de capacidad equivalente.
 `--frame-chunk` limita frames por llamada espacial; `--batch-episodes` controla
 cuántas partidas se muestrean como mínimo. El perfil base no se reduce
 automáticamente al encontrar límites de memoria.
@@ -54,19 +54,49 @@ automáticamente al encontrar límites de memoria.
    Los deltas entre frames de una animación forman parte de las entradas del
    encoder, junto con los colores y una máscara de píxeles válidos. El primer
    frame de cada respuesta usa un símbolo absoluto.
-4. Reconstruye la memoria causal `h` desde el inicio de cada partida. El predictor
+4. Conserva **un latente por patch**, `z[P,1024]`, con
+   `P=ceil(H/4)*ceil(W/4)`. Un patch concatena los valores de sus 16 píxeles;
+   no los promedia. No hay pooling espacial del estado. La memoria de animación
+   avanza por posición, y el latente final tiene LayerNorm por patch.
+   Reconstruye la memoria causal global `h` desde el inicio de cada partida. El predictor
    recibe `z_t, h_t, a_t` y calcula `h_(t+1), d_hat_(t+1)`;
    **`z_hat_(t+1) = z_t + d_hat_(t+1)`**, sin normalización posterior a la suma.
-5. Entrena encoder y dynamics con `.98 * MSE(d_hat, z_(t+1)-z_t) + .02 * SIGReg`.
+   Para actualizar `h` se resume `z`, pero los P latentes completos llegan al
+   predictor. Sus tokens son los P patches más uno de memoria y uno de acción.
+5. Entrena encoder y dynamics con `.98 * MSE(d_hat, z_(t+1)-z_t) + .02 * SIGReg
+   + 10 * variance_floor`, además de los gradientes visuales del siguiente paso.
    Ambos latentes reales conservan gradiente. SIGReg usa al menos 32
    observaciones reales distintas, proyecciones aleatorias y cálculo FP32.
-   No hay profesor EMA ni etiquetas tomadas de trayectorias imaginadas.
-6. El decoder recibe `z_hat.detach()`, produce logits de 16 colores por píxel y
-   aprende del tablero final real. Su gradiente no entra al predictor/encoder.
-   La CE equilibra celdas cambiadas y no cambiadas; si ninguna cambia usa CE
-   ordinaria. La salida visual delta compara el tablero decodificado con el
-   tablero anterior: `KEEP=16`, o nuevo color 0…15. Los píxeles del tablero
-   anterior **no entran a la red del decoder**; solo definen geometría y comparación.
+   No hay profesor EMA ni etiquetas tomadas de trayectorias imaginadas. SIGReg
+   integra ambos lados de la función par. Muestrea hasta 16 posiciones, siempre
+   las mismas dentro de un batch de geometría común, y calcula estadísticas
+   **entre observaciones**: distintos códigos de posición no demuestran diversidad.
+   La penalización de varianza es `mean(relu(1-sqrt(var(z,obs)+1e-8)))`, con
+   varianza poblacional por posición/característica. `--variance-weight` controla
+   su peso; no normaliza artificialmente las métricas de validación.
+6. El decoder recibe los P latentes predichos y produce 16 distribuciones de
+   color por patch, una por píxel. La probabilidad del color anterior se asigna
+   a `KEEP=16`; los otros colores indican reemplazos. Compara este **delta
+   predicho con el delta real** mediante NLL, equilibrando celdas cambiadas y
+   no cambiadas. Esa asignación es biyectiva: la NLL equivale a CE de color;
+   cambiar las etiquetas por sí solo no evita el colapso.
+7. El mismo decoder reconstruye también el sucesor desde su latente **real**,
+   con peso 1, igual que la rama predicha. Ambas pérdidas propagan gradiente
+   al encoder; la predicha también al predictor. Los targets son siempre
+   píxeles reales. La reconstrucción permite comprobar que el latente conserva
+   información visual mientras el predictor aprende. No es una predicción causal.
+
+El objetivo total suma las cinco pérdidas anteriores. AdamW usa `lr=1e-4` por
+defecto. Los dos optimizadores conservan conjuntos de parámetros disjuntos,
+pero todas las pérdidas se calculan con los mismos pesos previos a la actualización.
+Para limitar memoria, cada microbatch del decoder acumula gradientes en una hoja
+temporal; al terminar se propagan explícitamente por el grafo original de ambos
+latentes. Ese puente **no corta el gradiente**. Se comprueban y recortan ambos
+conjuntos de gradientes antes de actualizar ningún peso.
+
+Los píxeles del tablero anterior no entran a la red del decoder: solo determinan
+la geometría y la interpretación de sus colores como deltas. La suma residual
+opera por patch y sigue permitiendo imaginar sin generar píxeles.
 
 Los estados recurrentes de validación avanzan con observaciones reales. El
 entrenamiento aleatorio no calcula inferencias en vivo que no va a consumir: las
@@ -130,10 +160,29 @@ Son valores iniciales configurables, no resultados de convergencia demostrados.
 Los eventos JSON de terminal muestran acciones, actualizaciones, pérdidas,
 errores, partidas, acciones/s, memoria GPU máxima y checkpoints. Victorias y
 GAME_OVER se reportan aparte de la calidad predictiva.
+`delta_error` mide la predicción causal; `decoder_delta_error` mide la
+reconstrucción desde el latente real posterior. La segunda se calcula después
+de puntuar la primera y nunca se utiliza para corregirla. `latent_std` mide
+variación entre observaciones de la misma geometría y posición, sin mezclar
+posiciones o tamaños distintos para aparentar diversidad.
 
 Se detiene guardando `latest.pt` al llegar a 100.000 acciones sin converger en
 un nivel, a 500.000 acciones totales, al completar el currículo o con Ctrl+C.
 Los límites se ajustan mediante `--max-level-steps` y `--max-steps`.
+El valor `0` desactiva ese límite. Para una práctica hasta convergencia del nivel
+actual o colapso sostenido:
+
+```sh
+.venv/bin/python -m model train --levels 1 --max-steps 0 --max-level-steps 0 --stop-after-level --output model/runs/practice
+```
+
+Se considera colapso sostenido `latent_std < .01` en tres validaciones seguidas,
+después de haber observado diversidad suficiente (`>= min_latent_std`) o de
+256 actualizaciones de arranque. Los parámetros `--collapse-std`,
+`--collapse-patience` y `--collapse-after-updates` controlan este detector.
+El final y los checkpoints indican `encoder_collapsed`, `level_converged` o
+el límite/interrupción correspondiente. Una varianza alta por sí sola no
+garantiza representaciones útiles: también deben bajar los errores visuales.
 
 ## Checkpoints y validación aislada
 
@@ -150,6 +199,8 @@ empieza una partida nueva con el replay vacío: recupera el entrenamiento, no la
 misma trayectoria a mitad de partida. Los argumentos de entrenamiento dados
 explícitamente sustituyen los guardados y reinician las rachas de aprobación.
 `--output` permite ubicar checkpoints fuera del repositorio.
+Los checkpoints anteriores al estado espacial no son compatibles con esta
+arquitectura: se empieza un entrenamiento nuevo, sin adaptar pesos silenciosamente.
 
 ## Comprobaciones locales
 
@@ -157,8 +208,14 @@ explícitamente sustituyen los guardados y reinician las rachas de aprobación.
 .venv/bin/python -m unittest discover -s model/tests -v
 ```
 
-Comprueban la aritmética del delta, los gradientes separados, la reanudación,
+Comprueban la aritmética/probabilidades del delta, el gradiente visual conjunto,
+la equivalencia entre microbatches, la diversidad entre observaciones, la reanudación,
 la validación congelada y las fronteras reales del SDK. No ejecutan navegador.
 `architecture.json` conserva los IDs del diseño importado y describe el perfil
 base. Declara cobertura parcial para los componentes futuros y no vincula los
 pesos antiguos de LMEX a esta implementación.
+
+Las pérdidas se inspiran en [SIGReg de LeJEPA](https://github.com/galilai-group/lejepa/blob/main/MINIMAL.md)
+y en la [restricción de varianza de VICReg](https://github.com/facebookresearch/vicreg).
+La combinación temporal, el muestreo de posiciones y sus pesos son decisiones
+de esta implementación, no una reproducción de sus resultados publicados.

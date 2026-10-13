@@ -1,4 +1,4 @@
-"""Real-experience JEPA updates; decoder gradients never update the simulator."""
+"""Joint latent dynamics and visual-delta learning from real SDK experience."""
 from contextlib import nullcontext
 from dataclasses import dataclass
 import itertools
@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from .networks import sigreg
+from .networks import sigreg, variance_floor
 from .metrics import visual_delta
 
 
@@ -97,6 +97,34 @@ def optimizer(parameters, learning_rate, cuda):
     ], lr=learning_rate, betas=(.9, .95), eps=1e-8, fused=cuda)
 
 
+def delta_log_probabilities(color_logits, reference):
+    """Canonical 17-way delta: the reference color's probability belongs to KEEP.
+
+    A replacement by the same color is impossible. This is a bijective relabeling
+    of the 16 final colors, so its NLL equals color CE, without a second head.
+    Reference pixels label the output; they never enter the neural decoder.
+    """
+    logp = color_logits.float().log_softmax(-1)
+    keep = logp.gather(-1, reference[..., None])
+    replacements = logp.scatter(-1, reference[..., None], -torch.inf)
+    return torch.cat((replacements, keep), -1)
+
+
+def visual_delta_loss(color_logits, reference, actual):
+    """Per-example real-delta NLL, balancing changed and unchanged pixels."""
+    changed = actual != reference
+    target = torch.where(changed, actual, 16)
+    logp = delta_log_probabilities(color_logits, reference)
+    nll = -logp.gather(-1, target[..., None]).squeeze(-1)
+
+    def mean_where(mask):
+        return (nll * mask).sum((1, 2)) / mask.sum((1, 2)).clamp_min(1)
+
+    changed_count = changed.sum((1, 2))
+    return torch.where((changed_count > 0) & (changed_count < actual.shape[1] * actual.shape[2]),
+                       .5 * (mean_where(changed) + mean_where(~changed)), nll.mean((1, 2)))
+
+
 class Learner:
     def __init__(self, engine):
         self.engine = engine
@@ -113,11 +141,13 @@ class Learner:
         self.model.train()
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=True)
-        real_z, states, memories, actions, targets, boards, references = [], [], [], [], [], [], []
+        real_z, states, memories, actions, targets, boards, references, successors = {}, [], [], [], [], [], [], []
         with e.autocast():
             for episode in episodes:
                 zs = e.encode(episode.observations, training=True)
-                real_z.extend(z for z in zs if z is not None)
+                for obs, z in zip(episode.observations, zs):
+                    if z is not None:
+                        real_z.setdefault(obs.final.shape, []).append(z)
                 h = torch.zeros(1, self.model.config.memory, device=e.device)
                 current = zs[0]
                 first_loss = max(0, len(episode.actions) - c.loss_steps)
@@ -130,48 +160,61 @@ class Learner:
                         memories.append(h[0])
                         actions.append(action)
                         targets.append(next_z - current)
+                        successors.append(next_z)
                         boards.append(after)
                         references.append(before)
                     if current is not None:
                         h, _ = e.advance(current[None], h, e.actions([action]))
                     if next_z is not None:
                         current = next_z
-            if not states or len(real_z) < c.min_observations:
+            if not states or sum(map(len, real_z.values())) < c.min_observations:
                 return None
-            predicted_z, _, delta = e.predict(torch.stack(states), torch.stack(memories), e.actions(actions))
-        with torch.autocast(e.device.type, enabled=False):
-            prediction_loss = F.mse_loss(delta.float(), torch.stack(targets).float())
-            regularization = sigreg(torch.stack(real_z), self.model.config.sigreg_slices)
-            loss = .98 * prediction_loss + .02 * regularization
-        loss.backward()
-        # Decoder uses frozen predicted representations. Balance changed and
-        # unchanged pixels so a large static background cannot dominate learning.
         buckets = {}
         for i, board in enumerate(boards):
             buckets.setdefault(board.shape, []).append(i)
-        decoder_loss = 0.
+        prediction_loss = torch.zeros((), device=e.device)
+        visual_losses = [0., 0.]
+        backward_values, backward_gradients = [], []
         for shape, indices in buckets.items():
-            for start in range(0, len(indices), c.frame_chunk):
-                selected = indices[start:start + c.frame_chunk]
-                actual = torch.tensor(np.stack([boards[i] for i in selected]), device=e.device, dtype=torch.long)
-                before = torch.tensor(np.stack([references[i] for i in selected]), device=e.device, dtype=torch.long)
-                with e.autocast():
-                    logits = e.decode(predicted_z.detach()[selected], *shape, checkpoint_blocks=True)
-                ce = F.cross_entropy(logits.float().permute(0, 3, 1, 2), actual, reduction='none')
-                changed = actual != before
-                def mean_where(mask):
-                    return (ce * mask).sum((1, 2)) / mask.sum((1, 2)).clamp_min(1)
-                changed_count = changed.sum((1, 2))
-                per_frame = torch.where((changed_count > 0) & (changed_count < actual.shape[1] * actual.shape[2]),
-                    .5 * (mean_where(changed) + mean_where(~changed)), ce.mean((1, 2)))
-                part_loss = per_frame.sum() / len(boards)
-                part_loss.backward()
-                decoder_loss += float(part_loss.detach())
+            with e.autocast():
+                predicted_z, _, delta = e.predict(torch.stack([states[i] for i in indices]),
+                    torch.stack([memories[i] for i in indices]), e.actions([actions[i] for i in indices]))
+            prediction_loss = prediction_loss + len(indices) / len(states) * F.mse_loss(
+                delta.float(), torch.stack([targets[i] for i in indices]).float())
+            real_successors = torch.stack([successors[i] for i in indices])
+            # Each decoder microbatch releases its graph; accumulated latent
+            # gradients are explicitly propagated through BOTH source branches.
+            decoder_inputs = torch.cat((predicted_z, real_successors)).detach().requires_grad_(True)
+            for branch in (0, 1):
+                for start in range(0, len(indices), c.frame_chunk):
+                    selected = indices[start:start + c.frame_chunk]
+                    actual = torch.tensor(np.stack([boards[i] for i in selected]), device=e.device, dtype=torch.long)
+                    before = torch.tensor(np.stack([references[i] for i in selected]), device=e.device, dtype=torch.long)
+                    offset = branch * len(indices) + start
+                    with e.autocast():
+                        logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
+                                          checkpoint_blocks=True)
+                    part_loss = visual_delta_loss(logits, before, actual).sum() / len(boards)
+                    part_loss.backward()
+                    visual_losses[branch] += float(part_loss.detach())
+            backward_values.extend((predicted_z, real_successors))
+            backward_gradients.extend(decoder_inputs.grad.chunk(2))
+        # Match positions only within the same native canvas geometry. A single
+        # observation cannot establish diversity, regardless of patch count.
+        eligible = [zs for zs in real_z.values() if len(zs) >= 2]
+        count = sum(map(len, eligible))
+        regularization = sum(len(zs) * sigreg(torch.stack(zs), self.model.config.sigreg_slices)
+                             for zs in eligible) / count if count else prediction_loss * 0
+        variance = sum(len(zs) * variance_floor(torch.stack(zs)) for zs in eligible) / count if count else prediction_loss * 0
+        loss = .98 * prediction_loss + .02 * regularization + c.variance_weight * variance
+        torch.autograd.backward((loss, *backward_values), (None, *backward_gradients))
         # Validate both gradient sets before either optimizer mutates weights.
         norms = [torch.nn.utils.clip_grad_norm_(p, 1., error_if_nonfinite=True)
                  for p in (self.primary, self.visual)]
         for opt in self.optimizers:
             opt.step()
-        return {'loss': float(loss.detach()), 'latent_mse': float(prediction_loss.detach()),
-                'sigreg': float(regularization.detach()), 'decoder_ce': decoder_loss,
+        return {'loss': float(loss.detach()) + sum(visual_losses), 'latent_mse': float(prediction_loss.detach()),
+                'sigreg': float(regularization.detach()), 'decoder_ce': visual_losses[0],
+                'variance_floor': float(variance.detach()),
+                'reconstruction_ce': visual_losses[1],
                 'gradient_norm': float(norms[0]), 'samples': len(states)}

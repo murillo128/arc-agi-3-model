@@ -29,19 +29,21 @@ class Metrics:
     union: int = 0
     latent_squared: float = 0.
     latent_elements: int = 0
-    latent_n: int = 0
-    latent_sum: np.ndarray | None = field(default=None, repr=False)
-    latent_squares: np.ndarray | None = field(default=None, repr=False)
+    latent_n: dict = field(default_factory=dict, repr=False)
+    latent_sum: dict = field(default_factory=dict, repr=False)
+    latent_squares: dict = field(default_factory=dict, repr=False)
     skipped: int = 0
 
-    def observe_latent(self, z):
+    def observe_latent(self, z, geometry=None):
         z = np.asarray(z, dtype=np.float64)
-        if self.latent_sum is None:
-            self.latent_sum = np.zeros_like(z)
-            self.latent_squares = np.zeros_like(z)
-        self.latent_n += 1
-        self.latent_sum += z
-        self.latent_squares += z * z
+        key = (geometry, z.shape)
+        if key not in self.latent_n:
+            self.latent_n[key] = 0
+            self.latent_sum[key] = np.zeros_like(z)
+            self.latent_squares[key] = np.zeros_like(z)
+        self.latent_n[key] += 1
+        self.latent_sum[key] += z
+        self.latent_squares[key] += z * z
 
     def add(self, before, actual, predicted, z_before, z_after, predicted_delta):
         wrong, union, changed = delta_counts(before, actual, predicted)
@@ -54,12 +56,14 @@ class Metrics:
         self.latent_elements += error.size
 
     def report(self):
-        variance = (self.latent_squares / self.latent_n - (self.latent_sum / self.latent_n) ** 2
-                    if self.latent_n else np.array([0.]))
+        spread = 0.
+        for key, count in self.latent_n.items():
+            variance = self.latent_squares[key] / count - (self.latent_sum[key] / count) ** 2
+            spread += count * float(np.sqrt(np.maximum(variance, 0)).mean())
         return {'transitions': self.transitions, 'changed_transitions': self.changed_transitions,
                 'delta_error': self.wrong / max(1, self.union),
                 'latent_delta_mse': self.latent_squared / max(1, self.latent_elements),
-                'latent_std': float(np.sqrt(np.maximum(variance, 0)).mean()),
+                'latent_std': spread / max(1, sum(self.latent_n.values())),
                 'skipped': self.skipped}
 
     def passes(self, config):

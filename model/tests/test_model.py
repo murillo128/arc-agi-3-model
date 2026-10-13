@@ -7,6 +7,7 @@ import random
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -15,9 +16,9 @@ from model import checkpoint
 from model.config import NetworkConfig, TrainConfig
 from model.data import Action, Episode, Observation, Replay, frame_features
 from model.environment import Factory
-from model.learning import Engine, Learner
+from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss
 from model.metrics import Metrics, delta_counts
-from model.networks import WorldModel
+from model.networks import WorldModel, sigreg, variance_floor
 from model.runner import main, validation
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,11 +80,11 @@ class NumericalTests(unittest.TestCase):
         metrics.changed_transitions = 0
         self.assertFalse(metrics.passes(self.config))
 
-    def test_residual_identity_and_decoder_gradient_boundary(self):
-        z = torch.randn(2, 16, requires_grad=True)
+    def test_residual_identity_action_conditioning_and_readout(self):
+        z = torch.randn(2, 4, 16, requires_grad=True)
         h = torch.zeros(2, 32)
         with torch.no_grad():
-            action_states, _, _ = self.model.dynamics(z[:1].expand(2, -1), h,
+            action_states, _, _ = self.model.dynamics(z[:1].expand(2, -1, -1), h,
                 self.engine.actions([Action(1), Action(4)]))
         self.assertFalse(torch.allclose(action_states[0], action_states[1], atol=1e-8, rtol=0))
         with torch.no_grad():
@@ -92,12 +93,11 @@ class NumericalTests(unittest.TestCase):
         z_hat, _, delta = self.model.dynamics(z, h, self.engine.actions([Action(1), Action(4)]))
         torch.testing.assert_close(z_hat, z, rtol=0, atol=0)
         self.assertEqual(delta.count_nonzero(), 0)
-        logits = self.model.decoder(z_hat.detach(), 5, 7)
+        logits = self.model.decoder(z_hat, 5, 7)
         self.assertEqual(tuple(logits.shape), (2, 5, 7, 16))
         logits.square().mean().backward()
-        self.assertIsNone(z.grad)
-        self.assertTrue(all(p.grad is None for p in self.model.encoder.parameters()))
-        self.assertTrue(all(p.grad is None for p in self.model.dynamics.parameters()))
+        self.assertGreater(float(z.grad.abs().sum()), 0.)
+        self.assertGreater(float(self.model.dynamics.delta.weight.grad.abs().sum()), 0.)
         self.assertTrue(any(p.grad is not None and p.grad.count_nonzero() for p in self.model.decoder.parameters()))
 
     def test_update_changes_all_three_networks_and_checkpoint_resumes(self):
@@ -116,6 +116,7 @@ class NumericalTests(unittest.TestCase):
             checkpoint.restore(payload, restored, rng)
             for a, b in zip(self.model.parameters(), restored.model.parameters()):
                 torch.testing.assert_close(a, b, rtol=0, atol=0)
+
             self.assertEqual(payload['progress']['actions'], 4)
             self.assertEqual(rng.random(), random.Random(91).random())
             self.assertNotIn('replay', payload)
@@ -125,6 +126,77 @@ class NumericalTests(unittest.TestCase):
             restored.update([episode()])
             for a, b in zip(self.model.parameters(), restored.model.parameters()):
                 torch.testing.assert_close(a, b, rtol=0, atol=0)
+
+    def test_visual_targets_train_encoder_and_predictor(self):
+        # Isolate supervision from real pixels: neither latent alignment nor
+        # distribution regularization may account for these gradients.
+        with patch('model.learning.F.mse_loss', side_effect=lambda x, y: x.sum() * 0), \
+                patch('model.learning.sigreg', side_effect=lambda z, slices: z.sum() * 0), \
+                patch('model.learning.variance_floor', side_effect=lambda z: z.sum() * 0):
+            Learner(self.engine).update([episode()])
+        for component in (self.model.encoder, self.model.dynamics, self.model.decoder):
+            magnitude = sum(float(p.grad.abs().sum()) for p in component.parameters() if p.grad is not None)
+            self.assertGreater(magnitude, 1e-8)
+
+    def test_delta_probability_labels_and_balanced_nll(self):
+        # Each pixel has independently specified probabilities: color 0=.25,
+        # color 1=.50, remaining colors share .25. Three KEEP, one replacement.
+        probabilities = torch.tensor([.25, .5] + [.25 / 14] * 14)
+        logits = probabilities.log().expand(1, 2, 2, 16).clone().requires_grad_(True)
+        before = torch.tensor([[[0, 1], [0, 1]]])
+        actual = torch.tensor([[[0, 0], [0, 1]]])
+        delta = delta_log_probabilities(logits, before).exp()
+        torch.testing.assert_close(delta.sum(-1), torch.ones(1, 2, 2))
+        torch.testing.assert_close(delta[..., 16], torch.tensor([[[.25, .5], [.25, .5]]]))
+        self.assertEqual(float(delta.gather(-1, before[..., None]).sum()), 0.)
+        expected = .5 * (-np.log(.25) + (-2 * np.log(.25) - np.log(.5)) / 3)
+        loss = visual_delta_loss(logits, before, actual)
+        self.assertAlmostEqual(float(loss.detach()[0]), expected, places=6)
+        loss.sum().backward()
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        # No-change and all-change boundaries use ordinary mean NLL.
+        for target in (before, 1 - before):
+            expected = torch.nn.functional.cross_entropy(logits.permute(0, 3, 1, 2), target)
+            torch.testing.assert_close(visual_delta_loss(logits, before, target)[0], expected)
+
+    def test_sigreg_integrates_both_sides_of_even_statistic(self):
+        t = np.linspace(-3, 3, 33)
+        phi = np.exp(-t ** 2 / 2)
+        # For four zero vectors the empirical characteristic function is 1.
+        expected = 4 * np.trapezoid((1 - phi) ** 2 * phi, t)
+        self.assertAlmostEqual(float(sigreg(torch.zeros(4, 16), 32)), expected, places=6)
+
+    def test_position_codes_cannot_fake_observation_diversity(self):
+        positional = torch.arange(64).reshape(1, 4, 16).float().expand(8, -1, -1)
+        self.assertAlmostEqual(float(variance_floor(positional)), .9999, places=6)
+        metrics = Metrics()
+        for _ in range(8):
+            metrics.observe_latent(positional[0].numpy(), (8, 8))
+            metrics.observe_latent(np.ones((6, 16)), (8, 12))
+        self.assertEqual(metrics.report()['latent_std'], 0.)
+        # A small real observation difference must receive a restoring gradient.
+        z = torch.tensor([-0.001, 0.001]).reshape(2, 1, 1).requires_grad_(True)
+        variance_floor(z).backward()
+        self.assertGreater(float(z.grad[0]), 0.)
+        self.assertLess(float(z.grad[1]), 0.)
+
+    def test_joint_backward_is_independent_of_decoder_chunking(self):
+        gradients = []
+        for chunk in (1, 4):
+            model = WorldModel(NetworkConfig.small())
+            model.load_state_dict(self.model.state_dict())
+            engine = Engine(model, replace(self.config, frame_chunk=chunk))
+            # Hold encoder batching fixed: this tests the decoder VJP bridge,
+            # not FP32 batch-GEMM rounding amplified by the variance hinge.
+            engine.encode = lambda observations, training=False: model.encode(
+                observations, engine.spatial, chunk=4, checkpoint_blocks=training)
+            learner = Learner(engine)
+            torch.manual_seed(51)
+            learner.update([episode()])
+            gradients.append({n: p.grad.clone() for n, p in model.named_parameters()})
+        for name in gradients[0]:
+            torch.testing.assert_close(gradients[0][name], gradients[1][name], rtol=2e-4, atol=1e-6,
+                                       msg=lambda message: name + ': ' + message)
 
     def test_short_episodes_can_train_without_crossing_boundaries(self):
         replay = Replay(4)
@@ -162,6 +234,27 @@ class NumericalTests(unittest.TestCase):
 
 
 class SDKTests(unittest.TestCase):
+    def test_unlimited_practice_stops_on_sustained_collapse_or_level_pass(self):
+        # Only validation verdicts are controlled; the CLI, SDK interaction and
+        # checkpoint/final stop path are real. This does not assert convergence.
+        for passes, spreads, reason, actions in (
+            (False, [.2, .001, .001, .001], 'encoder_collapsed', 4),
+            (True, [.2, .2, .2], 'level_converged', 3),
+        ):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                reports = [{'1': {'passes': passes, 'delta_error': .001, 'latent_std': std}} for std in spreads]
+                output = io.StringIO()
+                with redirect_stdout(output), patch('model.runner.validation', side_effect=reports):
+                    main(['train', '--profile', 'small', '--device', 'cpu', '--no-compile',
+                          '--levels', '1', '2', '--max-steps', '0', '--max-level-steps', '0',
+                          '--stop-after-level', '--validate-every', '1', '--output', directory])
+                import json
+                stopped = json.loads(output.getvalue().splitlines()[-1])
+                self.assertEqual(stopped['reason'], reason)
+                self.assertEqual(stopped['actions'], actions)
+                saved = checkpoint.load(Path(directory) / 'latest.pt')
+                self.assertEqual(saved['progress']['actions'], actions)
+
     def test_isolated_level_fresh_seed_and_native_terminal_frame(self):
         # Independent environment-side reference is used only in this test.
         sys.path.insert(0, str(ROOT / 'tests'))
