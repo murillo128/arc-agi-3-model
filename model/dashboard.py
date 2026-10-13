@@ -24,9 +24,10 @@ PROGRESS_KEYS = ('actions', 'updates', 'episodes', 'level_index', 'level_actions
 LOSS_KEYS = ('loss', 'latent_mse', 'sigreg', 'variance_floor', 'decoder_ce',
              'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm', 'samples', 'seconds')
 VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'latent_std',
-                   'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs')
+                   'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs',
+                   'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')
 CONFIG_KEYS = ('learning_rate', 'validate_every', 'consecutive_passes', 'delta_error',
-               'latent_delta_mse', 'min_latent_std', 'collapse_std')
+               'latent_delta_mse', 'min_latent_std', 'collapse_std', 'false_change_weight')
 STATISTICS_KEYS = ('actions', 'updates', 'episodes', 'level_actions', 'elapsed_seconds', 'actions_per_second',
                    'trained_transitions', 'trained_transitions_per_second')
 

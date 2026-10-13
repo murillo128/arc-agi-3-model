@@ -77,7 +77,9 @@ class DashboardTests(unittest.TestCase):
             stream.write(b'544,"updates":64,"level":2}\n')
         for level, error in ((1, .2), (2, .4)):
             self.append({'event': 'validation', 'level': level, 'actions': 17, 'episodes': 8,
-                         'delta_error': error, 'decoder_delta_error': .1, 'passes': False})
+                         'delta_error': error, 'decoder_delta_error': .1, 'passes': False,
+                         'extra_changes': 12, 'missed_changes': 0,
+                         'wrong_replacement_colors': 3, 'correct_changes': 40})
         result = self.monitor.snapshot()
         self.assertEqual(result['progress']['actions'], 544)
         self.assertEqual(result['progress']['episodes'], 23)
@@ -85,6 +87,9 @@ class DashboardTests(unittest.TestCase):
                           for r in result['validations']], [(1, 544, 64, .2), (2, 544, 64, .4)])
         self.assertEqual(result['validations'][1]['validation_actions'], 17)
         self.assertEqual(result['validations'][1]['validation_episodes'], 8)
+        self.assertEqual({k: result['validations'][1][k] for k in (
+            'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')},
+            {'extra_changes': 12, 'missed_changes': 0, 'wrong_replacement_colors': 3, 'correct_changes': 40})
         self.assertEqual(result['run']['training']['delta_error'], .01)
 
     def test_restart_append_truncate_regrow_and_file_replacement(self):

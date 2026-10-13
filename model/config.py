@@ -49,6 +49,7 @@ class TrainConfig:
     sigreg_weight: float = .002
     local_reconstruction_weight: float = 1.
     delta_overlap_weight: float = 1.
+    false_change_weight: float = 1.
     variance_weight: float = 10.
     train_every: int = 1
     updates_per_train: int = 1

@@ -50,6 +50,10 @@ class Metrics:
     changed_transitions: int = 0
     wrong: int = 0
     union: int = 0
+    missed_changes: int = 0
+    extra_changes: int = 0
+    wrong_replacement_colors: int = 0
+    correct_changes: int = 0
     latent_squared: float = 0.
     latent_elements: int = 0
     latent_n: dict = field(default_factory=dict, repr=False)
@@ -74,6 +78,11 @@ class Metrics:
         self.changed_transitions += bool(changed)
         self.wrong += wrong
         self.union += union
+        real_change, predicted_change = actual != before, predicted != before
+        self.missed_changes += int((real_change & ~predicted_change).sum())
+        self.extra_changes += int((~real_change & predicted_change).sum())
+        self.wrong_replacement_colors += int((real_change & predicted_change & (actual != predicted)).sum())
+        self.correct_changes += int((real_change & (actual == predicted)).sum())
         error = np.asarray(predicted_delta, dtype=np.float64) - (z_after - z_before)
         self.latent_squared += float(np.square(error).sum())
         self.latent_elements += error.size
@@ -85,6 +94,8 @@ class Metrics:
             spread += count * float(np.sqrt(np.maximum(variance, 0)).mean())
         return {'transitions': self.transitions, 'changed_transitions': self.changed_transitions,
                 'delta_error': self.wrong / max(1, self.union),
+                'missed_changes': self.missed_changes, 'extra_changes': self.extra_changes,
+                'wrong_replacement_colors': self.wrong_replacement_colors, 'correct_changes': self.correct_changes,
                 'latent_delta_mse': self.latent_squared / max(1, self.latent_elements),
                 'latent_std': spread / max(1, sum(self.latent_n.values())),
                 'skipped': self.skipped}

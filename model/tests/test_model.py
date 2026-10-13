@@ -211,6 +211,20 @@ class NumericalTests(unittest.TestCase):
         self.assertEqual(features[1, 16 + 16, 0, 0], 1.)  # KEEP
         self.assertEqual(features[:, :, 5:, :].sum(), 0.)
 
+    def test_delta_error_decomposition_counts_distinct_failures(self):
+        before = np.zeros((1, 5), dtype=np.uint8)
+        actual = np.array([[0, 1, 2, 3, 0]])
+        predicted = np.array([[0, 0, 4, 3, 5]])
+        metrics = Metrics()
+        for _ in range(2):
+            metrics.add(before, actual, predicted, np.zeros(1), np.zeros(1), np.zeros(1))
+        result = metrics.report()
+        for key in ('missed_changes', 'extra_changes', 'wrong_replacement_colors', 'correct_changes'):
+            self.assertEqual(result[key], 2)
+        self.assertEqual(result['delta_error'], .75)
+        self.assertEqual(metrics.wrong, 6)
+        self.assertEqual(metrics.union, 8)
+
     def test_gate_requires_coverage_and_noncollapsed_latents(self):
         metrics = Metrics()
         before, after = np.zeros((2, 2)), np.ones((2, 2))
@@ -370,6 +384,40 @@ class NumericalTests(unittest.TestCase):
         self.assertEqual(result['static_color_error'], .5)
         self.assertEqual(result['changed_color_error'], 0.)
         self.assertEqual(result['by_color']['1'], {'pixels': 1, 'error': 1.})
+
+    def test_false_change_cost_preserves_missed_change_gradients(self):
+        before = torch.zeros(1, 1, 4, dtype=torch.long)
+        actual = torch.tensor([[[0, 0, 0, 1]]])
+        probabilities = torch.tensor([.5, .25] + [.25 / 14] * 14)
+        for target, expected, weights in (
+            (actual, .5 * (-2 * np.log(.5) - np.log(.25)), (1 / 3, 1 / 3, 1 / 3, .5)),
+            (before, -2 * np.log(.5), (.5,) * 4),
+            (torch.ones_like(before), -np.log(.25), (.25,) * 4),
+        ):
+            with self.subTest(target=target.tolist()):
+                logits = probabilities.log().expand(1, 1, 4, 16).clone().requires_grad_(True)
+                loss = visual_delta_loss(logits, before, target, false_change_weight=2.)
+                self.assertAlmostEqual(float(loss.detach()[0]), expected, places=6)
+                loss.sum().backward()
+                # Independent CE derivative: coefficient * (p - one_hot(label)).
+                for index, (color, weight) in enumerate(zip(target.flatten().tolist(), weights)):
+                    expected_gradient = weight * probabilities.clone()
+                    expected_gradient[color] -= weight
+                    torch.testing.assert_close(logits.grad[0, 0, index], expected_gradient)
+        for weight in (0., -1., float('nan'), float('inf')):
+            with self.assertRaises(ValueError):
+                TrainConfig(false_change_weight=weight)
+
+    def test_false_change_weight_only_changes_predictive_objective(self):
+        candidate = WorldModel(NetworkConfig.small())
+        candidate.load_state_dict(self.model.state_dict())
+        weighted = Engine(candidate, replace(self.config, false_change_weight=2.))
+        baseline = Learner(self.engine).update([episode()])
+        result = Learner(weighted).update([episode()])
+        self.assertGreater(result['decoder_ce'], baseline['decoder_ce'])
+        for key in ('reconstruction_ce', 'local_reconstruction_ce', 'decoder_overlap',
+                    'reconstruction_overlap', 'local_reconstruction_overlap', 'latent_mse'):
+            self.assertAlmostEqual(result[key], baseline[key], places=6)
 
     def test_sigreg_integrates_both_sides_of_even_statistic(self):
         t = np.linspace(-3, 3, 33)

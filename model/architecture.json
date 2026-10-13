@@ -35992,7 +35992,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Joint real-delta NLL of predicted and reconstructed real successors. Each branch weight is 1. Changed/static groups have equal mass; real-color frequency weights inside each group protect small static details without privileging game objects or colors. Argmax metrics are not differentiated. Add a differentiable delta-union surrogate; NLL remains to supply strong gradients before useful predictions emerge.",
+      "description": "Joint real-delta NLL of predicted and reconstructed real successors. Changed/static groups have equal mass by default; pixels have equal weight within each group, without color-frequency weighting. Configurable false_change_weight scales only the static-pixel NLL of the causal prediction branch; reconstruction branches and real-change cost remain unchanged. Add the differentiable delta-union surrogate. Argmax validation is not differentiated.",
       "children": [
         "world.decoder.learning.loss.unpack",
         "world.decoder.learning.loss.log_softmax",
@@ -51577,7 +51577,7 @@
       "id": "world.decoder.learning.loss.mean",
       "parent_id": "world.decoder.learning.loss",
       "kind": "operation",
-      "label": "Color-balanced Delta Mean",
+      "label": "Changed / Static Delta Mean",
       "ports": [
         {
           "id": "nll",
@@ -51628,11 +51628,15 @@
         {
           "name": "delta_overlap_weight",
           "value": 1.0
+        },
+        {
+          "name": "false_change_weight",
+          "value": 1.0
         }
       ],
-      "description": "Separate changed/static groups using real before/after pixels. Average NLL equally over the pixels in each group, without color-frequency weighting, then average the nonempty groups. Chunked accumulation preserves the exact mean. Add the soft delta-union error to penalize invented changes relative to the size of the real delta.",
+      "description": "For both nonempty groups, NLL = 0.5 * (mean_changed + static_weight * mean_static). A sole changed group uses its mean; a sole static group uses static_weight * its mean. static_weight = configured false_change_weight for causal predictions and 1 for real reconstruction. No color or region weights. Chunked accumulation preserves frame means. Add the unchanged soft delta-union term. Default false_change_weight=1; each checkpoint records its experimental value.",
       "operation": "mean",
-      "formula": "loss = sum_branches(mean_frames(pixel_mean_delta_nll(nll, batch, changed_weight))) + delta_overlap_weight * overlap"
+      "formula": "loss = sum_branches(mean_frames(pixel_mean_delta_nll(nll, batch, static_weight=prediction ? false_change_weight : 1))) + delta_overlap_weight * overlap"
     },
     {
       "id": "world.decoder.learning.optimizer.finite",
@@ -51959,7 +51963,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Report predicted-delta and reconstruction NLL separately. Frozen validation reports delta errors plus color-macro, static color-macro and changed color-macro errors for both branches, per-color pixel counts/errors, and across-observation latent spread. No game objects, colors or private rules are privileged. Training reports NLL and weighted soft delta-union terms independently for all three readout branches.",
+      "description": "Report predicted-delta and reconstruction NLL separately. Frozen validation reports delta errors plus color-macro, static color-macro and changed color-macro errors for both branches, per-color pixel counts/errors, and across-observation latent spread. No game objects, colors or private rules are privileged. Training reports NLL and weighted soft delta-union terms independently for all three readout branches. Frozen prediction validation also counts extra_changes, missed_changes, wrong_replacement_colors and correct_changes; wrong/union and curriculum gates are unchanged.",
       "operation": "metrics",
       "formula": "record_decoder_fit_metrics(logits, batch, loss)"
     },

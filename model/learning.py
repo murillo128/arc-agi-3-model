@@ -141,8 +141,8 @@ def delta_log_probabilities(color_logits, reference):
     return torch.cat((replacements, keep), -1)
 
 
-def visual_delta_loss(color_logits, reference, actual):
-    """Balance changed/static groups; weight pixels equally within each group."""
+def visual_delta_loss(color_logits, reference, actual, false_change_weight=1.):
+    """Scale static NLL without reducing changed NLL or weighting colors."""
     changed = actual != reference
     target = torch.where(changed, actual, 16)
     logp = delta_log_probabilities(color_logits, reference)
@@ -153,7 +153,8 @@ def visual_delta_loss(color_logits, reference, actual):
 
     changed_count = changed.sum((1, 2))
     return torch.where((changed_count > 0) & (changed_count < actual.shape[1] * actual.shape[2]),
-                       .5 * (mean_where(changed) + mean_where(~changed)), mean_where(torch.ones_like(changed)))
+                       .5 * (mean_where(changed) + false_change_weight * mean_where(~changed)),
+                       torch.where(changed_count == 0, false_change_weight, 1.) * mean_where(torch.ones_like(changed)))
 
 
 def soft_delta_error(color_logits, reference, actual):
@@ -251,7 +252,8 @@ class Learner:
                     with e.autocast():
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
                                           checkpoint_blocks=True)
-                    part_loss = visual_delta_loss(logits, before, actual).sum() / len(boards)
+                    part_loss = visual_delta_loss(logits, before, actual,
+                        c.false_change_weight if branch == 0 else 1.).sum() / len(boards)
                     overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
                     (part_loss + overlap).backward()
                     visual_losses[branch] += float(part_loss.detach())

@@ -104,7 +104,7 @@ class Chart {
     this.tip.textContent = lines.join('\n'); this.tip.hidden = false;
   }
 }
-const charts = Object.fromEntries(['delta', 'loss', 'speed', 'spread', 'latent', 'total'].map(id => [id, new Chart(id)]));
+const charts = Object.fromEntries(['delta', 'changes', 'loss', 'speed', 'spread', 'latent', 'total'].map(id => [id, new Chart(id)]));
 
 function render(data) {
   const p = data.progress, run = data.run, config = run.training || {};
@@ -186,6 +186,13 @@ function drawCharts(currentLevel) {
   const validation = state.validations.filter(row => row.level === level && finite(row.actions) && row.actions >= cutoff);
   const series = (name, rows, value) => ({name, points: rows.map(row => ({x: row.actions, y: value(row)}))});
   charts.delta.set([series('Predictor', validation, r => percentValue(r.delta_error)), series('Decoder · latente real', validation, r => percentValue(r.decoder_delta_error))], percentValue(config.delta_error), ' %');
+  const changeSeries = [['Inventados', 'extra_changes'], ['Omitidos', 'missed_changes'],
+    ['Color incorrecto', 'wrong_replacement_colors'], ['Acertados', 'correct_changes']];
+  charts.changes.set(changeSeries.map(([name, key]) => series(name, validation, r => r[key])), undefined, ' px');
+  const detailed = validation.at(-1);
+  $('changes-summary').textContent = detailed && changeSeries.every(([, key]) => finite(detailed[key]))
+    ? `Última validación · ${fmt(detailed.validation_actions)} acciones: ${changeSeries.map(([name, key]) => `${name.toLowerCase()} ${fmt(detailed[key])}`).join(' · ')}.`
+    : 'Esperando una validación con desglose de errores; los registros anteriores no contienen estos datos.';
   charts.loss.set([series('Predictor', progress, r => r.loss?.decoder_ce), series('Reconstrucción', progress, r => r.loss?.reconstruction_ce), series('Reconstrucción local', progress, r => r.loss?.local_reconstruction_ce)]);
   charts.speed.set([series(state.run.statistics_origin === 'after_first_action' ? 'Media desde el punto limpio' : 'Media del proceso', progress, r => r.actions_per_second)]);
   charts.spread.set([series('Diversidad observada', validation, r => r.latent_std)], config.min_latent_std);

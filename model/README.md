@@ -162,6 +162,13 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    no cambiadas. Cada grupo aporta la mitad de la pérdida cuando ambos están
    presentes; dentro de cada grupo todos los píxeles pesan igual, sin ponderar
    por frecuencia de color. Si solo hay un grupo, usa su media ordinaria.
+   `--false-change-weight` (1 por defecto) multiplica exclusivamente la NLL de
+   las celdas estáticas de la **rama de predicción**. Por ejemplo, 2 duplica esa
+   contribución sin reducir la de los cambios reales; no modifica las ramas de
+   reconstrucción, el término de unión ni los umbrales de validación. Es una
+   opción experimental: reducir cambios inventados no demuestra una mejora si
+   a cambio se omiten más cambios reales. La validación informa por separado
+   `extra_changes`, `missed_changes`, `wrong_replacement_colors` y `correct_changes`.
    Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
    Añade un término diferenciable de error sobre la unión de deltas: si `c` es
