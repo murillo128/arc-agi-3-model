@@ -19,5 +19,10 @@ arc3-evaluate = "arc3.evaluation.run:main"
 arc3-build-kaggle = "arc3.kaggle.build:main"
 arc3-validate-trace = "arc3.traces.__main__:main"
 
+[tool.setuptools.package-dir]
+"" = "src"
+games = "games"
+
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["src", "."]
+include = ["arc3*", "games"]

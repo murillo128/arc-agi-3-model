@@ -12,6 +12,18 @@ Compression/map ordering is not canonical, so different interoperable encodings
 need not reproduce this fixture's compressed bytes. Do not refresh it to match
 an implementation change.
 
+## Square Cross pre-split fingerprints
+
+`square_cross_seed_baseline.json` freezes scene/frame SHA-256 digests captured
+from revision `7411e2f855eccc74332b6602ebf112fe5781bdc8` before issue #31's split,
+using Python 3.12, `arc-agi==0.9.9` and `arcengine==0.9.3`. For each historical
+level, seeds 0–63 are concatenated in order: compact JSON of `list(game.scene)`
+with separators `(',', ':')`, followed by the native initial frame's bytes.
+`tests/square_cross_support.py` checks basic levels 1–5 and the transferred local
+levels 1–3 against these fixed values. These digests protect seed/colour/HUD/budget
+and pixel compatibility; independent literal fixtures and pixel-footprint BFS
+still own gameplay expectations. Do not regenerate them to match new behavior.
+
 ## Stored recorder acceptance samples
 
 Three original synthetic `.arc3` files total **1,354 bytes**. Their SHA-256

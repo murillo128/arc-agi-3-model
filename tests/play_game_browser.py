@@ -258,7 +258,7 @@ def check_viewport(page, url, name):
     assert reset["frame"] == initial["frame"]
     # Presentation-only response fixtures cover badge updates and WIN without adding a UI solver.
     # Real multi-level/win SDK lifecycle proof remains in test_square_cross.py.
-    for completed, total, state in ((1, 8, "NOT_FINISHED"), (8, 8, "WIN"), (0, 0, "NOT_FINISHED")):
+    for completed, total, state in ((1, 5, "NOT_FINISHED"), (5, 5, "WIN"), (0, 0, "NOT_FINISHED")):
         fixture = dict(initial, levels_completed=completed, win_levels=total, state=state)
         page.route("**/play/state", lambda route: route.fulfill(json=fixture))
         page.reload()
@@ -313,7 +313,8 @@ def check_switching(page, url, name):
     picker = page.get_by_role('combobox', name='Choose game')
     expect(picker).to_be_enabled()
     assert picker.bounding_box()['height'] >= 44
-    expect(page.locator('optgroup[label="Synthetic"] option')).to_have_text('sc01-v1 · Square Cross')
+    assert sorted(page.locator('optgroup[label="Synthetic"] option').all_text_contents()) == [
+        'sc01-v1 · Square Cross', 'si01-v1 · Square Cross Interactions']
     expect(page.locator('optgroup[label="Original ARC-AGI-3"] option')).to_have_text('tp01-v1 · Input test fixture (not official)')
     # Native popup, opened by touch on mobile and keyboard on desktop.
     if name == 'mobile':
@@ -337,6 +338,38 @@ def check_switching(page, url, name):
     page.evaluate('() => queue')
     assert page.request.get(url + '/play/state').json() == moved
     assert_native_pixels(page, moved)
+
+    # Both real synthetic entries switch within the existing server, with their
+    # own counters, native frames, help and directional-only initial controls.
+    picker.select_option(selected('synthetic', 'si01-v1'))
+    page.evaluate('() => queue')
+    interactions = page.request.get(url + '/play/state').json()
+    assert interactions['game'] == 'si01-v1' and interactions['win_levels'] == 3
+    assert interactions['levels_completed'] == 0 and interactions['available_actions'] == [1, 2, 3, 4]
+    assert interactions['epoch'] != moved['epoch'] and interactions['frame'] != moved['frame']
+    expect(picker.locator('option:checked')).to_have_text('si01-v1 · Square Cross Interactions')
+    expect(page.locator('#level')).to_have_text('LEVEL 1 / 3')
+    expect(page.locator('#up')).to_be_enabled()
+    expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'true')
+    expect(page.locator('#game-help')).to_contain_text('In levels 2–3')
+    assert_native_pixels(page, interactions)
+    assert_display_pixels(page, interactions)
+    # A canvas tap on level 1 cannot send an unavailable click action.
+    count = len(writes)
+    page.locator('#game').tap()
+    page.evaluate('() => queue')
+    assert len(writes) == count
+    picker.select_option(selected('synthetic', 'sc01-v1'))
+    page.evaluate('() => queue')
+    basic = page.request.get(url + '/play/state').json()
+    assert basic['win_levels'] == 5 and basic['levels_completed'] == 0
+    assert basic['epoch'] != interactions['epoch']
+    expect(picker.locator('option:checked')).to_have_text('sc01-v1 · Square Cross')
+    expect(page.locator('#level')).to_have_text('LEVEL 1 / 5')
+    expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'true')
+    expect(page.locator('#game-help')).to_contain_text('Five levels')
+    expect(page.locator('#game-help')).not_to_contain_text('tap a square')
+    assert_native_pixels(page, basic)
 
     # A delayed action and a selection share one queue. Badge stays on the live board.
     held = []
@@ -521,15 +554,15 @@ def check_original(page, url, name):
 
 @contextmanager
 def running_selection_server():
-    """One real SDK seed, advanced through level 6 before starting the test UI."""
+    """One real interaction SDK seed, advanced through local level 1 before the UI."""
     arcade = open_arcade('offline', str(ROOT / 'games'))
     server = thread = None
     try:
-        session = PlaySession({'synthetic': (arcade, arcade.open_scorecard())}, 'sc01-v1', 42)
-        for level in range(1, 7):
+        session = PlaySession({'synthetic': (arcade, arcade.open_scorecard())}, 'si01-v1', 42)
+        for level in (1,):
             for action, data in reference_actions(session.env._game.scene, level):
                 session.frame = session.env.step(GameAction.from_id(action), data=data)
-        assert session.frame.levels_completed == 6
+        assert session.frame.levels_completed == 1
         app = Flask('square-cross-selection-test')
         web_routes(session)(arcade, app)
         server = make_server('127.0.0.1', 0, app)
@@ -554,8 +587,8 @@ def check_selection(page, url, name, session):
     page.goto(url)
     page.evaluate('() => queue')
     directions = {1: 'Up', 2: 'Down', 3: 'Left', 4: 'Right'}
-    for level in (7, 8):
-        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 8')
+    for level in (2, 3):
+        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 3')
         expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'false')
         scene = session.env._game.scene
         for action, coordinates in reference_actions(scene, level):
@@ -591,10 +624,10 @@ def check_selection(page, url, name, session):
                 native = page.locator('#game').evaluate('canvas => canvas.toDataURL()')
                 output = ROOT / 'artifacts/square-cross' / f'selection-level-{level}-{name}-native.png'
                 output.write_bytes(base64.b64decode(native.split(',', 1)[1]))
-    assert data['state'] == 'WIN' and data['levels_completed'] == data['win_levels'] == 8
+    assert data['state'] == 'WIN' and data['levels_completed'] == data['win_levels'] == 3
     expect(page.locator('#message')).to_contain_text('WIN')
     assert not errors, errors
-    print(f'PASS {name}: real synthetic levels 7–8, scaled selection, four white pixels, exact native/display frames, D-pad delivery and WIN')
+    print(f'PASS {name}: real si01-v1 levels 2–3, scaled selection, four white pixels, exact native/display frames, D-pad delivery and WIN')
 
 
 @contextmanager

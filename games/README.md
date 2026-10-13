@@ -1,8 +1,13 @@
 # Original synthetic games
 
 This directory contains our own versioned ARCEngine environments, separate from
-ignored downloaded `environment_files/`. The first family is
-[Square Cross](square_cross/README.md), one game (`sc01-v1`) with eight levels.
+ignored downloaded `environment_files/`. Two independent synthetic training games
+are discovered by the SDK:
+
+- [Square Cross](square_cross/README.md), `sc01-v1`: five perception/navigation levels.
+- [Square Cross Interactions](square_cross_interactions/README.md), `si01-v1`:
+  three colour/selection levels, transferred from former Square Cross levels 6–8.
+
 These games are not held-out evaluation games and do not change the repository's
 training/evaluation splits. No learning or training is performed by the launcher.
 
@@ -14,6 +19,8 @@ python3.12 -m venv .venv
 python -m pip install -e .
 python scripts/play_game.py --mode web --seed 42
 python scripts/play_game.py --mode sdk --seed 42 --max-actions 100
+python scripts/play_game.py --mode web --game si01-v1 --seed 42
+python scripts/play_game.py --mode sdk --game si01-v1 --seed 42 --max-actions 100
 ```
 
 The web command prints `http://127.0.0.1:8001/`. Open it in a local browser.
@@ -21,8 +28,10 @@ The top-left game badge is a native dropdown with **Synthetic** and
 **Original ARC-AGI-3** groups, populated by two separate SDK catalogs. Selecting
 a game initializes it with the current seed in the same 64 × 64 console;
 switching away discards its progress. Choosing the current game does not reset it.
-Use RESET to follow the game's SDK restart rules. For Square Cross, reset retries
-the current level after movement/loss and starts at level 1 after a win.
+The default remains `sc01-v1`. Both synthetic entries can be selected without
+restarting the server; their initial badges are 1/5 and 1/3 respectively.
+Use RESET to follow the game's SDK restart rules. For both Square Cross games,
+reset retries the current level after movement/loss and starts at level 1 after a win.
 
 Controls follow the active observation's `available_actions`:
 
@@ -103,6 +112,11 @@ Flask and NumPy arrive with the SDK/ARCEngine dependencies; there is no frontend
 framework, CDN or additional runtime dependency. Compatibility was exercised with
 ARCEngine 0.9.3. The SDK discovers `metadata.json` recursively; the family directory
 need not match the four-character game ID, but the Python file/class must match.
+`games/pixel_grid.py` shares geometry, sprite drawing and HUD rendering; each
+entrypoint owns its generator and rules. The existing package installation also
+installs these neutral helpers, so direct SDK loading works outside the repository
+working directory. Reinstall with `python -m pip install -e .` after this split
+if using an older editable installation.
 
 ## Direct SDK use
 
@@ -114,7 +128,7 @@ from arcengine import GameAction
 
 arcade = Arcade(operation_mode=OperationMode.OFFLINE, environments_dir='./games')
 try:
-    env = arcade.make('sc01-v1', seed=42)
+    env = arcade.make('sc01-v1', seed=42)  # Or 'si01-v1', an independent game.
     if env is None or env.observation_space is None:
         raise RuntimeError('Game initialization failed')
     initial = env.observation_space  # make already initialized/reset the game
@@ -138,15 +152,18 @@ unchanged; its infrastructure checks do not exercise this game.
 
 ```sh
 python -m unittest discover -s tests -p 'test_square_cross.py' -v
+python -m unittest discover -s tests -p 'test_square_cross_interactions.py' -v
 python -m unittest discover -s tests -p 'test_play_game.py' -v
 ```
 
-The engine tests cover literal boundary fixtures and 64 seeds × eight levels.
+The engine tests cover literal boundary fixtures and 64 seeds across five basic
+and three interaction levels. Compact pre-split scene/frame fingerprints also
+verify exact seed compatibility against revision `7411e2f`.
 An independent test-only pixel-footprint BFS checks every pixel along each stride;
 bar fixtures check every decrement through a 128-action budget on all four edges.
-Two real seeded SDK environments exercise all level transitions, terminal behavior
-and resets. The later levels add wrong-colour swept-contact checks, free click
-selection with a four-pixel white marker, and two solid pieces that lock on
+Two real seeded SDK instances of each game exercise all level transitions,
+terminal behavior and resets. The interaction levels add wrong-colour swept-contact
+checks, free click selection with a four-pixel white marker, and two solid pieces that lock on
 delivery. Both delivery orders are verified against independent safe searches
 and disjoint lane footprints within the shared movement budget.
 Reference solving stays in tests and is never a policy input or benchmark claim.
@@ -173,10 +190,12 @@ checks native dropdown opening, grouped labels, real cross-source selection,
 scaled edge clicks, one tap/one action, per-observation control changes, actual
 SDK animation ordering/cancellation and shared-tab conflict recovery. Level/WIN
 response fixtures test presentation only; the engine tests own completion proof.
-An additional real synthetic lane reaches levels 7–8 through the SDK, then taps
-squares and uses the D-pad to deliver both pairs. It checks the exact four white
+An additional real synthetic lane starts `si01-v1`, completes level 1 through
+the SDK, then taps squares and uses the D-pad to deliver both pairs. It checks the exact four white
 selection pixels against both native canvas data and displayed pixels, and saves
-native 64×64 marker images plus mobile/desktop screenshots.
+native 64×64 marker images plus mobile/desktop screenshots for levels 2–3,
+ending at WIN 3/3. The picker lane checks both synthetic titles, native frames,
+level counters, help and controls when switching between them.
 
 To add genuine **offline ls20** browser smoke on a provisioned public cache:
 
