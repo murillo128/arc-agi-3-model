@@ -1,4 +1,5 @@
 import { drawObservation } from './canvas';
+import { compareVisualDeltas, KEEP } from './visual-deltas';
 import { chartPoints, comparePrediction, diagnosticMetrics, latentStateSummary, moduleSummary, observedAnimationChange, predictedVisualChange, MAX_CHART_STEPS, type Metric } from './diagnostics';
 import { actionName, observationChanges, type Replay } from './replay';
 import type { Attempt } from './types';
@@ -24,13 +25,15 @@ export class DiagnosticsView {
   }
   clear(): void {
     this.replay = undefined; this.metrics = []; this.lastPosition = this.lastFrame = -1;
-    for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas']) {
+    for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas',
+      'real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas']) {
       const canvas = element<HTMLCanvasElement>(id); canvas.width = canvas.height = 1; canvas.hidden = true;
+      canvas.setAttribute('aria-label', 'Not recorded.');
     }
     element('diagnostic-chart').replaceChildren(); element('chart-values').replaceChildren();
     element('score-rows').replaceChildren(); element('metric-select').replaceChildren();
     for (const id of ['prediction-info', 'prediction-values', 'difference-info', 'recorded-errors', 'latent-info',
-      'predicted-change-info', 'observed-change-info', 'learning-info', 'module-learning-info', 'policy-mode',
+      'predicted-change-info', 'observed-change-info', 'real-delta-info', 'predicted-delta-info', 'delta-difference-info', 'learning-info', 'module-learning-info', 'policy-mode',
       'chosen-action', 'selected-value', 'score-info', 'uncertainty-info', 'timing-info', 'rationale-info', 'inferred-event', 'chart-info']) element(id).textContent = 'Not recorded.';
   }
   display(replay: Replay): void {
@@ -70,6 +73,13 @@ export class DiagnosticsView {
       drawObservation(canvas, change.observation, 0);
       canvas.setAttribute('aria-label', change.message);
       element(`${kind}-change-info`).textContent = change.message + (change.codes ? `\nChange codes (first 32, row-major): ${JSON.stringify(change.codes)}` : '');
+    }
+    const deltas = compareVisualDeltas(prediction, replay.observation, replay.frame, step ? replay.preAction : undefined, replay.minor);
+    for (const [id, delta] of [['real-delta', deltas.real], ['predicted-delta', deltas.predicted], ['delta-difference', deltas.difference]] as const) {
+      const canvas = element<HTMLCanvasElement>(`${id}-canvas`);
+      const warning = drawObservation(canvas, delta.observation, 0, KEEP);
+      canvas.setAttribute('aria-label', delta.message);
+      element(`${id}-info`).textContent = delta.message + (delta.observation && warning ? `\n${warning}` : '');
     }
     if (!positionChanged) return;
     element('latent-info').textContent = latentStateSummary(replay.attempt, replay.position, replay.minor);
