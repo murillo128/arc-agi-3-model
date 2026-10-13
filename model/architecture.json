@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision": "pixel-latent-local-global-dynamics",
+  "architecture_revision": "arc3-latent-delta-representation-gate",
   "name": "ARC3 agent architecture",
   "scope": "high_level_world_model_and_behavior_components",
   "coverage": "partial",
@@ -285,6 +285,20 @@
           "direction": "input",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "reconstruction_report",
+          "label": "reconstruction_report",
+          "direction": "input",
+          "shape": null,
+          "value_type": "FrozenReconstructionReport {levels, decoder_delta_error, decoder_transitions, changed_transitions, latent_std}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "output",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -667,6 +681,20 @@
           "direction": "input",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "reconstruction_report",
+          "label": "reconstruction_report",
+          "direction": "input",
+          "shape": null,
+          "value_type": "FrozenReconstructionReport {levels, decoder_delta_error, decoder_transitions, changed_transitions, latent_std}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "output",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -677,11 +705,12 @@
           "value": false
         }
       ],
-      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games may require explicitly resuming joint learning. Reject prefixes spanning nonterminal SDK levels_completed changes. The runner excludes those targets and flushes pending valid prefixes before clearing replay; terminal WIN/GAME_OVER targets remain trainable.",
+      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games can reactivate joint learning through the optional reconstruction gate. Reject prefixes spanning nonterminal SDK levels_completed changes. The runner excludes those targets and flushes pending valid prefixes before clearing replay; terminal WIN/GAME_OVER targets remain trainable. The optional representation gate automatically selects the resumable mode from frozen reconstruction evidence; it never changes the predictor learning policy or curriculum quality thresholds.",
       "children": [
         "world.target_encoder",
         "world.monitor",
-        "world.model_state"
+        "world.model_state",
+        "world.representation_gate"
       ],
       "parent_id": "world_model"
     },
@@ -1281,6 +1310,20 @@
           "direction": "output",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "reconstruction_report",
+          "label": "reconstruction_report",
+          "direction": "output",
+          "shape": null,
+          "value_type": "FrozenReconstructionReport {levels, decoder_delta_error, decoder_transitions, changed_transitions, latent_std}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -1557,6 +1600,13 @@
           "direction": "input",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -2085,6 +2135,13 @@
           "direction": "input",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -34089,6 +34146,13 @@
           "direction": "input",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -34096,7 +34160,7 @@
       "attributes": [],
       "description": "Combine latent-objective gradients with both visual branch VJPs through the original encoder/dynamics graphs. Full-prefix temporal recurrence participates. Decoder parameter gradients are accumulated by the decoder learner; optimizer ownership stays disjoint. With freeze_representation=true only dynamics receives gradients: real latents are constants, visual VJPs traverse the frozen decoder, and encoder SIGReg/variance terms are omitted. Initial zero recurrent memory has requires_grad=true like later recurrent states, but is never an optimized parameter.",
       "operation": "backward",
-      "formula": "gradients = grad(loss, parameters) + latent_vjp(visual_gradients, parameters)"
+      "formula": "gradients = joint_vjp(loss, visual_gradients, parameters, freeze_representation)"
     },
     {
       "id": "world.model_state.optimizer.clip",
@@ -34187,7 +34251,7 @@
           "value": 8
         }
       ],
-      "description": "AdamW moment/update semantics with FP32 master weights. In the active CUDA run, large-tensor moments are stored as 8-bit block-quantized values plus scales and decoded during updates; small tensors retain FP32 moments. Moments persist across episodes. CPU uses FP32 states. With freeze_representation=true encoder parameters have grad=None, so their weights, weight decay and optimizer moments remain unchanged; dynamics continues updating in the same optimizer layout. Explicit unfreezing restores joint updates.",
+      "description": "AdamW moment/update semantics with FP32 master weights. In the active CUDA run, large-tensor moments are stored as 8-bit block-quantized values plus scales and decoded during updates; small tensors retain FP32 moments. Moments persist across episodes. CPU uses FP32 states. With freeze_representation=true encoder parameters have grad=None, so their weights, weight decay and optimizer moments remain unchanged; dynamics continues updating in the same optimizer layout. Manual or automatic unfreezing restores joint updates.",
       "operation": "adamw",
       "formula": "update = adamw_step(parameters, gradients, lr, beta1, beta2, eps, weight_decay)"
     },
@@ -35803,6 +35867,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -36047,6 +36118,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "VisualLatentGradients {predicted_successor_vjp, real_successor_vjp, transition_ids}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -36054,7 +36132,7 @@
       "attributes": [],
       "description": "Accumulate decoder parameter gradients and latent gradients for both prediction and reconstruction branches. Send latent VJPs back through the shared encoder/dynamics computation graph; validate both parameter gradient sets before either optimizer step. Include the patch-local real reconstruction term in both shared decoder and real-successor gradients.",
       "operation": "grad",
-      "formula": "gradients, latent_gradients = grad(loss, parameters, batch.z)"
+      "formula": "gradients, latent_gradients = visual_vjp(loss, parameters, batch.z, freeze_representation)"
     },
     {
       "id": "world.decoder.learning.optimizer",
@@ -36088,6 +36166,13 @@
           "label": "loss",
           "direction": "input",
           "shape": []
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -36118,7 +36203,7 @@
           "value": 1.0
         }
       ],
-      "description": "Disjoint decoder AdamW optimizer. Active CUDA training uses block-quantized 8-bit moments for large tensors and FP32 moments for small tensors; master weights remain FP32. Moments persist across games. CPU uses ordinary AdamW. Prediction, real reconstruction and local reconstruction gradients accumulate before either optimizer updates. This entire optimizer is not stepped during freeze_representation=true; decoder parameters and moments are retained for a later explicit unfreeze.",
+      "description": "Disjoint decoder AdamW optimizer. Active CUDA training uses block-quantized 8-bit moments for large tensors and FP32 moments for small tensors; master weights remain FP32. Moments persist across games. CPU uses ordinary AdamW. Prediction, real reconstruction and local reconstruction gradients accumulate before either optimizer updates. This entire optimizer is not stepped during freeze_representation=true; decoder parameters and moments are retained for a later manual or automatic unfreeze.",
       "children": [
         "world.decoder.learning.optimizer.finite",
         "world.decoder.learning.optimizer.clip",
@@ -51924,6 +52009,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "DecoderParameterUpdate (named additive float32 tensors)"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "input",
+          "shape": [],
+          "value_type": "bool"
         }
       ],
       "parameter_ids": [],
@@ -51934,9 +52026,9 @@
           "value": 0.0003
         }
       ],
-      "description": "Apply additive update once to decoder parameters using the same pre-update weights that generated the logits. lr is constant for this online baseline; no unchosen warmup/scheduler is implied.",
+      "description": "Apply additive update once to decoder parameters using the same pre-update weights that generated the logits. lr is constant for this online baseline; no unchosen warmup/scheduler is implied. Frozen mode skips optimizer.step entirely, including moments and weight decay; the zero update here denotes no parameter mutation.",
       "operation": "update",
-      "formula": "update = -lr * (direction + decay)"
+      "formula": "update = -lr * (direction + decay) if not freeze_representation else 0"
     },
     {
       "id": "world.decoder.learning.metrics",
@@ -51991,14 +52083,21 @@
           "direction": "input",
           "shape": null,
           "value_type": "Observation {frames: uint8[F,H,W], action_input: ActionInput, state: GameState, levels_completed: int, win_levels: int, available_actions: int[V]}"
+        },
+        {
+          "id": "reconstruction_report",
+          "label": "reconstruction_report",
+          "direction": "output",
+          "shape": null,
+          "value_type": "FrozenReconstructionReport {levels, decoder_delta_error, decoder_transitions, changed_transitions, latent_std}"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Frozen diagnostic reporting separates causal predicted visual delta error from real-latent reconstruction delta error. Both compare KEEP/replacement labels against real before/after frames on the union of actual/predicted changes. Real successor reconstruction is evaluated after scoring the causal prediction, never fed into it.",
+      "description": "Frozen diagnostic reporting separates causal predicted visual delta error from real-latent reconstruction delta error. Both compare KEEP/replacement labels against real before/after frames on the union of actual/predicted changes. Real successor reconstruction is evaluated after scoring the causal prediction, never fed into it. The existing model.runner.validation routine also exports its full frozen reconstruction report to the representation gate: real-successor encoder/decoder readout, latent diversity and transition coverage for all evaluated levels. Prediction error is reported independently and does not open this gate.",
       "operation": "monitor",
-      "formula": "score_next_real_outcome(predicted_delta, observation)"
+      "formula": "reconstruction_report = validate_real_outcomes(predicted_delta, observation)"
     },
     {
       "id": "world.encoder.live.block4",
@@ -118204,6 +118303,63 @@
       "operation": "delta_merge",
       "formula": "out = local + residual_scale * global",
       "description": "FP32 combined residual, then the existing output adds it to z with coefficient one."
+    },
+    {
+      "id": "world.representation_gate",
+      "parent_id": "world.learner",
+      "kind": "state",
+      "label": "Representation Training Gate",
+      "ports": [
+        {
+          "id": "reconstruction_report",
+          "label": "reconstruction_report",
+          "direction": "input",
+          "shape": null,
+          "value_type": "FrozenReconstructionReport {levels, decoder_delta_error, decoder_transitions, changed_transitions, latent_std}"
+        },
+        {
+          "id": "freeze_representation",
+          "label": "freeze_representation",
+          "direction": "output",
+          "shape": [],
+          "value_type": "bool"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "auto_representation",
+          "value": true
+        },
+        {
+          "name": "unfreeze_error",
+          "value": 0.02
+        },
+        {
+          "name": "freeze_error",
+          "value": 0.01
+        },
+        {
+          "name": "patience",
+          "value": 2
+        },
+        {
+          "name": "min_validation_transitions",
+          "value": 128
+        },
+        {
+          "name": "min_changed_transitions",
+          "value": 32
+        },
+        {
+          "name": "min_latent_std",
+          "value": 0.1
+        }
+      ],
+      "operation": "hysteresis",
+      "formula": "freeze_representation = gate(reconstruction_report, auto_representation, unfreeze_error, freeze_error, patience, min_validation_transitions, min_changed_transitions, min_latent_std)",
+      "description": "Stateful validation-boundary controller implemented in model/representation_gate.py and model/runner.py. Optional policy (CLI default off; enabled in the active run). Any evaluated level above the upper reconstruction delta-error threshold for two consecutive eligible validations reactivates encoder and decoder. All evaluated levels at or below the lower threshold with healthy latent diversity for two validations freeze both. Missing/nonfinite/insufficient evidence or the dead band clears streaks. Validation level-scope changes and explicit policy/mode overrides reset streaks. Checkpoints preserve partial streaks, mode and optimizer moments; a mode change resets curriculum passes and saves latest immediately. This is a host-side control decision between updates, not a tensor sigmoid or model-version mechanism. Predictor learning and visual input gradients through the decoder remain active."
     }
   ],
   "edges": [
@@ -152610,6 +152766,174 @@
         "port_id": "d_hat"
       },
       "kind": "data"
+    },
+    {
+      "id": "representation_gate.2867",
+      "source": {
+        "node_id": "world.decoder.monitor",
+        "port_id": "reconstruction_report"
+      },
+      "target": {
+        "node_id": "world.decoder",
+        "port_id": "reconstruction_report"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "representation_gate.2868",
+      "source": {
+        "node_id": "world_model",
+        "port_id": "reconstruction_report"
+      },
+      "target": {
+        "node_id": "world.learner",
+        "port_id": "reconstruction_report"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2869",
+      "source": {
+        "node_id": "world.decoder",
+        "port_id": "reconstruction_report"
+      },
+      "target": {
+        "node_id": "world_model",
+        "port_id": "reconstruction_report"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "representation_gate.2870",
+      "source": {
+        "node_id": "world.learner",
+        "port_id": "reconstruction_report"
+      },
+      "target": {
+        "node_id": "world.representation_gate",
+        "port_id": "reconstruction_report"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "representation_gate.2871",
+      "source": {
+        "node_id": "world.model_state",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.model_state.objective",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2872",
+      "source": {
+        "node_id": "world.model_state.objective",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.backward",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2873",
+      "source": {
+        "node_id": "world.representation_gate",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.model_state",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2874",
+      "source": {
+        "node_id": "world.representation_gate",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.learner",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2875",
+      "source": {
+        "node_id": "world.learner",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world_model",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2876",
+      "source": {
+        "node_id": "world.decoder",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.decoder.learning",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2877",
+      "source": {
+        "node_id": "world_model",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.decoder",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2878",
+      "source": {
+        "node_id": "world.decoder.learning",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.grad",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2879",
+      "source": {
+        "node_id": "world.decoder.learning.optimizer",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.optimizer.update",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "representation_gate.2880",
+      "source": {
+        "node_id": "world.decoder.learning",
+        "port_id": "freeze_representation"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.optimizer",
+        "port_id": "freeze_representation"
+      },
+      "kind": "context"
     }
   ],
   "parameters": [

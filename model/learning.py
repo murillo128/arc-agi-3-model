@@ -1,6 +1,6 @@
 """Joint latent dynamics and visual-delta learning from real SDK experience."""
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import itertools
 
 import numpy as np
@@ -178,12 +178,19 @@ class Learner:
     def __init__(self, engine):
         self.engine = engine
         self.model = engine.model
-        self.model.encoder.requires_grad_(not engine.config.freeze_representation)
-        self.model.decoder.requires_grad_(not engine.config.freeze_representation)
+        self.set_representation_frozen(engine.config.freeze_representation)
         self.primary = list(itertools.chain(self.model.encoder.parameters(), self.model.dynamics.parameters()))
         self.visual = list(self.model.decoder.parameters())
         self.optimizers = [optimizer(p, engine.config.learning_rate, engine.device.type == 'cuda', engine.optimizer_bits)
                            for p in (self.primary, self.visual)]
+
+    def set_representation_frozen(self, frozen):
+        """Call between updates; keep parameter identity and optimizer moments."""
+        self.engine.config = replace(self.engine.config, freeze_representation=frozen)
+        for module in (self.model.encoder, self.model.decoder):
+            for parameter in module.parameters():
+                parameter.grad = None
+            module.requires_grad_(not frozen)
 
     def update(self, episodes):
         if not episodes:

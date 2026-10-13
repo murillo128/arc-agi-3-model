@@ -51,6 +51,10 @@ class TrainConfig:
     delta_overlap_weight: float = 1.
     false_change_weight: float = 1.
     freeze_representation: bool = False
+    auto_representation: bool = False
+    representation_unfreeze_error: float = .02
+    representation_freeze_error: float = .01
+    representation_gate_patience: int = 2
     variance_weight: float = 10.
     train_every: int = 1
     updates_per_train: int = 1
@@ -79,16 +83,20 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
-            if k == 'freeze_representation':
+            if k in {'freeze_representation', 'auto_representation'}:
                 if type(v) is not bool:
-                    raise ValueError('freeze_representation must be boolean')
+                    raise ValueError(f'{k} must be boolean')
                 continue
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
-            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight'}:
+            if k in {'representation_freeze_error', 'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:
                 raise ValueError(f'{k} must be positive')
         if self.delta_error > 1 or self.min_observations < 2 or self.sigreg_weight > 1:
             raise ValueError('Invalid error threshold / representation sample count')
+        if not 0 <= self.representation_freeze_error < self.representation_unfreeze_error <= 1:
+            raise ValueError('Representation thresholds require 0 <= freeze < unfreeze <= 1')
+        if type(self.representation_gate_patience) is not int:
+            raise ValueError('representation_gate_patience must be a positive integer')

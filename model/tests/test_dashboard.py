@@ -94,6 +94,29 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(result['run']['training']['false_change_weight'], 2.)
         self.assertIs(result['run']['training']['freeze_representation'], True)
 
+    def test_gate_mode_and_evidence_survive_tail_only_restart(self):
+        self.append({'event': 'initializing', 'training': {'auto_representation': True,
+                     'freeze_representation': False, 'representation_unfreeze_error': .02,
+                     'representation_freeze_error': .01, 'representation_gate_patience': 2}})
+        gate = dict(auto_representation=True, freeze_representation=True, eligible=True,
+                    reconstruction_error=.005, open_streak=0, close_streak=0,
+                    unfreeze_error=.02, freeze_error=.01, patience=2,
+                    changed=True, reason='reconstruction_low')
+        self.append({'event': 'representation_gate', **gate})
+        data = self.monitor.snapshot()
+        self.assertTrue(data['run']['training']['freeze_representation'])
+        self.assertEqual(data['run']['representation_gate']['reason'], 'reconstruction_low')
+        row = {'event': 'progress', 'actions': 20, 'freeze_representation': True,
+               'representation_gate': gate}
+        self.path.write_text(json.dumps(row) + '\n')
+        cold = LogMonitor(self.path).snapshot()
+        self.assertTrue(cold['run']['training']['auto_representation'])
+        self.assertTrue(cold['run']['training']['freeze_representation'])
+        self.assertEqual(cold['run']['representation_gate']['reconstruction_error'], .005)
+        self.append({'event': 'representation_gate', **gate, 'freeze_representation': False,
+                     'reconstruction_error': .05, 'reason': 'reconstruction_high'})
+        self.assertFalse(self.monitor.snapshot()['run']['training']['freeze_representation'])
+
     def test_restart_append_truncate_regrow_and_file_replacement(self):
         for method in ('initializing', 'truncate', 'regrow', 'replace'):
             with self.subTest(method=method):

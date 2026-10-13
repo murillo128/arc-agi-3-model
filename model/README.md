@@ -295,10 +295,42 @@ congelado para enseñar al predictor. Omite las pérdidas de reconstrucción y l
 regularización del encoder, que no podrían actualizarlo; el panel las muestra
 como no disponibles, no como errores cero. La reconstrucción y todos los umbrales
 se siguen evaluando normalmente. El modo se conserva al reanudar y
-`--no-freeze-representation` restablece el aprendizaje conjunto. No se activa
-automáticamente al superar un nivel: otros juegos pueden requerir adaptar la
-representación. La CLI exige un checkpoint, pero no presupone que sea bueno;
+`--no-freeze-representation` restablece el aprendizaje conjunto. Sin la política
+automática, superar un nivel no cambia este modo: otros juegos pueden requerir
+adaptar la representación. La CLI exige un checkpoint para comenzar congelado, pero no presupone que sea bueno;
 hay que comprobar su reconstrucción en validación.
+
+Para alternar automáticamente entre ambos modos:
+
+```sh
+.venv/bin/python -m model train --checkpoint model/runs/entrenamiento/latest.pt \
+  --auto-representation --representation-unfreeze-error .02 \
+  --representation-freeze-error .01 --representation-gate-patience 2 \
+  --output model/runs/entrenamiento
+```
+
+El gate usa el **error de delta reconstruido desde el latente real**: mide al
+encoder y decoder juntos. El error de predicción no lo controla; el predictor
+puede necesitar más aprendizaje aunque la representación ya sea precisa.
+Después de cada validación congelada, si algún nivel evaluado supera el 2% en
+dos validaciones consecutivas, se reactivan encoder y decoder. Si todos están
+en el 1% o menos, con diversidad latente suficiente, durante dos validaciones,
+se congelan de nuevo. El predictor se entrena en ambos modos y el gradiente de
+su error visual sigue atravesando el decoder congelado.
+
+Los niveles deben cumplir las coberturas mínimas de transiciones y cambios.
+Datos insuficientes/no finitos o un valor intermedio rompen la racha; nunca se
+interpretan como error cero. Un cambio de niveles evaluados reinicia las rachas.
+La política está desactivada por defecto para conservar el comportamiento de
+checkpoints anteriores. `--no-auto-representation` la desactiva manteniendo el
+modo actual, y los cambios explícitos de política/modo reinician sus rachas.
+
+Los cambios se aplican entre actualizaciones, conservando parámetros y momentos
+de ambos optimizadores. Guardan `latest.pt` inmediatamente y reinician la racha
+de aprobación del currículo, sin cambiar sus umbrales. El checkpoint conserva
+el modo y las rachas parciales del gate en una reanudación normal. CUDA continúa
+usando `torch.compile`; la primera transición de modo puede compilar otra
+especialización. El panel muestra el modo actual, el gate y su última evidencia.
 
 ## Currículo y juegos del SDK
 

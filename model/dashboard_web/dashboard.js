@@ -13,7 +13,7 @@ const phases = {waiting: 'Esperando métricas', initializing: 'Inicializando', r
   validation_finished: 'Validación terminada', stopped: 'Entrenamiento detenido'};
 const events = {initializing: 'Inicio', ready: 'Modelo preparado', resumed: 'Reanudación', validation: 'Validación',
   validation_finished: 'Validación terminada', checkpoint: 'Checkpoint guardado', level_converged: 'Nivel superado',
-  encoder_collapsed: 'Colapso detectado', stopped: 'Detenido'};
+  encoder_collapsed: 'Colapso detectado', stopped: 'Detenido', representation_gate: 'Evaluación del gate'};
 const reasons = {encoder_collapsed: 'colapso sostenido del encoder', level_converged: 'nivel convergido',
   curriculum_converged: 'currículo completado', interrupted: 'interrupción', action_limit: 'límite de acciones',
   level_limit_without_convergence: 'límite de acciones del nivel'};
@@ -124,8 +124,16 @@ function render(data) {
   $('run-info').textContent = [run.game || 'Juego pendiente', run.device?.toUpperCase(),
     finite(run.parameters) ? `${fmt(run.parameters / 1e6, 1)} M parámetros` : null,
     run.compile === true ? 'torch.compile' : run.compile === false ? 'Eager' : null,
+    config.auto_representation === true ? 'Gate automático' : null,
     config.freeze_representation === true ? 'Solo predictor · encoder y decoder congelados' :
       config.freeze_representation === false ? 'Aprendizaje conjunto' : null].filter(Boolean).join(' · ');
+  const gate = run.representation_gate;
+  const gateReasons = {insufficient_evidence: 'Evidencia insuficiente', hold: 'Mantiene el modo',
+    reconstruction_high: 'Reactivados encoder y decoder', reconstruction_low: 'Congelados encoder y decoder'};
+  $('representation-gate').textContent = config.auto_representation === true
+    ? gate ? `${gateReasons[gate.reason] || 'Esperando validación'} · reconstrucción ${pct(gate.reconstruction_error)} · activar > ${pct(gate.unfreeze_error)}, congelar ≤ ${pct(gate.freeze_error)} · racha ${fmt(Math.max(gate.open_streak || 0, gate.close_streak || 0))}/${fmt(gate.patience)}`
+      : `Esperando validación · activar > ${pct(config.representation_unfreeze_error)}, congelar ≤ ${pct(config.representation_freeze_error)}`
+    : 'Manual';
   $('loss-note').textContent = config.freeze_representation === true
     ? 'Solo se entrena el predictor. La reconstrucción se sigue midiendo en validación; no tiene pérdida de entrenamiento activa.'
     : 'Supervisión del predictor y las dos reconstrucciones. Son pérdidas de aprendizaje, no porcentajes de error.';
