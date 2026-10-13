@@ -17,6 +17,7 @@ from unittest.mock import patch
 import msgpack
 import pyzstd
 from fixtures.diagnostics_v11 import extend_attempt, f32, invalid_cases, replace
+from fixtures.planning_v11 import with_plan, invalid_plans
 
 from arc3.traces import (
     Arc3Error, Arc3ResourceLimitError, MAX_UNCOMPRESSED_BYTES,
@@ -92,6 +93,27 @@ def change(value, path, replacement):
 
 
 class Arc3MinorExtensionTests(unittest.TestCase):
+    def test_planning_snapshot_and_known_optional_field_validation(self):
+        attempt = with_plan(baseline())
+        decoded = decode_attempt(encode_attempt(attempt, format_minor=1))
+        plan = decoded['steps'][0]['planning']
+        self.assertEqual(plan['state_value'], .4)
+        self.assertEqual(plan['steps'][1]['action'], {'id': 6, 'data': {'x': 3, 'y': 5}})
+        self.assertEqual(plan['steps'][0]['progress'], .3)
+        for name, path, value, error in invalid_plans():
+            bad = deepcopy(attempt)
+            replace(bad, path, value)
+            with self.subTest(name=name), self.assertRaisesRegex(Arc3Error, error):
+                decode_attempt(wire(bad, minor=1))
+        # No schema interpretation is retroactively imposed on 1.0.
+        attempt['steps'][0]['planning'] = None
+        self.assertIsNone(decode_attempt(encode_attempt(attempt))['steps'][0]['planning'])
+        q = with_plan(baseline())
+        p = q['steps'][0]['planning']
+        p.update(mode='q', horizon=1, steps=p['steps'][:1])
+        del p['steps'][0]['successor_value']
+        self.assertEqual(decode_attempt(encode_attempt(q, format_minor=1))['steps'][0]['planning']['mode'], 'q')
+
     def test_opt_in_latent_and_decoder_roundtrips_and_default_minor(self):
         for visual in (False, True):
             value = extend_attempt(baseline(), visual=visual)

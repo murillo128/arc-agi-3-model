@@ -204,12 +204,72 @@ class LogMonitor:
                     'max_points': self.max_points}
 
 
-def make_server(address, monitor):
+class BehaviorMonitor(LogMonitor):
+    """Independent log lifetime/counters for new heads and frozen-world planning."""
+
+    def _reset(self):
+        super()._reset()
+        self.fits = deque(maxlen=self.max_points)
+        self.evaluations = deque(maxlen=self.max_points)
+
+    def _event(self, row):
+        if not isinstance(row, dict):
+            return
+        event = row.get('event')
+        if event not in ('behavior_started', 'behavior_collection', 'behavior_fit',
+                         'behavior_evaluation_progress', 'behavior_evaluation', 'behavior_finished'):
+            return
+        if event == 'behavior_started':
+            self._reset()
+            self.run = {k: str(row[k])[:80] for k in ('game', 'device', 'mode', 'source') if k in row}
+            self.run.update(numbers(row, ('level', 'source_actions', 'world_trainable')))
+            self.run['compile'] = row.get('compile') is True
+        point = numbers(row, ('round', 'epoch', 'epochs', 'updates', 'records', 'loss', 'event_ce',
+                              'value_bce', 'q_bce', 'episodes', 'wins', 'actions', 'seconds', 'horizon',
+                              'win_rate', 'actions_per_success', 'actions_per_second', 'decision_ms'))
+        for key in ('policy', 'split'):
+            if key in row:
+                point[key] = str(row[key])[:40]
+        if event == 'behavior_collection':
+            # Counts are local to this collection round, never added to evaluation.
+            self.progress['collection'] = point
+        elif event == 'behavior_fit':
+            self.fits.append(point)
+            self.progress['fit'] = point
+        elif event in ('behavior_evaluation_progress', 'behavior_evaluation'):
+            point.setdefault('split', 'unspecified')
+            interval = row.get('wilson95')
+            if isinstance(interval, list) and len(interval) == 2:
+                point['wilson95'] = [number(v) for v in interval]
+            self.progress['evaluation'] = point
+            if event == 'behavior_evaluation':
+                self.evaluations.append(point)
+        elif event == 'behavior_finished':
+            self.run['world_unchanged'] = row.get('world_unchanged') if type(row.get('world_unchanged')) is bool else None
+            selected = row.get('selected')
+            if isinstance(selected, dict):
+                self.run['selected'] = {**numbers(selected, ('iteration', 'horizon')),
+                                        'policy': str(selected.get('policy', ''))[:40]}
+        self.phase = event
+        self.revision += 1
+
+    def snapshot(self):
+        with self.lock:
+            source = self._read()
+            return {'generation': self.generation, 'revision': self.revision, 'source': source,
+                    'phase': self.phase, 'run': dict(self.run), 'progress': dict(self.progress),
+                    'fits': list(self.fits), 'evaluations': list(self.evaluations)}
+
+
+def make_server(address, monitor, behavior=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path).path
             if route == '/api/state':
-                data = json.dumps(monitor.snapshot(), allow_nan=False, separators=(',', ':')).encode()
+                state = monitor.snapshot()
+                if behavior is not None:
+                    state['behavior'] = behavior.snapshot()
+                data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
             elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js'):
                 name = 'index.html' if route == '/' else route[1:]
@@ -242,6 +302,7 @@ def make_server(address, monitor):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path, required=True)
+    parser.add_argument('--behavior-log', type=Path, help='Independent goal/planner JSON-line log')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
@@ -249,7 +310,8 @@ def main():
     if not 2 <= args.max_points <= 10000:
         parser.error('--max-points must be between 2 and 10000')
     monitor = LogMonitor(args.log, args.max_points)
-    with make_server((args.host, args.port), monitor) as server:
+    behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
+    with make_server((args.host, args.port), monitor, behavior) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

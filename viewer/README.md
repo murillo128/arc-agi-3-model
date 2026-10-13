@@ -1,5 +1,21 @@
 # Browser .arc3 replay console
 
+The optional v1.1 `planning` diagnostic adds **GOAL & SELECTED PLAN**. It shows
+the learned SDK-progress goal proxy, pre-action state value/selected score,
+progress/continue/GAME_OVER estimates, and the selected action sequence. Only
+the first action was executed from that snapshot; remaining actions are imagined.
+The real SDK result is displayed separately. Q mode has one choice and no
+imagined successor; MPC shows successor values. These are uncalibrated estimates,
+not a supplied goal image or inferred symbolic game rule.
+
+Generate a real sample with `python -m model.behavior_trace` (see
+[model documentation](../model/README.md#exportar-el-goal-y-el-plan-al-viewer)).
+No weights, SDK, backend, or network calls are needed to inspect the opened file.
+Older recordings show “Not recorded” and clear all plan data. The optional field
+is validated under [the 1.1 contract](../docs/arc3-format-v1.1.md#recorded-goalvalue-and-selected-plan).
+Validation for this addition uses codec/unit tests and a build; no browser or
+screenshot tests were run or baselines regenerated.
+
 This static Vite/TypeScript entry point loads the frozen [v1.0 format](../docs/arc3-format-v1.md)
 and the optional [v1.1 diagnostics extension](../docs/arc3-format-v1.1.md)
 through a local file dialog, drag/drop, a submitted HTTP(S) URL, or an explicit

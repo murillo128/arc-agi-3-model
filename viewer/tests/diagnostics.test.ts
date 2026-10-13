@@ -5,6 +5,7 @@ import { DiagnosticsView } from '../src/diagnostics-view';
 import { decodeAttempt } from '../src/decoder';
 import { Replay } from '../src/replay';
 import type { Attempt, Observation, Prediction, Tensor } from '../src/types';
+import { planningView } from '../src/planning';
 
 const tensor = (shape: number[], data: number[]): Tensor => ({ dtype: 'u8', shape, data: new Uint8Array(data) });
 const observed: Observation = { frames: tensor([2, 2, 2], [0, 1, 2, 3, 3, 2, 1, 0]), state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1] };
@@ -234,6 +235,16 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('module-learning-info').textContent).toContain('optimizer steps: 2');
     expect(get('diagnostic-chart').children.length).toBeGreaterThan(0);
     expect(get('chart-values').children.length).toBe(1);
+    const planned = await fixture('v11-planning'), planReplay = new Replay(planned.attempt, planned.minor);
+    planReplay.select(1); view.display(planReplay); view.render(planReplay);
+    expect(get('goal-value').textContent).toBe('0.4000');
+    expect(get('goal-progress').textContent).toBe('30.00%');
+    expect(get('plan-steps').children).toHaveLength(2);
+    expect(get('plan-steps').children[1]!.children[1]!.textContent).toContain('Imagined only');
+    expect(get('plan-outcome').textContent).toContain('No progress or terminal event observed');
+    planReplay.select(0); view.render(planReplay);
+    expect(get('goal-values').hidden).toBe(true);
+    expect(get('plan-steps').children).toHaveLength(0);
     view.clear();
     for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas',
       'real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas']) {
@@ -245,6 +256,8 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('diagnostic-chart').children).toEqual([]);
     const old = await fixture('recorder-baseline-0'), baseline = new Replay(old.attempt, old.minor);
     baseline.select(1); view.display(baseline); view.render(baseline);
+    expect(get('goal-values').hidden).toBe(true);
+    expect(get('plan-info').textContent).toContain('Not recorded');
     expect(get('latent-info').textContent).toBe('Not recorded.');
     expect(get('predicted-change-info').textContent).toContain('Not recorded');
     expect(get('module-learning-info').textContent).not.toContain('optimizer steps:');
@@ -257,4 +270,19 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('real-delta-canvas').hidden).toBe(true);
     expect(get('real-delta-info').textContent).toContain('Unavailable');
   } finally { vi.unstubAllGlobals(); }
+});
+
+it('keeps pre-action goal beliefs separate from the real result and ignores v1.0 planning names', async () => {
+  const {attempt, minor} = await fixture('v11-planning');
+  const step = attempt.steps[0]!;
+  const view = planningView(step, attempt.initial_observation, minor)!;
+  expect(view.steps.map(s => s.label)).toEqual(['1. ACTION1', '2. ACTION6 (3, 5)']);
+  expect(view.steps[1]!.progress).toBe(.8);
+  step.observation = {...step.observation, state: 'GAME_OVER'};
+  expect(planningView(step, attempt.initial_observation, minor)!.outcome).toBe('GAME_OVER observed');
+  expect(planningView(step, attempt.initial_observation, minor)!.plan.state_value).toBe(.4);
+  expect(planningView(step, attempt.initial_observation, 0)).toBeUndefined();
+  expect(planningView(undefined, undefined, minor)).toBeUndefined();
+  const metrics = diagnosticMetrics(attempt, minor);
+  expect(metrics.find(m => m.key === 'planning.progress')!.read(step)).toBe(.3);
 });

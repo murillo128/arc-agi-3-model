@@ -32,6 +32,49 @@ little-endian, row-major BIN encoding and bounds. Single-action state tensors ha
 no batch axis. Unknown optional keys within groups follow v1.0's structural
 validation and preservation rules.
 
+## Recorded goal/value and selected plan
+
+`steps[i].planning` is an additive optional 1.1 diagnostic. It is captured during
+the decision, before the real action and its result; it MUST NOT be recomputed
+using the later observation. Older readers ignore this optional group. Minor 0
+continues to treat the name as unknown. No envelope or required field changes.
+
+| Required field | Meaning / constraint |
+| --- | --- |
+| `objective` | `"sdk_level_progress"`: learned proxy for SDK level advance or WIN; not a target image or discovered symbolic rule |
+| `mode` | `"mpc"` or `"q"` |
+| `horizon`, `beam` | Integer horizon 1..64, positive integer beam width |
+| `discount` | Finite number in (0,1] |
+| `state_value` | Pre-action V: finite discounted-success estimate in [0,1] |
+| `selected_score` | Selected Q or accumulated-progress-plus-bootstrap MPC score in [0,1] |
+| `steps` | Exactly `horizon` maps in the selected branch, in action order |
+
+Each planned step requires an ordinary `action` with the existing ID/data rules
+and finite `continue`, `progress`, `game_over` probabilities in [0,1], summing to
+one within 1e-5. They describe the model's conditional event estimate for that
+step, not the observed outcome or a calibrated guarantee. MPC steps also require
+`successor_value` in [0,1], evaluated on the imagined successor. Q has horizon 1
+and MUST omit `successor_value`: it does not simulate a trajectory.
+
+The first planned action MUST equal the enclosing real step's action (ID and
+data). Only that action is executed from this plan; later actions are imagined,
+and their future legality is not verified by the trace. Replanning after a real
+observation produces a new snapshot on the next real step. Existing `decision`
+may contain the scores of surviving candidate first actions; it need not list
+every searched branch. Values/scores are not pixel errors or win percentages.
+
+The viewer displays event estimates as meters, the action sequence as ordered
+cards, and actual progress/termination separately from the public observations.
+Absent plans, initial observations, and RESET boundaries show no plan. Rendering
+does not execute a model or request external data. The frozen behavior exporter
+in `model.behavior_trace` writes this field directly through the codec; the
+generic EvaluationRecorder hook allowlists below remain unchanged.
+
+A synthetic example uses V=.4 and a two-action plan: ACTION1 with event
+probabilities [.6,.3,.1], then ACTION6(x=3,y=5) with [.2,.8,0]. These are fixture
+beliefs, not claims about game outcomes. Python and TypeScript reject a mismatched
+first action, bad probabilities/lengths, or invalid click coordinates.
+
 ## Actual state and frozen residual prediction
 
 | Optional field | Required contents and meaning |

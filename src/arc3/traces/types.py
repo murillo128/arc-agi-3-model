@@ -96,6 +96,24 @@ class Learning(TypedDict, total=False):
     modules: dict[str, ModuleLearning]
 
 
+# Functional form permits the Python keyword `continue` as a wire key.
+PlannedStep = TypedDict('PlannedStep', {
+    'action': Action, 'continue': Number, 'progress': Number, 'game_over': Number,
+    'successor_value': NotRequired[Number],
+})
+
+
+class Planning(TypedDict):
+    objective: Literal['sdk_level_progress']
+    mode: Literal['q', 'mpc']
+    horizon: int
+    beam: int
+    discount: Number
+    state_value: Number
+    selected_score: Number
+    steps: list[PlannedStep]
+
+
 class Step(TypedDict):
     index: int
     action: Action
@@ -107,6 +125,7 @@ class Step(TypedDict):
     notes: NotRequired[list[str]]
     representation: NotRequired[Representation]
     policy_mode: NotRequired[Literal["random", "learned"]]
+    planning: NotRequired[Planning]
 
 
 class Termination(TypedDict):
