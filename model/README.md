@@ -2,9 +2,11 @@
 
 Primera implementación del encoder, predictor recurrente y decoder visual. Se
 entrenan con acciones aleatorias legales y transiciones reales del SDK. El
-actor aprendido, el crítico, la recompensa, la imaginación para entrenar políticas
-y las cabezas auxiliares permanecen como componentes futuros en
-[`architecture.json`](architecture.json); **no se ejecutan ni se entrenan aquí**.
+actor Dreamer, el crítico distribucional y el entrenamiento de políticas por
+imaginación permanecen como componentes futuros en
+[`architecture.json`](architecture.json). El experimento separado
+`model.behavior_experiment` implementa un primer evaluador de objetivos/valor y
+un planner latente sobre pesos congelados; se describe a continuación.
 
 El código y la arquitectura viven en este directorio. No modifica los comandos
 existentes `training.collect`, `evaluation.run`, el viewer ni la exportación de
@@ -15,6 +17,155 @@ El diagrama refleja la variante en experimentación con `--pixel-latent`,
 Sus operaciones enlazan los 491 tensores reales compartidos entre llamadas. La
 configuración del checkpoint identifica qué variante ejecuta cada entrenamiento;
 el diagrama no demuestra convergencia ni generalización entre juegos.
+
+## Objetivo y planner con el modelo del mundo congelado
+
+`planning.py` añade 603.013 parámetros nuevos (`GoalValue`), frente a los
+215.984.848 del mundo existente. El encoder visual, su memoria de animación,
+el predictor recurrente y el decoder se cargan del checkpoint, pasan a `eval()`
+y `requires_grad=False` y no tienen optimizador. Se compara un SHA-256 de todos
+sus tensores antes/después del experimento. No se modifica el checkpoint fuente.
+
+El flujo de esta primera fase es:
+
+1. Observar el juego y obtener el estado real `(z, h)` con el encoder congelado.
+2. Recoger acciones y resultados reales. El SDK indica avance de nivel, `WIN`
+   y `GAME_OVER`; no se inspeccionan reglas, colores o posiciones privadas.
+3. Entrenar solamente los nuevos readouts: probabilidad de progreso/final y
+   valores `V(s)` y `Q(s,a)` de éxito descontado. Las etiquetas son eventos y
+   retornos de partidas reales; la metadata futura nunca entra como feature.
+4. Comparar la elección directa por `Q` con MPC: predecir candidatos mediante
+   `z_next = z + delta`, actualizar su memoria independiente y valorar futuros.
+5. Ejecutar una acción y reconstruir el estado con la observación real recibida.
+   Las ramas imaginadas no se guardan como experiencia real.
+
+El objetivo actual es **predecir el éxito señalado por el SDK**. No hemos
+implementado descubrimiento de reglas simbólicas ni disponemos de una imagen
+objetivo. `V/Q` aprenden retornos Monte Carlo de horizonte finito de la conducta
+recogida, no valores óptimos demostrados. La terminación por presupuesto usa
+retorno cero más allá del límite, pero no se etiqueta como `GAME_OVER`.
+
+El readout usa LayerNorm sobre tokens, convoluciones espaciales de 64 canales,
+pooling 4×4 **solo en el nuevo evaluador**, una proyección de memoria a 64 y un
+MLP 1088→256→128 con SiLU. No cambia la resolución ni los pesos del encoder.
+Una cabeza sigmoide produce `V`; otra recibe además las 12 features de acción
+y produce tres logits de evento y un logit `Q`. Se optimizan CE de eventos sin
+ponderación y BCE contra retornos descontados (`gamma=.95`).
+
+MPC combina recompensa de progreso prevista, probabilidad de continuar y valor
+al final del horizonte. Conserva cuatro ramas, compara horizontes de uno/dos
+pasos y replantea tras cada acción. Considera todos los IDs legales ordinarios
+y ocho coordenadas uniformes cuando existe clic. Reutiliza la legalidad actual
+dentro de la búsqueda: **no conoce la legalidad futura**. El decoder no participa.
+`Q` es una comparación barata que prescinde de simular futuros.
+
+Ejecutar desde la raíz, después de detener cualquier entrenamiento que vaya a
+modificar el checkpoint usado como referencia:
+
+```sh
+.venv/bin/python -u -m model.behavior_experiment \
+  --checkpoint model/runs/active-training/latest.pt \
+  --output model/runs/goal-planner/new-run \
+  --game sc01-v1 --level 2 --device cuda \
+  --train-episodes 128 --rounds 2 --epochs 12 \
+  --dev-episodes 32 --final-episodes 128
+```
+
+CUDA exige `torch.compile` y usa BF16 cuando está disponible; `--device cpu`
+ejercita el mismo contrato sin compilación. Las primeras compilaciones entran
+en los tiempos medidos. Cada ronda conserva el mejor candidato aprendido de desarrollo,
+recoge experiencia real nueva con exploración epsilon=.25 y vuelve a ajustar
+los readouts. La primera ronda recoge al azar. Desarrollo y evaluación final
+usan semillas distintas del entrenamiento. La evaluación final se hace una
+vez tras seleccionar el candidato; no entrena ni guarda replay.
+
+`report.json` contiene recuentos, semillas, acciones, tiempos e intervalos de
+Wilson; `heads.pt` solo añade pesos de comportamiento, la huella del mundo y
+configuración. El replay de latentes reales es FIFO en RAM, máximo 8192
+transiciones por defecto (aproximadamente 4 GiB para este modelo), y desaparece
+al salir. La memoria recurrente `h` se reinicia por partida. Se imprimen eventos
+JSON de recogida, ajuste y evaluación. No escribe al dashboard del trainer del
+mundo ni arranca automáticamente el currículo anterior.
+
+Para evaluar esos readouts sin entrenamiento adicional:
+
+```sh
+.venv/bin/python -u -m model.behavior_experiment \
+  --checkpoint model/runs/active-training/latest.pt \
+  --heads model/runs/goal-planner/new-run/heads.pt \
+  --output model/runs/goal-planner/evaluation \
+  --game sc01-v1 --level 2 --device cuda --seed-offset 20000
+```
+
+Se rechaza una huella de mundo distinta y un output que ya contenga resultados.
+Para nuevas iteraciones, elegir semillas nuevas con `--seed-offset`; no tratar
+como evaluación final un conjunto usado para decidir cambios. El experimento
+admite por ahora **solo los dos juegos sintéticos del repositorio**. Las clases
+del planner consumen la interfaz genérica del SDK; la CLI falla explícitamente
+para otros juegos hasta conectar su admisión a los splits y niveles reservados.
+
+### Primera prueba con pesos existentes
+
+Checkpoint del mundo: acción **143840**, huella de tensores
+`72b2f1dbbf74bc0c4faf02ae16a7dcb50fb04696523bfa7f3c04d3f1138248ad`.
+Square Cross, nivel sintético aislado 2, máximo 128 acciones por partida,
+RTX 4070 Ti compartida, PyTorch 2.6.0, BF16 y `torch.compile`.
+Las tres pasadas de ajuste modificaron exclusivamente los nuevos readouts.
+
+| Experimento | Entrenamiento real | Candidato elegido en desarrollo | Azar, final | Aprendido, final | Acciones totales azar / aprendido |
+| --- | --- | --- | --- | --- | --- |
+| Inicial | 2 rondas × 128 partidas, 12 épocas por ronda | Q, primera ronda | 28/128 (21,88%) | 31/128 (24,22%) | 3460 / 3165 |
+| Más experiencia | 512 partidas, 13046 transiciones, 20 épocas | MPC, horizonte 1 | 32/128 (25%) | 36/128 (28,13%) | 3211 / 2921 |
+
+La segunda prueba usó `--seed-offset 10000 --max-records 16384`, con 64 partidas
+de desarrollo. En ese desarrollo, azar ganó 17/64; Q, MPC-1 y MPC-2 ganaron
+11, 14 y 12. La selección es entre candidatos aprendidos, no un reemplazo
+automático de la política aleatoria. En evaluación final, los pares discordantes
+fueron 24 victorias exclusivas del azar frente a 28 exclusivas del planner.
+**No demuestra una ventaja estadística ni que el objetivo esté aprendido.**
+
+El MPC seleccionado tardó 30,41 s para 2921 acciones, unos 6,02 ms por decisión
+y 96 acciones/s incluyendo la actualización del estado real. El azar no ejecuta
+las redes, por lo que su velocidad sirve solo como referencia del entorno.
+Los errores visuales del predictor no son estas tasas de victoria. Ambos
+experimentos verificaron la huella del mundo sin cambios; los pesos nuevos y
+reportes detallados quedan solo en `model/runs/goal-planner/`. No se deja un
+entrenamiento indefinido en marcha ni se reanuda el currículo del mundo.
+
+### Referencias para las siguientes iteraciones
+
+Lectura del 14-10-2026; son referencias e hipótesis, no capacidades implementadas.
+
+- [V-JEPA 2 (junio 2025)](https://arxiv.org/abs/2506.09985): MPC con CEM y
+  distancia a una imagen objetivo en el espacio latente. Ejecuta la primera
+  acción y vuelve a observar. Nos sirve el bucle de control; el paper presupone
+  subobjetivos visuales, no descubre el objetivo desconocido de un juego.
+- [Dreamer 4 (septiembre 2025)](https://arxiv.org/abs/2509.24527): durante RL
+  imaginado actualiza cabezas de política/valor con el transformer congelado.
+  La fase anterior sí adapta el modelo al incorporar política y recompensa;
+  no equivale a añadir cualquier actor a nuestros pesos sin esa preparación.
+- [Value-guided action planning with JEPA world models
+  (preprint diciembre 2025, arXiv enero 2026)](https://arxiv.org/abs/2601.00844):
+  entrena la geometría latente con valor condicionado a objetivos y prueba
+  cuasidistancias. Sus experimentos señalan que predecir latentes no garantiza
+  buena planificación. Modifica el encoder; una cabeza de valor externa sobre
+  nuestro encoder congelado sería una adaptación nuestra, no una reproducción.
+- [LeWorldModel (marzo 2026)](https://arxiv.org/abs/2603.19312): JEPA compacto
+  con aprendizaje estable y planificación latente. Es una referencia de coste
+  y representación; adoptar su entrenamiento implicaría cambiar el mundo,
+  fuera del alcance de esta fase.
+- [Hallucination in World Models is Predictable and Preventable
+  (junio 2026)](https://arxiv.org/abs/2606.27326): estudia cobertura de estados/
+  acciones y señales de fallo en modelos generativos. Motiva comprobar los
+  planes en el entorno real; no demuestra que nuestro fallo tenga esa causa.
+- [V-JEPA Policy (29 septiembre 2026)](https://arxiv.org/abs/2609.37250):
+  encoder V-JEPA 2.1 congelado, pero predictor nuevo y experto de acciones
+  entrenados conjuntamente con demostraciones e instrucciones. No mantiene
+  congelado todo el predictor como pedimos aquí.
+- [JEPA-TTT (30 septiembre 2026)](https://arxiv.org/abs/2610.00722): adapta el
+  predictor ante cambios de dinámica, manteniendo encoder y recompensa fijos.
+  Es relevante para adaptación futura, pero contradice la congelación actual
+  del predictor y no se activa en este experimento.
 
 ## Instalación y ejecución
 

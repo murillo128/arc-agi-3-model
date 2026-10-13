@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-latent-delta-representation-gate",
+  "architecture_revision": "arc3-frozen-world-goal-planner",
   "name": "ARC3 agent architecture",
   "scope": "high_level_world_model_and_behavior_components",
   "coverage": "partial",
@@ -64,6 +64,22 @@
     {
       "name": "Q",
       "meaning": "Uniformly sampled matching patch positions for SIGReg: min(P,16). Statistics still average over M real observations."
+    },
+    {
+      "name": "R_half",
+      "meaning": "ceil(R/2) in the new goal readout."
+    },
+    {
+      "name": "C_half",
+      "meaning": "ceil(C/2) in the new goal readout."
+    },
+    {
+      "name": "R_quarter",
+      "meaning": "ceil(R/4) in the new goal readout."
+    },
+    {
+      "name": "C_quarter",
+      "meaning": "ceil(C/4) in the new goal readout."
     }
   ],
   "nodes": [
@@ -167,7 +183,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Phase-one implementation: random legal SDK actions, learned pixel-resolved latents with recurrent animation context, residual dynamics, bounded real-episode replay and joint visual decoding. CUDA torch.compile, BF16 GEMMs and 8-bit AdamW moments; optional FP8 remains experimental. Separate frozen validation. Actor, critic, goal and imagination learning remain future components. Total active neural parameters: 215984848.",
+      "description": "Phase-one implementation: random legal SDK actions, learned pixel-resolved latents with recurrent animation context, residual dynamics, bounded real-episode replay and joint visual decoding. CUDA torch.compile, BF16 GEMMs and 8-bit AdamW moments; optional FP8 remains experimental. Separate frozen validation. Actor, critic, goal and imagination learning remain future components. Total active neural parameters: 215984848. A separate phase in model/behavior_experiment.py loads the existing world weights with eval/requires_grad=False. Only new goal/value readouts train. See Behavior / Latent Planner for the implemented path; the original joint-training graph remains the resumable world-learning phase.",
       "children": [
         "world.representation",
         "world_model",
@@ -607,7 +623,7 @@
           "value": 91525376
         }
       ],
-      "description": "Shared spatial encoder: each patch concatenates all 16 pixel feature vectors (35 channels per pixel), projects 560 to 768, adds positions and applies 12 Transformer blocks. Retain every patch, apply LayerNorm, scan animation frames with a shared per-patch recurrent cell, project to 1024 and LayerNorm. Result z[P,1024], P=ceil(H/4)*ceil(W/4). Both live and replay paths share weights; no spatial pooling.",
+      "description": "Shared spatial encoder: each patch concatenates all 16 pixel feature vectors (35 channels per pixel), projects 560 to 768, adds positions and applies 12 Transformer blocks. Retain every patch, apply LayerNorm, scan animation frames with a shared per-patch recurrent cell, project to 1024 and LayerNorm. Result z[P,1024], P=ceil(H/4)*ceil(W/4). Both live and replay paths share weights; no spatial pooling. In model.behavior_experiment, all existing world-model tensors are frozen; this module is never optimized and world-learner/gate updates are inactive. The decoder is not called during latent planning.",
       "parent_id": "world.representation",
       "children": [
         "world.encoder.live",
@@ -705,7 +721,7 @@
           "value": false
         }
       ],
-      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games can reactivate joint learning through the optional reconstruction gate. Reject prefixes spanning nonterminal SDK levels_completed changes. The runner excludes those targets and flushes pending valid prefixes before clearing replay; terminal WIN/GAME_OVER targets remain trainable. The optional representation gate automatically selects the resumable mode from frozen reconstruction evidence; it never changes the predictor learning policy or curriculum quality thresholds.",
+      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games can reactivate joint learning through the optional reconstruction gate. Reject prefixes spanning nonterminal SDK levels_completed changes. The runner excludes those targets and flushes pending valid prefixes before clearing replay; terminal WIN/GAME_OVER targets remain trainable. The optional representation gate automatically selects the resumable mode from frozen reconstruction evidence; it never changes the predictor learning policy or curriculum quality thresholds. In model.behavior_experiment, all existing world-model tensors are frozen; this module is never optimized and world-learner/gate updates are inactive. The decoder is not called during latent planning.",
       "children": [
         "world.target_encoder",
         "world.monitor",
@@ -1370,7 +1386,7 @@
           "value": 57688576
         }
       ],
-      "description": "Shared visual readout from z[P,1024] to 16 per-pixel color logits, with exact native geometry and canonical KEEP/replacement deltas. Used both for predicted successors and real-successor reconstruction. Joint real-data training teaches encoder and predictor as well as decoder; this readout is outside latent imagination.",
+      "description": "Shared visual readout from z[P,1024] to 16 per-pixel color logits, with exact native geometry and canonical KEEP/replacement deltas. Used both for predicted successors and real-successor reconstruction. Joint real-data training teaches encoder and predictor as well as decoder; this readout is outside latent imagination. In model.behavior_experiment, all existing world-model tensors are frozen; this module is never optimized and world-learner/gate updates are inactive. The decoder is not called during latent planning.",
       "parent_id": "agent",
       "children": [
         "world.decoder.learning",
@@ -1700,18 +1716,28 @@
           "direction": "input",
           "shape": null,
           "value_type": "PredictedActionMask {probabilities: float32[8], threshold: 0.5}"
+        },
+        {
+          "id": "experience",
+          "label": "experience",
+          "direction": "input",
+          "value_type": "Real SDK experience",
+          "shape": null
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Phase-one behavior is model/data.py random_action: uniform legal ordinary SDK action IDs, with independent uniform SDK x/y coordinates for ACTION6. No learned actor, goal, critic, imagined rollout or adaptation runs yet. Those planned components remain expanded in this design with explicit future status; their ports are not requirements for random collection.",
+      "description": "Phase-one behavior is model/data.py random_action: uniform legal ordinary SDK action IDs, with independent uniform SDK x/y coordinates for ACTION6. No learned actor, goal, critic, imagined rollout or adaptation runs yet. Those planned components remain expanded in this design with explicit future status; their ports are not requirements for random collection. Implemented alternative: GoalValue and Planner in model/planning.py. The new path learns from real SDK outcomes and selects Q or receding-horizon latent MPC; no decoder is called in planning. Existing actor/critic/imagination children remain the future Dreamer path.",
       "children": [
         "behavior.actor",
         "behavior.imagination",
         "behavior.critic",
         "behavior.reward",
-        "behavior.state"
+        "behavior.state",
+        "behavior.planner",
+        "behavior.mode",
+        "behavior.mode_context"
       ],
       "parent_id": "agent"
     },
@@ -2078,7 +2104,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Future component, not executed or trained by model/runner.py. Assumed-solved domain provider, not an invented learned objective. Proposed neural interface includes goal embedding[256] and a callable reward specification usable on latent transitions. How an unknown ARC objective is inferred or evaluated from latents remains explicitly OUT OF SCOPE and unresolved; a paper cannot supply it. The future actor/reward path cannot activate without this provider. Phase-one random interaction and encoder/predictor training are independent of it.",
+      "description": "Future component, not executed or trained by model/runner.py. Assumed-solved domain provider, not an invented learned objective. Proposed neural interface includes goal embedding[256] and a callable reward specification usable on latent transitions. How an unknown ARC objective is inferred or evaluated from latents remains explicitly OUT OF SCOPE and unresolved; a paper cannot supply it. The future actor/reward path cannot activate without this provider. Phase-one random interaction and encoder/predictor training are independent of it. This GoalSpec/embedding provider remains future. The implemented prototype instead learns public progress/WIN and GAME_OVER likelihood and finite-budget success values inside Behavior / Latent Planner, without a semantic rule oracle.",
       "parent_id": "agent"
     },
     {
@@ -118360,6 +118386,1804 @@
       "operation": "hysteresis",
       "formula": "freeze_representation = gate(reconstruction_report, auto_representation, unfreeze_error, freeze_error, patience, min_validation_transitions, min_changed_transitions, min_latent_std)",
       "description": "Stateful validation-boundary controller implemented in model/representation_gate.py and model/runner.py. Optional policy (CLI default off; enabled in the active run). Any evaluated level above the upper reconstruction delta-error threshold for two consecutive eligible validations reactivates encoder and decoder. All evaluated levels at or below the lower threshold with healthy latent diversity for two validations freeze both. Missing/nonfinite/insufficient evidence or the dead band clears streaks. Validation level-scope changes and explicit policy/mode overrides reset streaks. Checkpoints preserve partial streaks, mode and optimizer moments; a mode change resets curriculum passes and saves latest immediately. This is a host-side control decision between updates, not a tensor sigmoid or model-version mechanism. Predictor learning and visual input gradients through the decoder remain active."
+    },
+    {
+      "id": "behavior.planner",
+      "label": "Latent Planner",
+      "kind": "group",
+      "parent_id": "action.selector",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "valid_actions",
+          "label": "valid_actions",
+          "direction": "input",
+          "value_type": "ActionId[V]",
+          "shape": null
+        },
+        {
+          "id": "predicted_state",
+          "label": "predicted_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "experience",
+          "label": "experience",
+          "direction": "input",
+          "value_type": "Real SDK experience",
+          "shape": null
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "query_state",
+          "label": "query_state",
+          "direction": "output",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "query_action",
+          "label": "query_action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Implemented experimental policy. Uniform legal exploration collects real episodes. Goal/value heads learn public outcome labels and discounted returns; all world weights stay frozen. A greedy Q readout is the cheap diagnostic; latent beam MPC evaluates one/two steps, executes one action and corrects memory from reality. Current legality is reused within the short rollout: future legality is unknown. No decoder, imagined replay targets, or game-specific rules. CLI currently admits bundled synthetic training games only.",
+      "children": [
+        "behavior.planner.records",
+        "behavior.planner.learner",
+        "behavior.planner.search",
+        "behavior.planner.readout"
+      ]
+    },
+    {
+      "id": "behavior.mode",
+      "label": "Policy Selection",
+      "kind": "operation",
+      "parent_id": "action.selector",
+      "ports": [
+        {
+          "id": "mode",
+          "label": "mode",
+          "direction": "input",
+          "value_type": "Invocation policy",
+          "shape": null
+        },
+        {
+          "id": "baseline_action",
+          "label": "baseline_action",
+          "direction": "input",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "baseline_query_state",
+          "label": "baseline_query_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "baseline_query_action",
+          "label": "baseline_query_action",
+          "direction": "input",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "planner_action",
+          "label": "planner_action",
+          "direction": "input",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "planner_query_state",
+          "label": "planner_query_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "planner_query_action",
+          "label": "planner_query_action",
+          "direction": "input",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "query_state",
+          "label": "query_state",
+          "direction": "output",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "query_action",
+          "label": "query_action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Lazy mode selection: model/runner.py uses random behavior; model/behavior_experiment.py uses the learned Q/MPC planner. Baseline Dreamer actor behavior remains future. Inactive paths do not run.",
+      "operation": "mode",
+      "formula": "action, query_state, query_action = select(mode, baseline_action, baseline_query_state, baseline_query_action, planner_action, planner_query_state, planner_query_action)"
+    },
+    {
+      "id": "behavior.mode_context",
+      "label": "Behavior Mode",
+      "kind": "context",
+      "parent_id": "action.selector",
+      "ports": [
+        {
+          "id": "mode",
+          "label": "mode",
+          "direction": "output",
+          "value_type": "Invocation policy",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Selected explicitly by the entry point. World training: random; behavior experiment: q or mpc. Evaluation never updates any weights."
+    },
+    {
+      "id": "behavior.planner.records",
+      "label": "Behavior Memory",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "experience",
+          "label": "experience",
+          "direction": "input",
+          "value_type": "Real SDK experience",
+          "shape": null
+        },
+        {
+          "id": "training_batch",
+          "label": "training_batch",
+          "direction": "output",
+          "value_type": "Detached pre-action z/h, executed action, actual event, real finite-budget return",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "In-process bounded real records. Pair pre-action latent and memory with the subsequent real SDK event. At episode completion compute G_t=progress_t+gamma*continuation_t*G_(t+1), zero beyond the finite budget. GAME_OVER stops returns; budget truncation does not become a terminal class. No evaluation records or persisted replay. Default maximum 8192 transitions; FIFO eviction. Before the first image, records are skipped; a later empty frame response retains the last confirmed latent while recurrent memory still advances with every executed action."
+    },
+    {
+      "id": "behavior.planner.learner",
+      "label": "Goal & Value Learner",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "training_batch",
+          "label": "training_batch",
+          "direction": "input",
+          "value_type": "Real labeled latent batch",
+          "shape": null
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "output",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "learning_rate",
+          "value": 0.001
+        },
+        {
+          "name": "discount",
+          "value": 0.95
+        }
+      ],
+      "description": "Only new GoalValue weights are optimized: unweighted event cross entropy plus BCE of V and Q against real discounted success returns. AdamW lr=0.001, weight_decay=0.001, clip_grad_norm=10. SDK counts/WIN/GAME_OVER are labels only, never future input features. No world optimizer or gradients; evaluation readout uses fixed heads. Successful progress is an event signal, not a discovered symbolic objective."
+    },
+    {
+      "id": "behavior.planner.search",
+      "label": "Receding-Horizon Search",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "valid_actions",
+          "label": "valid_actions",
+          "direction": "input",
+          "value_type": "ActionId[V]",
+          "shape": null
+        },
+        {
+          "id": "predicted_state",
+          "label": "predicted_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "scores",
+          "label": "scores",
+          "direction": "input",
+          "value_type": "Value[B], event probabilities[B,3], action value[B]",
+          "shape": null
+        },
+        {
+          "id": "readout_query",
+          "label": "readout_query",
+          "direction": "output",
+          "value_type": "Batched latent states, candidate action features float32[B,12], native geometry",
+          "shape": null
+        },
+        {
+          "id": "query_state",
+          "label": "query_state",
+          "direction": "output",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "query_action",
+          "label": "query_action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "beam",
+          "value": 4
+        },
+        {
+          "name": "discount",
+          "value": 0.95
+        },
+        {
+          "name": "click_candidates",
+          "value": 8
+        }
+      ],
+      "description": "Planner.choose: generate all legal non-click IDs and at most 8 uniform click coordinates. Q mode chooses maximum learned Q without dynamics. MPC expands the current beam, sends z/h/action through the frozen predictor and evaluates learned progress, continuation and terminal V. Rank sum(gamma^t*survival_t*progress_t)+gamma^H*survival_H*V_H. Keep top 4, horizon 1 or 2 in the first experiment; execute only the first action. Each branch owns its h. Real observation replaces imagined state after execution. Search budget changes do not change the world weights."
+    },
+    {
+      "id": "behavior.planner.readout",
+      "label": "Goal & Value Readout",
+      "kind": "group",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "readout_query",
+          "label": "readout_query",
+          "direction": "input",
+          "value_type": "Batched latent states, candidate action features float32[B,12], native geometry",
+          "shape": null
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        },
+        {
+          "id": "scores",
+          "label": "scores",
+          "direction": "output",
+          "value_type": "Value[B], event probabilities[B,3], action value[B]",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "GoalValue in model/planning.py. New head checkpoint is separate from world tensors. Evaluated on real pre-action states for learning, candidate states/actions for planning, and predicted successor states for the terminal value. No pixels, goal flags or future observations enter these heads.",
+      "children": [
+        "behavior.planner.readout.inputs",
+        "behavior.planner.readout.norm",
+        "behavior.planner.readout.projection",
+        "behavior.planner.readout.silu0",
+        "behavior.planner.readout.conv0",
+        "behavior.planner.readout.silu1",
+        "behavior.planner.readout.conv1",
+        "behavior.planner.readout.silu2",
+        "behavior.planner.readout.pool",
+        "behavior.planner.readout.memory",
+        "behavior.planner.readout.tanh",
+        "behavior.planner.readout.concat",
+        "behavior.planner.readout.linear0",
+        "behavior.planner.readout.activation0",
+        "behavior.planner.readout.linear1",
+        "behavior.planner.readout.activation1",
+        "behavior.planner.readout.value",
+        "behavior.planner.readout.value_sigmoid",
+        "behavior.planner.readout.action_concat",
+        "behavior.planner.readout.action_linear",
+        "behavior.planner.readout.action_silu",
+        "behavior.planner.readout.action_output",
+        "behavior.planner.readout.probabilities",
+        "behavior.planner.readout.scores"
+      ]
+    },
+    {
+      "id": "behavior.planner.readout.inputs",
+      "label": "Latent Query",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "readout_query",
+          "label": "readout_query",
+          "direction": "input",
+          "value_type": "Batched latent states, candidate action features float32[B,12], native geometry",
+          "shape": null
+        },
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "a",
+          "label": "a",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Preserve native patch geometry in the spatial branch; batch independent search states.",
+      "operation": "inputs",
+      "formula": "z, h, a = unpack(readout_query)"
+    },
+    {
+      "id": "behavior.planner.readout.norm",
+      "label": "LayerNorm",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,P,1024]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-05
+        }
+      ],
+      "operation": "norm",
+      "formula": "out = layer_norm(x, head_parameters, eps)"
+    },
+    {
+      "id": "behavior.planner.readout.projection",
+      "label": "Spatial Projection",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,P,1024]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "in_channels",
+          "value": 1024
+        },
+        {
+          "name": "out_channels",
+          "value": 64
+        },
+        {
+          "name": "kernel_size",
+          "value": 1
+        }
+      ],
+      "operation": "projection",
+      "formula": "out = conv2d(native_patch_grid(x), head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.silu0",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,64,R,C]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "silu0",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.conv0",
+      "label": "Spatial Convolution",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "Spatial feature map",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_half"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_half"
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "channels",
+          "value": 64
+        },
+        {
+          "name": "kernel_size",
+          "value": 3
+        },
+        {
+          "name": "stride",
+          "value": 2
+        },
+        {
+          "name": "padding",
+          "value": 1
+        }
+      ],
+      "operation": "conv0",
+      "formula": "out = conv2d(x, head_parameters, stride, padding)"
+    },
+    {
+      "id": "behavior.planner.readout.silu1",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "Spatial feature map",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_half"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_half"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_half"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_half"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "silu1",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.conv1",
+      "label": "Spatial Convolution",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "Spatial feature map",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_half"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_half"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_quarter"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_quarter"
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "channels",
+          "value": 64
+        },
+        {
+          "name": "kernel_size",
+          "value": 3
+        },
+        {
+          "name": "stride",
+          "value": 2
+        },
+        {
+          "name": "padding",
+          "value": 1
+        }
+      ],
+      "operation": "conv1",
+      "formula": "out = conv2d(x, head_parameters, stride, padding)"
+    },
+    {
+      "id": "behavior.planner.readout.silu2",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "Spatial feature map",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_quarter"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_quarter"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_quarter"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_quarter"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "silu2",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.pool",
+      "label": "Spatial Pooling",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "Spatial feature map",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R_quarter"
+            },
+            {
+              "kind": "symbol",
+              "name": "C_quarter"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "output_size",
+          "value": [
+            4,
+            4
+          ]
+        }
+      ],
+      "operation": "pool",
+      "formula": "out = flatten(adaptive_avg_pool2d(x, output_size))"
+    },
+    {
+      "id": "behavior.planner.readout.memory",
+      "label": "Memory Projection",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,2048]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "in_features",
+          "value": 2048
+        },
+        {
+          "name": "out_features",
+          "value": 64
+        }
+      ],
+      "operation": "memory",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.tanh",
+      "label": "Tanh",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,64]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "tanh",
+      "formula": "out = tanh(x)"
+    },
+    {
+      "id": "behavior.planner.readout.concat",
+      "label": "State Features",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "spatial",
+          "label": "spatial",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "memory",
+          "label": "memory",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1088
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "concat",
+      "formula": "out = concat(spatial, memory)"
+    },
+    {
+      "id": "behavior.planner.readout.linear0",
+      "label": "Linear",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "State feature vector",
+          "shape": null
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "in_features",
+          "value": 1088
+        },
+        {
+          "name": "out_features",
+          "value": 256
+        }
+      ],
+      "operation": "linear0",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.activation0",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "State feature vector",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "activation0",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.linear1",
+      "label": "Linear",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "State feature vector",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "in_features",
+          "value": 256
+        },
+        {
+          "name": "out_features",
+          "value": 128
+        }
+      ],
+      "operation": "linear1",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.activation1",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "State feature vector",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "activation1",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.value",
+      "label": "Value Projection",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,128]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "out_features",
+          "value": 1
+        }
+      ],
+      "operation": "value",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.value_sigmoid",
+      "label": "Success Value",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,1]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "value_sigmoid",
+      "formula": "out = sigmoid(x)"
+    },
+    {
+      "id": "behavior.planner.readout.action_concat",
+      "label": "Action Conditioning",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "features",
+          "label": "features",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "a",
+          "label": "a",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 140
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "action_concat",
+      "formula": "out = concat(features, a)"
+    },
+    {
+      "id": "behavior.planner.readout.action_linear",
+      "label": "Linear",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,140]",
+          "shape": null
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "out_features",
+          "value": 128
+        }
+      ],
+      "operation": "action_linear",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.action_silu",
+      "label": "SiLU",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,128]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "action_silu",
+      "formula": "out = silu(x)"
+    },
+    {
+      "id": "behavior.planner.readout.action_output",
+      "label": "Event and Action-Value Projection",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "value_type": "float32[B,128]",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            }
+          ]
+        },
+        {
+          "id": "head_parameters",
+          "label": "head_parameters",
+          "direction": "input",
+          "value_type": "GoalValue parameters",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "out_features",
+          "value": 4
+        }
+      ],
+      "operation": "action_output",
+      "formula": "out = linear(x, head_parameters)"
+    },
+    {
+      "id": "behavior.planner.readout.probabilities",
+      "label": "Outcome Probabilities",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "logits",
+          "label": "logits",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            }
+          ]
+        },
+        {
+          "id": "events",
+          "label": "events",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 3
+            }
+          ]
+        },
+        {
+          "id": "q",
+          "label": "q",
+          "direction": "output",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Event classes: continue, progress, GAME_OVER. Q estimates discounted success under collected behavior.",
+      "operation": "probabilities",
+      "formula": "events = softmax(logits[..., :3]); q = sigmoid(logits[..., 3])"
+    },
+    {
+      "id": "behavior.planner.readout.scores",
+      "label": "Readout Scores",
+      "kind": "operation",
+      "parent_id": "behavior.planner.readout",
+      "ports": [
+        {
+          "id": "value",
+          "label": "value",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "events",
+          "label": "events",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": null
+        },
+        {
+          "id": "q",
+          "label": "q",
+          "direction": "input",
+          "value_type": "float32",
+          "shape": null
+        },
+        {
+          "id": "scores",
+          "label": "scores",
+          "direction": "output",
+          "value_type": "Value[B], event probabilities[B,3], action value[B]",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "scores",
+      "formula": "scores = pack(value, events, q)"
     }
   ],
   "edges": [
@@ -118982,8 +120806,8 @@
         "port_id": "action"
       },
       "target": {
-        "node_id": "action.selector",
-        "port_id": "action"
+        "node_id": "behavior.mode",
+        "port_id": "baseline_action"
       },
       "kind": "data"
     },
@@ -118994,8 +120818,8 @@
         "port_id": "query_state"
       },
       "target": {
-        "node_id": "action.selector",
-        "port_id": "query_state"
+        "node_id": "behavior.mode",
+        "port_id": "baseline_query_state"
       },
       "kind": "data"
     },
@@ -119018,8 +120842,8 @@
         "port_id": "query_action"
       },
       "target": {
-        "node_id": "action.selector",
-        "port_id": "query_action"
+        "node_id": "behavior.mode",
+        "port_id": "baseline_query_action"
       },
       "kind": "data"
     },
@@ -152934,6 +154758,762 @@
         "port_id": "freeze_representation"
       },
       "kind": "context"
+    },
+    {
+      "id": "planner.2881",
+      "source": {
+        "node_id": "behavior.mode_context",
+        "port_id": "mode"
+      },
+      "target": {
+        "node_id": "behavior.mode",
+        "port_id": "mode"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "planner.2882",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "behavior.mode",
+        "port_id": "planner_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2883",
+      "source": {
+        "node_id": "behavior.mode",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "action.selector",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2884",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "query_state"
+      },
+      "target": {
+        "node_id": "behavior.mode",
+        "port_id": "planner_query_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2885",
+      "source": {
+        "node_id": "behavior.mode",
+        "port_id": "query_state"
+      },
+      "target": {
+        "node_id": "action.selector",
+        "port_id": "query_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2886",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "query_action"
+      },
+      "target": {
+        "node_id": "behavior.mode",
+        "port_id": "planner_query_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2887",
+      "source": {
+        "node_id": "behavior.mode",
+        "port_id": "query_action"
+      },
+      "target": {
+        "node_id": "action.selector",
+        "port_id": "query_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2888",
+      "source": {
+        "node_id": "action.selector",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2889",
+      "source": {
+        "node_id": "action.selector",
+        "port_id": "valid_actions"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "valid_actions"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2890",
+      "source": {
+        "node_id": "action.selector",
+        "port_id": "predicted_state"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "predicted_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2891",
+      "source": {
+        "node_id": "world.representation",
+        "port_id": "experience"
+      },
+      "target": {
+        "node_id": "action.selector",
+        "port_id": "experience"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2892",
+      "source": {
+        "node_id": "action.selector",
+        "port_id": "experience"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "experience"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2893",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner.records",
+        "port_id": "state"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2894",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "experience"
+      },
+      "target": {
+        "node_id": "behavior.planner.records",
+        "port_id": "experience"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2895",
+      "source": {
+        "node_id": "behavior.planner.records",
+        "port_id": "training_batch"
+      },
+      "target": {
+        "node_id": "behavior.planner.learner",
+        "port_id": "training_batch"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2896",
+      "source": {
+        "node_id": "behavior.planner.learner",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2897",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner.search",
+        "port_id": "state"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2898",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "valid_actions"
+      },
+      "target": {
+        "node_id": "behavior.planner.search",
+        "port_id": "valid_actions"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2899",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "predicted_state"
+      },
+      "target": {
+        "node_id": "behavior.planner.search",
+        "port_id": "predicted_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2900",
+      "source": {
+        "node_id": "behavior.planner.search",
+        "port_id": "readout_query"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "readout_query"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2901",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "scores"
+      },
+      "target": {
+        "node_id": "behavior.planner.search",
+        "port_id": "scores"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2902",
+      "source": {
+        "node_id": "behavior.planner.search",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2903",
+      "source": {
+        "node_id": "behavior.planner.search",
+        "port_id": "query_state"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2904",
+      "source": {
+        "node_id": "behavior.planner.search",
+        "port_id": "query_action"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2905",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "readout_query"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.inputs",
+        "port_id": "readout_query"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2906",
+      "source": {
+        "node_id": "behavior.planner.readout.inputs",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.norm",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2907",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.norm",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2908",
+      "source": {
+        "node_id": "behavior.planner.readout.norm",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.projection",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2909",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.projection",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2910",
+      "source": {
+        "node_id": "behavior.planner.readout.projection",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.silu0",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2911",
+      "source": {
+        "node_id": "behavior.planner.readout.silu0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.conv0",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2912",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.conv0",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2913",
+      "source": {
+        "node_id": "behavior.planner.readout.conv0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.silu1",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2914",
+      "source": {
+        "node_id": "behavior.planner.readout.silu1",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.conv1",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2915",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.conv1",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2916",
+      "source": {
+        "node_id": "behavior.planner.readout.conv1",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.silu2",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2917",
+      "source": {
+        "node_id": "behavior.planner.readout.silu2",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.pool",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2918",
+      "source": {
+        "node_id": "behavior.planner.readout.inputs",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.memory",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2919",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.memory",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2920",
+      "source": {
+        "node_id": "behavior.planner.readout.memory",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.tanh",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2921",
+      "source": {
+        "node_id": "behavior.planner.readout.pool",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.concat",
+        "port_id": "spatial"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2922",
+      "source": {
+        "node_id": "behavior.planner.readout.tanh",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.concat",
+        "port_id": "memory"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2923",
+      "source": {
+        "node_id": "behavior.planner.readout.concat",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.linear0",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2924",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.linear0",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2925",
+      "source": {
+        "node_id": "behavior.planner.readout.linear0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.activation0",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2926",
+      "source": {
+        "node_id": "behavior.planner.readout.activation0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.linear1",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2927",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.linear1",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2928",
+      "source": {
+        "node_id": "behavior.planner.readout.linear1",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.activation1",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2929",
+      "source": {
+        "node_id": "behavior.planner.readout.activation1",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.value",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2930",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.value",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2931",
+      "source": {
+        "node_id": "behavior.planner.readout.value",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.value_sigmoid",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2932",
+      "source": {
+        "node_id": "behavior.planner.readout.activation1",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_concat",
+        "port_id": "features"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2933",
+      "source": {
+        "node_id": "behavior.planner.readout.inputs",
+        "port_id": "a"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_concat",
+        "port_id": "a"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2934",
+      "source": {
+        "node_id": "behavior.planner.readout.action_concat",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_linear",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2935",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_linear",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2936",
+      "source": {
+        "node_id": "behavior.planner.readout.action_linear",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_silu",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2937",
+      "source": {
+        "node_id": "behavior.planner.readout.action_silu",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_output",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2938",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "head_parameters"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.action_output",
+        "port_id": "head_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planner.2939",
+      "source": {
+        "node_id": "behavior.planner.readout.action_output",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.probabilities",
+        "port_id": "logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2940",
+      "source": {
+        "node_id": "behavior.planner.readout.value_sigmoid",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.scores",
+        "port_id": "value"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2941",
+      "source": {
+        "node_id": "behavior.planner.readout.probabilities",
+        "port_id": "events"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.scores",
+        "port_id": "events"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2942",
+      "source": {
+        "node_id": "behavior.planner.readout.probabilities",
+        "port_id": "q"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout.scores",
+        "port_id": "q"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planner.2943",
+      "source": {
+        "node_id": "behavior.planner.readout.scores",
+        "port_id": "scores"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "scores"
+      },
+      "kind": "data"
     }
   ],
   "parameters": [
@@ -187622,5 +190202,5 @@
       ]
     }
   ],
-  "incomplete_reason": "Executable pixel-resolved encoder, local/global recurrent residual predictor, jointly trained visual decoder and random SDK curriculum in model/. All 491 active checkpoint tensors are bound to their consuming operations. Actor/critic/goal/reward/imagination training and auxiliary heads remain future components. No convergence or cross-game generalization claim."
+  "incomplete_reason": "World checkpoint tensors remain bound to their consuming operations. model/behavior_experiment.py separately implements frozen-world goal/value learning and latent MPC. Its new head weights live in heads.pt and are not part of the world-only LLMEX tensor inventory; head operations below therefore have no fabricated tensor bindings. Future Dreamer actor/critic/goal-embedding topology remains explicit. No convergence or cross-game generalization claim."
 }
