@@ -6,7 +6,7 @@ synthetic training games only, failing closed for public/held-out SDK games.
 """
 import argparse
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import random
@@ -123,7 +123,7 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
 
 
 @torch.no_grad()
-def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None):
+def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None, role='candidate'):
     results, started = [], time.monotonic()
     for index, seed in enumerate(seeds):
         rng, env = random.Random(seed), factory.make(seed, level)
@@ -149,7 +149,7 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
                         'truncated': event == 0 and not obs.terminal, 'actions': actions,
                         'decision_seconds': decision_seconds})
         if (index + 1) % 16 == 0:
-            emit('behavior_evaluation_progress', split=split, round=round_index, policy=mode, horizon=planner.config.horizon,
+            emit('behavior_evaluation_progress', split=split, round=round_index, role=role, policy=mode, horizon=planner.config.horizon,
                  episodes=index + 1, wins=sum(r['success'] for r in results))
     total_actions = sum(r['actions'] for r in results)
     wins = sum(r['success'] for r in results)
@@ -159,7 +159,7 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
     rate = wins / n
     center = (rate + z*z/(2*n)) / (1 + z*z/n)
     radius = z * (rate*(1-rate)/n + z*z/(4*n*n))**.5 / (1+z*z/n)
-    report = {'split': split, 'round': round_index, 'policy': mode, 'horizon': planner.config.horizon, 'episodes': n, 'wins': wins,
+    report = {'split': split, 'round': round_index, 'role': role, 'policy': mode, 'horizon': planner.config.horizon, 'episodes': n, 'wins': wins,
               'win_rate': rate, 'wilson95': [center-radius, center+radius], 'actions': total_actions,
               'actions_per_success': total_actions / wins if wins else None,
               'seconds': seconds, 'actions_per_second': total_actions / max(seconds, 1e-9),
@@ -174,12 +174,23 @@ def save_heads(path, heads, source, config, report):
                             'planner': asdict(config), 'report': report})
 
 
-def load_heads(path, heads, source):
+def load_heads(path, heads, source, *, game=None, level=None):
     payload = checkpoint.load(path)
     if payload['source_fingerprint'] != source:
         raise ValueError('Behavior checkpoint belongs to different world-model weights')
+    context = payload['report'].get('config', {})
+    if game is not None and (context.get('game') != game or context.get('level') != level):
+        raise ValueError('Behavior continuation requires the same game and level')
     heads.load_state_dict(payload['weights'])
     return payload
+
+
+def selection_key(result):
+    return result['wins'], -result['actions'], -result['decision_ms']
+
+
+def copy_weights(heads):
+    return {k: v.detach().cpu().clone() for k, v in heads.state_dict().items()}
 
 
 def main(argv=None):
@@ -202,7 +213,9 @@ def main(argv=None):
     parser.add_argument('--beam', type=int, default=4)
     parser.add_argument('--seed-offset', type=int, default=0,
                         help='Use fresh disjoint train/dev/final seeds for another experiment')
-    parser.add_argument('--heads', type=Path, help='Saved behavior heads for evaluation only')
+    initialization = parser.add_mutually_exclusive_group()
+    initialization.add_argument('--heads', type=Path, help='Saved behavior heads for evaluation only')
+    initialization.add_argument('--init-heads', type=Path, help='Initialize training weights; fresh optimizer and real experience')
     args = parser.parse_args(argv)
     if args.game not in SYNTHETIC_LEVELS or args.level not in range(1, SYNTHETIC_LEVELS.get(args.game, 0) + 1):
         parser.error('This prototype admits bundled synthetic training games only; public-game split admission is not implemented')
@@ -235,11 +248,22 @@ def main(argv=None):
     factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
     heads = GoalValue(net.config.latent, net.config.memory).to(args.device)
     config = PlanConfig(beam=args.beam)
+    initial_weights, initial_policy, initial_config = None, None, None
+    if args.init_heads:
+        saved = load_heads(args.init_heads, heads, source, game=args.game, level=args.level)
+        initial_config = PlanConfig(**saved['planner'])
+        initial_policy = saved['report']['selected']['policy']
+        if initial_policy not in {'q', 'mpc'}:
+            raise ValueError('Unknown initial behavior policy')
+        initial_weights = copy_weights(heads)
+        config = replace(initial_config, beam=args.beam)
     planner = Planner(engine, heads, config, compile_heads=args.device == 'cuda')
     records = deque(maxlen=args.max_records)
     report = {'source_fingerprint': source, 'source_actions': source_actions,
               'config': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
               'development': [], 'collection': []}
+    if initial_weights is not None:
+        report['initial_head_fingerprint'] = fingerprint(heads)
     emit('behavior_started', game=args.game, level=args.level, device=args.device,
          compile=args.device == 'cuda', mode='evaluation_only' if args.heads else 'training',
          source=source, source_actions=source_actions, world_trainable=sum(p.numel() for p in net.parameters() if p.requires_grad))
@@ -261,14 +285,21 @@ def main(argv=None):
     development = episode_seeds('dev', args.dev_episodes, args.seed_offset)
     baseline = evaluate(engine, planner, factory, args.level, development, args.steps, 'random', split='development')
     report['development_random'] = baseline
-    best, best_weights, chosen = None, None, None
+    best, best_weights, chosen, best_config = None, None, None, None
+    if initial_weights is not None:
+        planner.config = initial_config
+        result = evaluate(engine, planner, factory, args.level, development, args.steps, initial_policy,
+                          split='development', round_index=0, role='initial')
+        result['iteration'] = 0
+        report['development_initial'] = result
+        best, best_weights, chosen, best_config = selection_key(result), initial_weights, result, initial_config
     for iteration in range(args.rounds):
-        # First round random; next collects fresh real interactions from the
-        # best development policy with epsilon exploration. No eval reuse.
-        policy = None if iteration == 0 else planner
-        if iteration:
+        # Random only when no learned initialization exists. Later rounds use
+        # the best development policy with epsilon exploration. No eval reuse.
+        policy = planner if best_weights is not None else None
+        if best_weights is not None:
             heads.load_state_dict(best_weights)
-            planner.config = PlanConfig(horizon=chosen['horizon'], beam=args.beam)
+            planner.config = best_config
         collection = collect(engine, factory, args.level,
                              episode_seeds('train', args.train_episodes, args.seed_offset + iteration * args.train_episodes),
                              args.steps, config.discount, records, policy,
@@ -277,20 +308,30 @@ def main(argv=None):
         fit(engine, heads, records, args.epochs, args.batch_size, args.learning_rate,
             123 + iteration, compiled=args.device == 'cuda', round_index=iteration + 1)
         for mode, horizon in [('q', 1)] + [('mpc', h) for h in args.horizons]:
-            planner.config = PlanConfig(horizon=horizon, beam=args.beam)
+            planner.config = replace(config, horizon=horizon)
             result = evaluate(engine, planner, factory, args.level, development, args.steps, mode, split='development', round_index=iteration + 1)
             result['iteration'] = iteration + 1
             report['development'].append(result)
-            key = (result['wins'], -result['actions'], -result['decision_ms'])
+            key = selection_key(result)
             if best is None or key > best:
-                best, chosen = key, result
-                best_weights = {k: v.detach().cpu().clone() for k, v in heads.state_dict().items()}
+                best, chosen, best_config = key, result, planner.config
+                best_weights = copy_weights(heads)
+        heads.load_state_dict(best_weights)
+        report['selected'] = {k: chosen[k] for k in ('iteration', 'policy', 'horizon')}
+        report['head_fingerprint'] = fingerprint(heads)
+        save_heads(args.output / 'heads.pt', heads, source, best_config, report)
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     heads.load_state_dict(best_weights)
-    planner.config = PlanConfig(horizon=chosen['horizon'], beam=args.beam)
-    report['selected'] = {k: chosen[k] for k in ('iteration', 'policy', 'horizon')}
+    planner.config = best_config
     final_seeds = episode_seeds('final', args.final_episodes, args.seed_offset)
     report['final_random'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, 'random', split='final')
+    if initial_weights is not None:
+        heads.load_state_dict(initial_weights)
+        planner.config = initial_config
+        report['final_initial'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps,
+                                          initial_policy, split='final', role='initial')
+        heads.load_state_dict(best_weights)
+        planner.config = best_config
     report['final_learned'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, chosen['policy'], split='final')
     report['world_unchanged'] = fingerprint(net) == source
     if not report['world_unchanged'] or any(p.grad is not None for p in net.parameters()):
