@@ -32,7 +32,8 @@ The static [browser .arc3 loader](viewer/README.md) can inspect recorded attempt
 through local files or CORS-authorized URLs without running Python or the SDK.
 
 The [synthetic game catalog](games/README.md) includes Square Cross (`sc01-v1`,
-five levels) and Square Cross Interactions (`si01-v1`, three levels), with a local
+five levels) and Square Cross Interactions (`si01-v1`, five levels: two click-only
+tasks, then three navigation tasks), with a local
 browser game picker and a bounded random SDK smoke launcher:
 
 ```sh

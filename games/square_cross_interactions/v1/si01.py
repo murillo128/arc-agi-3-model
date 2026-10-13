@@ -1,18 +1,42 @@
-"""Three interaction levels, with independent SDK identity and local numbering."""
+"""Five interaction levels, with independent SDK identity and local numbering."""
 
 import random
+from typing import NamedTuple
 
-from arcengine import ARCBaseGame, Camera, Level
+from arcengine import ARCBaseGame, Camera, Level, Sprite
 
 from games.pixel_grid import (BOUNDS, DIRECTIONS, Scene, draw_scene, fits,
                               render_hud, sweep_fits)
 
 
+class ClickScene(NamedTuple):
+    """Only squares and the HUD; introductory levels have no navigation targets."""
+
+    players: tuple[tuple[tuple[int, int], int], ...]
+    edge: str
+    player_size: int = 5
+    budget: int = 24
+
+
 def generate_scene(seed, level):
-    if level not in range(1, 4):
+    if level not in range(1, 6):
         raise ValueError(f"Invalid square-cross-interactions level: seed={seed}, level={level}")
+    if level <= 2:
+        rng = random.Random(f"square-cross-interactions-v1:{seed}:click-{level}")
+        edge = rng.choice(tuple(BOUNDS))
+        left, top, right, bottom = BOUNDS[edge]
+        colors = rng.sample((6, 7, 8, 9, 10, 11, 12, 14, 15), level)
+        # Disjoint halves guarantee separated footprints without retries.
+        points = [(rng.randint(left + 6, left + 24), rng.randint(top + 6, bottom - 6))]
+        if level == 2:
+            points.append((rng.randint(right - 24, right - 6), rng.randint(top + 6, bottom - 6)))
+        if rng.choice((False, True)):
+            # Transpose within the playable region, including its HUD offset.
+            points = [(left + y - top, top + x - left) for x, y in points]
+        return ClickScene(tuple(zip(points, colors)), edge)
+    level -= 2
     # Preserve former scene geometry. Historical numbers belong only to this
-    # RNG namespace; all rules and SDK level data use local levels 1–3.
+    # RNG namespace; navigation levels 3–5 map to former local levels 1–3.
     rng = random.Random(f"square-cross-v1:{seed}:{level + 5}")
     edge = rng.choice(tuple(BOUNDS))
     left, top, right, bottom = BOUNDS[edge]
@@ -74,34 +98,46 @@ class Si01(ARCBaseGame):
     def __init__(self, seed=0):
         self.instance_seed = seed  # Base constructor calls on_set_level before setting _seed.
         super().__init__(
-            game_id="si01", seed=seed, available_actions=[1, 2, 3, 4],
-            levels=[Level(grid_size=(64, 64), data={"number": n}) for n in range(1, 4)],
+            game_id="si01", seed=seed, available_actions=[6],
+            levels=[Level(grid_size=(64, 64), data={"number": n}) for n in range(1, 6)],
             camera=Camera(width=64, height=64, background=5, letter_box=5, interfaces=[self]),
         )
 
     def on_set_level(self, level):
         self.number = number = level.get_data("number")
         # ARCEngine 0.9.3 has no action setter; FrameData reads this list. Its
-        # constructor assigns the same four directions after the first callback.
-        self._available_actions = [1, 2, 3, 4] + ([6] if number >= 2 else [])
+        # constructor overwrites it after the first callback, so it also gets [6].
+        self._available_actions = ([6] if number <= 2 else
+                                   [1, 2, 3, 4] + ([6] if number >= 4 else []))
         self.scene = scene = generate_scene(self.instance_seed, number)
         self.remaining = scene.budget
-        self.selected = None if number >= 2 else 0
+        self.selected = 0 if number == 3 else None
+        self.click_selected = set()
         self.delivered = set()
         level.remove_all_sprites()
-        self.players = draw_scene(level, scene)
+        if number <= 2:
+            self.players = []
+            for (x, y), color in scene.players:
+                player = Sprite(pixels=[[color] * 5 for _ in range(5)],
+                                x=x - 2, y=y - 2, name="player", layer=3)
+                level.add_sprite(player)
+                self.players.append(player)
+        else:
+            self.players = draw_scene(level, scene)
         self.player = self.players[0]
 
     def render_interface(self, frame):
         # Pure rendering: redraws never consume moves.
-        if self.number >= 2 and self.selected is not None:
-            player = self.players[self.selected]
+        indices = self.click_selected if self.number == 2 else (
+            [self.selected] if self.number >= 4 and self.selected is not None else [])
+        for index in indices:
+            player = self.players[index]
             r = self.scene.player_size // 2
             frame[player.y + r - 1:player.y + r + 1, player.x + r - 1:player.x + r + 1] = 0
         return render_hud(frame, self.scene, self.remaining)
 
     def step(self):
-        if self.action.id.value == 6 and self.number >= 2:
+        if self.action.id.value == 6 and self.number != 3:
             point = self.camera.display_to_grid(self.action.data.get("x", -1), self.action.data.get("y", -1))
             hit = None
             if point is not None:
@@ -111,9 +147,22 @@ class Si01(ARCBaseGame):
                             and player.y <= y < player.y + self.scene.player_size):
                         hit = i
                         break
-            self.selected = None if hit == self.selected else hit
+            if self.number == 1:
+                if hit is not None:
+                    self.next_level()
+            elif self.number == 2:
+                if hit is None:
+                    self.click_selected.clear()
+                elif hit in self.click_selected:
+                    self.click_selected.remove(hit)
+                else:
+                    self.click_selected.add(hit)
+                if len(self.click_selected) == 2:
+                    self.next_level()
+            else:
+                self.selected = None if hit == self.selected else hit
         direction = DIRECTIONS.get(self.action.id.value)
-        if direction is not None:
+        if direction is not None and self.number >= 3:
             self.remaining = max(0, self.remaining - 1)
             lost = False
             if self.selected is not None:
@@ -143,7 +192,7 @@ class Si01(ARCBaseGame):
         color = self.scene.players[index][1]
         for step in range(1, stride + 1):
             point = center[0] + dx * step, center[1] + dy * step
-            if self.number in (1, 3) and any(
+            if self.number in (3, 5) and any(
                     other_color != color and touches_cross(point, size, target, self.scene.target_size)
                     for target, other_color in self.scene.targets):
                 # The stride is atomic, but swept contact takes precedence over
@@ -152,7 +201,7 @@ class Si01(ARCBaseGame):
                 return True
         player.move(dx * stride, dy * stride)
         if any((player.x + r, player.y + r) == target
-               and (self.number not in (1, 3) or color == target_color)
+               and (self.number not in (3, 5) or color == target_color)
                for target, target_color in self.scene.targets):
             self.delivered.add(index)
             self.selected = None
