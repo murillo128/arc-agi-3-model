@@ -50357,17 +50357,13 @@
           "value": 0.5
         },
         {
-          "name": "color_balance_power",
-          "value": 0.5
-        },
-        {
           "name": "delta_overlap_weight",
           "value": 1.0
         }
       ],
-      "description": "Separate changed/static groups using real before/after pixels. In each group weight each pixel by count(actual_color, group)^(-color_balance_power), normalizing by total weight. Average the nonempty groups. Default power .5; power 0 is pixel averaging, power 1 equal color mass. KEEP is grouped by its real color too. Chunked accumulation preserves the exact mean. Add the soft delta-union error to penalize invented changes relative to the size of the real delta.",
+      "description": "Separate changed/static groups using real before/after pixels. Average NLL equally over the pixels in each group, without color-frequency weighting, then average the nonempty groups. Chunked accumulation preserves the exact mean. Add the soft delta-union error to penalize invented changes relative to the size of the real delta.",
       "operation": "mean",
-      "formula": "loss = sum_branches(mean_frames(color_weighted_delta_nll(nll, batch, changed_weight, color_balance_power))) + delta_overlap_weight * overlap"
+      "formula": "loss = sum_branches(mean_frames(pixel_mean_delta_nll(nll, batch, changed_weight))) + delta_overlap_weight * overlap"
     },
     {
       "id": "world.decoder.learning.optimizer.finite",
@@ -105992,17 +105988,13 @@
           "value": 0.5
         },
         {
-          "name": "color_balance_power",
-          "value": 0.5
-        },
-        {
           "name": "delta_overlap_weight",
           "value": 1.0
         }
       ],
-      "description": "Same canonical KEEP/replacement NLL and normalized inverse-square-root real-color weights as full reconstruction. Only real before/after targets. Weight 0 disables this auxiliary training term. Include the same soft delta-union error as the full visual branches.",
+      "description": "Canonical KEEP/replacement NLL with equal pixel weights within each changed/static group, using only real before/after targets. Average the nonempty groups. Weight 0 disables this auxiliary training term. Include the same soft delta-union error as the full visual branches.",
       "operation": "loss",
-      "formula": "loss = local_reconstruction_weight * mean(color_weighted_delta_nll(logits, batch, changed_weight, color_balance_power) + delta_overlap_weight * soft_delta_error(logits, batch))"
+      "formula": "loss = local_reconstruction_weight * mean(pixel_mean_delta_nll(logits, batch, changed_weight) + delta_overlap_weight * soft_delta_error(logits, batch))"
     },
     {
       "id": "world.decoder.learning.total",

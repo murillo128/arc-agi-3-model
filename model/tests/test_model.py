@@ -186,38 +186,33 @@ class NumericalTests(unittest.TestCase):
         torch.testing.assert_close(delta[..., 16], torch.tensor([[[.25, .5], [.25, .5]]]))
         self.assertEqual(float(delta.gather(-1, before[..., None]).sum()), 0.)
         expected = .5 * (-np.log(.25) + (-2 * np.log(.25) - np.log(.5)) / 3)
-        loss = visual_delta_loss(logits, before, actual, 'pixel')
+        loss = visual_delta_loss(logits, before, actual)
         self.assertAlmostEqual(float(loss.detach()[0]), expected, places=6)
         loss.sum().backward()
         self.assertTrue(torch.isfinite(logits.grad).all())
         # No-change and all-change boundaries use ordinary mean NLL.
         for target in (before, 1 - before):
             expected = torch.nn.functional.cross_entropy(logits.permute(0, 3, 1, 2), target)
-            torch.testing.assert_close(visual_delta_loss(logits, before, target, 'pixel')[0], expected)
+            torch.testing.assert_close(visual_delta_loss(logits, before, target)[0], expected)
 
-    def test_static_rare_color_is_not_diluted_by_background(self):
+    def test_visual_nll_weights_each_pixel_equally_within_changed_static_groups(self):
         before = torch.tensor([[[0, 0, 0, 1, 2]]])
         actual = torch.tensor([[[0, 0, 0, 1, 3]]])
         probabilities = torch.tensor([.25, .5, .025, .125] + [.1 / 12] * 12)
         logits = probabilities.log().expand(1, 1, 5, 16).clone().requires_grad_(True)
-        # The changed group is color 3; the static group splits its mass equally
-        # between the three background pixels and the single color-1 detail.
-        expected = .5 * (-np.log(.125) + .5 * (-np.log(.25) - np.log(.5)))
-        self.assertAlmostEqual(float(visual_delta_loss(logits, before, actual, power=1).detach()[0]), expected, places=6)
-        uniform = torch.zeros(1, 1, 5, 16, requires_grad=True)
-        visual_delta_loss(uniform, before, actual, power=1).sum().backward()
-        self.assertAlmostEqual(float(uniform.grad[0, 0, :3, 0].sum()), -15 / 64, places=6)
-        self.assertAlmostEqual(float(uniform.grad[0, 0, 3, 1]), -15 / 64, places=6)
-        # Static-only and changed-only frames still balance their real colors.
-        for reference in (actual, torch.full_like(actual, 15)):
-            expected = (-np.log(.25) - np.log(.5) - np.log(.125)) / 3
-            self.assertAlmostEqual(float(visual_delta_loss(logits, reference, actual, power=1).detach()[0]), expected, places=6)
-        # Sqrt weighting keeps the rare detail relevant without equalizing its
-        # total mass with a much larger background. Independent five-pixel oracle.
-        expected = .5 * (-np.log(.125) + (-np.sqrt(3)*np.log(.25)-np.log(.5))/(np.sqrt(3)+1))
+        # One changed pixel gets half the group mass; each of four static pixels
+        # gets one eighth, regardless of whether its real color is rare.
+        expected = .5 * (-np.log(.125) + (-3 * np.log(.25) - np.log(.5)) / 4)
         self.assertAlmostEqual(float(visual_delta_loss(logits, before, actual).detach()[0]), expected, places=6)
-        torch.testing.assert_close(visual_delta_loss(logits, before, actual, power=0),
-                                   visual_delta_loss(logits, before, actual, 'pixel'))
+        uniform = torch.zeros(1, 1, 5, 16, requires_grad=True)
+        visual_delta_loss(uniform, before, actual).sum().backward()
+        for index, color in enumerate((0, 0, 0, 1)):
+            self.assertAlmostEqual(float(uniform.grad[0, 0, index, color]), -15 / 128, places=6)
+        self.assertAlmostEqual(float(uniform.grad[0, 0, 4, 3]), -15 / 32, places=6)
+        # A single nonempty group uses the ordinary mean over all five pixels.
+        for reference in (actual, torch.full_like(actual, 15)):
+            expected = (-3 * np.log(.25) - np.log(.5) - np.log(.125)) / 5
+            self.assertAlmostEqual(float(visual_delta_loss(logits, reference, actual).detach()[0]), expected, places=6)
 
     def test_visual_quality_exposes_static_rare_color_failure(self):
         quality = VisualQuality()

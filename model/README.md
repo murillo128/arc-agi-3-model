@@ -88,13 +88,9 @@ SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
    color por patch, una por píxel. La probabilidad del color anterior se asigna
    a `KEEP=16`; los otros colores indican reemplazos. Compara este **delta
    predicho con el delta real** mediante NLL, equilibrando celdas cambiadas y
-   no cambiadas. Dentro de cada grupo, pondera cada píxel por la inversa de la
-   raíz cuadrada de la frecuencia de su **color real**, normalizando los pesos.
-   Así los detalles estáticos pequeños ganan peso sin darles tanta masa como
-   a todo el fondo; no se identifican objetos ni colores especiales del juego.
-   `--color-balance-power` controla el exponente (0: uniforme por píxel,
-   1: igual masa por color; por defecto .5). `--visual-balance pixel` selecciona
-   explícitamente la ponderación original; el valor por defecto es `color`.
+   no cambiadas. Cada grupo aporta la mitad de la pérdida cuando ambos están
+   presentes; dentro de cada grupo todos los píxeles pesan igual, sin ponderar
+   por frecuencia de color. Si solo hay un grupo, usa su media ordinaria.
    Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
    Añade un término diferenciable de error sobre la unión de deltas: si `c` es

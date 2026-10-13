@@ -111,30 +111,14 @@ def delta_log_probabilities(color_logits, reference):
     return torch.cat((replacements, keep), -1)
 
 
-def visual_delta_loss(color_logits, reference, actual, balance='color', power=.5):
-    """Balance changed/static groups, then observed colors within each group.
-
-    Color-frequency weights protect small static details without identifying
-    game objects or a special color. Power .5 moderates the rare-color boost;
-    power 1 gives equal color mass, while power 0 gives equal pixel mass.
-    Pixel mode retains the original objective for controlled comparisons.
-    """
+def visual_delta_loss(color_logits, reference, actual):
+    """Balance changed/static groups; weight pixels equally within each group."""
     changed = actual != reference
     target = torch.where(changed, actual, 16)
     logp = delta_log_probabilities(color_logits, reference)
     nll = -logp.gather(-1, target[..., None]).squeeze(-1)
 
     def mean_where(mask):
-        if balance == 'color':
-            # Group by the real final color, including KEEP pixels. Grouping
-            # only by delta code would put every static color back into KEEP.
-            classes = F.one_hot(actual, 16).to(nll.dtype) * mask[..., None]
-            counts = classes.sum((1, 2))
-            sums = (classes * nll[..., None]).sum((1, 2))
-            weights = counts.clamp_min(1).pow(-power)
-            return (sums * weights).sum(-1) / (counts * weights).sum(-1).clamp_min(1)
-        if balance != 'pixel':
-            raise ValueError('Unknown visual balance')
         return (nll * mask).sum((1, 2)) / mask.sum((1, 2)).clamp_min(1)
 
     changed_count = changed.sum((1, 2))
@@ -233,7 +217,7 @@ class Learner:
                     with e.autocast():
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
                                           checkpoint_blocks=True)
-                    part_loss = visual_delta_loss(logits, before, actual, c.visual_balance, c.color_balance_power).sum() / len(boards)
+                    part_loss = visual_delta_loss(logits, before, actual).sum() / len(boards)
                     overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
                     (part_loss + overlap).backward()
                     visual_losses[branch] += float(part_loss.detach())
@@ -242,7 +226,7 @@ class Learner:
                         with e.autocast():
                             local_logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape, local=True)
                         local_loss = c.local_reconstruction_weight * visual_delta_loss(
-                            local_logits, before, actual, c.visual_balance, c.color_balance_power).sum() / len(boards)
+                            local_logits, before, actual).sum() / len(boards)
                         local_overlap = c.local_reconstruction_weight * c.delta_overlap_weight * soft_delta_error(
                             local_logits, before, actual).sum() / len(boards)
                         (local_loss + local_overlap).backward()
