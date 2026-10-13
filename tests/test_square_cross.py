@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EngineTests(unittest.TestCase):
+    def setUp(self):
+        # Literal geometry/HUD oracles use canonical colors. Actual randomized
+        # SDK output and its mapping are owned by test_square_cross_palette.
+        self.enterContext(patch.object(sc01, 'palette_for_seed',
+                                       return_value=np.arange(16, dtype=np.int8)))
+
     def game(self, **changes):
         self.enterContext(patch.object(sc01, "generate_scene", return_value=fixture(**changes)))
         game = sc01.Sc01(seed=42)
@@ -194,7 +200,8 @@ class GenerationTests(unittest.TestCase):
                 with self.subTest(seed=seed, level=level):
                     game.set_level(level - 1)
                     scene = game.scene
-                    image = frame(game).copy()
+                    displayed = frame(game).copy()
+                    image = np.argsort(game.palette)[displayed]
                     self.assertEqual(game.current_level.grid_size, (64, 64))
                     self.assertEqual((game.camera.width, game.camera.height), (64, 64))
                     self.assertEqual(image.shape, (64, 64))
@@ -244,7 +251,7 @@ class GenerationTests(unittest.TestCase):
                     act(game, 2 if dy < 0 else 1)  # Move away: some levels now solve in one stride.
                     reset = act(game)
                     self.assertEqual(game.scene, scene)
-                    np.testing.assert_array_equal(reset.frame[-1], image)
+                    np.testing.assert_array_equal(reset.frame[-1], displayed)
         self.assertEqual(edges, {"top", "bottom", "left", "right"})
         self.assertEqual(pairs, {(a, b) for a in (3, 5, 7) for b in (3, 5, 7)})
         self.assertEqual(len(directions), 4)
@@ -257,8 +264,11 @@ class GenerationTests(unittest.TestCase):
             self.assertTrue(any(size != stride for size, stride in independent_sizes[level]))
             self.assertEqual({size for size, _ in independent_sizes[level]}, {3, 5, 7})
 
-    def test_original_seed_scenes_and_pixels_unchanged(self):
-        assert_seed_baseline(self, sc01.Sc01, range(1, 6))
+    def test_original_seed_geometry_and_canonical_pixels_unchanged(self):
+        # The requested palette changes displayed colors, not generated scenes.
+        # Retain the independent old fingerprints before that final relabeling.
+        with patch.object(sc01, 'palette_for_seed', return_value=np.arange(16, dtype=np.int8)):
+            assert_seed_baseline(self, sc01.Sc01, range(1, 6))
 
     def test_only_five_directional_levels(self):
         game = sc01.Sc01(42)

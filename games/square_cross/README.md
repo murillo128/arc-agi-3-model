@@ -25,7 +25,7 @@ non-colliding and beneath objects/HUD.
 Every scene uses the native 64×64 grid and ARC palette. A seeded choice reserves
 four pixels along the top, bottom, left or right edge for the HUD. The remaining
 moves bar is 60 pixels long and 3 pixels thick, with a 1-pixel gap to playable
-space. Its white fill (palette 0) on background 5 contains
+space. Its fill, in a distinct color from the background, contains
 `ceil(180 * remaining / budget)` pixels, filling thickness before length. Every
 directional command visibly shrinks it, including budgets above 64. Redraws
 never consume moves; the browser scales the SDK pixels without client physics.
@@ -35,7 +35,13 @@ verifies full-sweep, full-footprint shortest paths bounded to 24 actions.
 The exploratory budget is `max(24, 5 * distance + 8)` (at most 128); for example,
 6 optimal actions give 38 moves. A failed verification reports seed and level.
 Each level uses `square-cross-v1:{seed}:{level}` as its RNG namespace; geometry,
-colours, stride, HUD and level-5 noise preserve the pre-split scenes exactly.
+canonical colour roles, stride, HUD and level-5 noise preserve the pre-split
+scene generation. A separate `square-cross-palette:{seed}` RNG permutes all
+16 palette IDs in the final render, including the background, HUD, obstacle
+and noise. No displayed color has a fixed role across seeds; distinct roles
+stay distinct. The palette is stable through actions, redraws, level changes
+and resets of the same seeded game. Fresh game seeds randomize it without
+changing physics or generating random visual changes between actions.
 Resets remain independent of prior actions.
 
 For a square at (20,30) and cross at (35,30), stride-5 RIGHT attempts (25,30),

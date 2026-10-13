@@ -51,6 +51,9 @@ SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
 
 1. El adaptador abre un episodio con semilla nueva y obtiene la observación SDK.
    No añade una acción artificial a la primera observación.
+   Square Cross permuta toda su paleta, incluido el fondo, según la semilla;
+   mantiene los colores durante la partida. Es una propiedad del entorno:
+   el modelo no recibe el mapa de colores ni etiquetas de objetos.
 2. El comportamiento aleatorio elige una acción de `available_actions`; ACTION6
    incluye coordenadas SDK uniformes en 0…63. Guarda el resultado real en RAM.
 3. Cada 32 acciones realiza 4 actualizaciones. En cada una muestrea partidas y
