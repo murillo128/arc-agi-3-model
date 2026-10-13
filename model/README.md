@@ -350,7 +350,7 @@ Cualquier otro juego instalado en el SDK usa su progresión nativa:
 
 ```sh
 .venv/bin/python -m model train --game GAME_ID --environments-dir /ruta/a/juegos --native --output model/runs/otro-juego
-.venv/bin/python -m model train --game si01-v1 --levels 1 2 3 --output model/runs/interacciones
+.venv/bin/python -m model train --game si01-v1 --levels 1 2 3 4 5 --output model/runs/interacciones
 ```
 
 En la progresión nativa, un cambio no terminal de `levels_completed` separa los
@@ -366,6 +366,51 @@ válidos, incluido el WIN de un nivel sintético aislado.
 Este runner es entrenamiento local, no una entrega de competición. No utiliza
 datos privados ni incorpora un solucionador del juego. En juegos arbitrarios,
 los umbrales dependen de que la dinámica sea predecible desde las observaciones.
+
+### Continuación automática de la práctica
+
+`model.sequence` continúa un checkpoint de Square Cross por sus **5 niveles**,
+después por los **5 de Square Cross Interactions** y finalmente por los juegos
+públicos de entrenamiento del SDK. Conserva pesos, optimizadores y configuración;
+al cambiar de juego vacía replay, memoria recurrente, contadores y rachas del gate.
+El modo actual del gate se conserva y las siguientes validaciones lo adaptan.
+Una mejora del predictor no se presenta como una victoria en el juego.
+
+Desde un checkout limpio con la implementación confirmada:
+
+```sh
+.venv/bin/python -m model.sequence plan \
+  --plan model/runs/active-training/sequence.json \
+  --sdk-environments-dir environment_files \
+  --refresh-checkout /ruta/a/arc3-training-checkout \
+  --refresh-branch training/practice-sequence
+# Detener antes cualquier trainer que escriba en este mismo output.
+.venv/bin/python -u -m model.sequence run \
+  --plan model/runs/active-training/sequence.json \
+  --output model/runs/active-training --device cuda
+```
+
+El plan congela el catálogo público del SDK. Según
+[la política de entrenamiento](../docs/training-policy.md), ordena los 25 IDs
+base y reserva cinco juegos completos usando `Random(42)`; los otros 20 se
+recorren en ese orden, reservando también el último nivel de cada uno. Un catálogo
+incompleto o con versiones duplicadas exige revisar el plan antes de continuar.
+El plan y la etapa residen juntos en el checkpoint: un reinicio no repite una
+transferencia. El supervisor bloquea un segundo supervisor del mismo output.
+
+Tras completar Square Cross, crea una rama **local privada** en la ruta indicada,
+actualiza `origin/main` y hace rebase allí. No reescribe ni publica la rama de la
+PR. Un checkout sucio, conflicto o fallo del entrenador detiene la secuencia
+conservando el último checkpoint. Solo `curriculum_converged` con todo el currículo
+completado permite cambiar de juego; una interrupción, colapso o límite no lo hace.
+Para reanudar basta repetir `sequence run`. No se aplica `--stop-after-level`.
+
+En la fase SDK, la respuesta que entra al nivel reservado se descarta **antes**
+de codificarla o incorporarla al replay, pérdidas o métricas; se inicia otra
+partida. La validación exige los umbrales y cobertura mínima para **cada nivel
+permitido**, además del agregado, y registra `reserved_level_boundaries` y
+`native_levels`. La política aleatoria podría no alcanzar todos esos niveles;
+en ese caso la secuencia permanece en el juego actual. Nunca salta a evaluación.
 
 ## Validación, avance y progreso
 

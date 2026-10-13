@@ -12,7 +12,7 @@ from . import checkpoint
 from .config import NetworkConfig, TrainConfig
 from .representation_gate import representation_gate
 from .data import Episode, Replay, random_action
-from .environment import Factory
+from .environment import Factory, training_boundary
 from .learning import Engine, Learner
 from .metrics import Metrics, VisualQuality, delta_counts
 from .networks import WorldModel
@@ -31,6 +31,13 @@ def validation(engine, factory, levels, seed):
     start = time.monotonic()
     for level in levels:
         metrics, wins, losses, actions, level_advances = Metrics(), 0, 0, 0, 0
+        reserved_boundaries, native_levels, native = 0, None, {}
+        reserve = getattr(factory, 'reserve_final_level', False)
+
+        def bucket(observation):
+            return native.setdefault(observation.levels_completed,
+                {'metrics': Metrics(), 'decoder_wrong': 0, 'decoder_union': 0, 'decoder_transitions': 0})
+
         reconstruction_wrong, reconstruction_union, reconstruction_transitions = 0, 0, 0
         prediction_quality, reconstruction_quality = VisualQuality(), VisualQuality()
         for index in range(c.validation_episodes):
@@ -38,9 +45,18 @@ def validation(engine, factory, levels, seed):
             rng = random.Random(episode_seed)
             env = factory.make(episode_seed, level)
             observation = env.observation
+            if training_boundary(factory, observation):
+                raise ValueError('Initial observation is already in a reserved level')
+            if reserve:
+                count = observation.win_levels - 1
+                if native_levels is not None and native_levels != count:
+                    raise ValueError('Public SDK level count changed within validation')
+                native_levels = count
             state = engine.initial(observation)
             if state.z is not None:
                 metrics.observe_latent(state.z.cpu().numpy(), observation.final.shape)
+                if reserve:
+                    bucket(observation)['metrics'].observe_latent(state.z.cpu().numpy(), observation.final.shape)
             for _ in range(c.validation_steps):
                 if observation.terminal:
                     break
@@ -48,12 +64,20 @@ def validation(engine, factory, levels, seed):
                 before = observation.final
                 prediction = engine.prediction(state, action, before)
                 next_observation = env.step(action)
+                if training_boundary(factory, next_observation):
+                    # Exclude the entire response before encoding any frames.
+                    reserved_boundaries += 1
+                    actions += 1
+                    observation = next_observation
+                    break
                 level_advance = next_observation.starts_new_level(observation)
                 next_state = (engine.initial(next_observation.level_initial()) if level_advance
                               else engine.observe(state, action, next_observation))
                 after = next_observation.final
                 if next_state.z is not None and after is not None:
                     metrics.observe_latent(next_state.z.cpu().numpy(), after.shape)
+                    if reserve:
+                        bucket(next_observation)['metrics'].observe_latent(next_state.z.cpu().numpy(), after.shape)
                 if level_advance:
                     # A new level board is initialization, not an old-level
                     # successor. Count this exclusion separately from invalid data.
@@ -72,8 +96,17 @@ def validation(engine, factory, levels, seed):
                     reconstruction_wrong += wrong
                     reconstruction_union += union
                     reconstruction_transitions += 1
+                    if reserve:
+                        group = bucket(observation)
+                        group['metrics'].add(before, after, prediction[0], state.z.cpu().numpy(),
+                                             next_state.z.cpu().numpy(), prediction[1])
+                        group['decoder_wrong'] += wrong
+                        group['decoder_union'] += union
+                        group['decoder_transitions'] += 1
                 else:
                     metrics.skipped += 1
+                    if reserve:
+                        bucket(observation)['metrics'].skipped += 1
                 observation, state = next_observation, next_state
                 actions += 1
             wins += observation.state == 'WIN'
@@ -81,9 +114,22 @@ def validation(engine, factory, levels, seed):
         reconstruction_error = reconstruction_wrong / max(1, reconstruction_union)
         passes = (metrics.passes(c) and reconstruction_transitions >= c.min_validation_transitions
                   and reconstruction_error <= c.delta_error)
+        native_reports = {}
+        if reserve:
+            for index in range(native_levels):
+                group = native.get(index, {'metrics': Metrics(), 'decoder_wrong': 0,
+                                           'decoder_union': 0, 'decoder_transitions': 0})
+                error = group['decoder_wrong'] / max(1, group['decoder_union'])
+                native_reports[str(index + 1)] = group['metrics'].report() | {
+                    'decoder_delta_error': error, 'decoder_transitions': group['decoder_transitions'],
+                    'passes': (group['metrics'].passes(c) and error <= c.delta_error
+                               and group['decoder_transitions'] >= c.min_validation_transitions)}
+            passes = passes and all(r['passes'] for r in native_reports.values())
         report = metrics.report() | {'passes': passes, 'wins': wins, 'game_overs': losses,
                                       'actions': actions, 'episodes': c.validation_episodes,
                                       'level_advances': level_advances,
+                                      'reserved_level_boundaries': reserved_boundaries,
+                                      'native_levels': native_reports,
                                       'decoder_delta_error': reconstruction_error,
                                       'decoder_transitions': reconstruction_transitions,
                                       'prediction_quality': prediction_quality.report(),
@@ -105,6 +151,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
     progress.setdefault('trained_transitions', 0)
     latest_update = None
     reason = 'action_limit'
+    progress.pop('stop_reason', None)
 
     def statistics():
         if baseline is None:
@@ -127,20 +174,23 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
             if episode is None:
                 episode_seed = rng.randrange(2 ** 30) * 2  # disjoint from odd validation seeds
                 env = factory.make(episode_seed, level)
+                if training_boundary(factory, env.observation):
+                    raise ValueError('Initial observation is already in a reserved level')
                 episode = Episode([env.observation])
                 progress['episodes'] += 1
                 pending_update = False
             action = random_action(episode.observations[-1], rng)
             observation = env.step(action)
+            reserved = training_boundary(factory, observation)
             level_advance = observation.starts_new_level(episode.observations[-1])
-            if not level_advance:
+            if not level_advance and not reserved:
                 episode.append(action, observation)
                 replay.prepare(episode, engine.device, engine.model.config.patch,
                                torch.bfloat16 if engine.amp else torch.float32)
                 pending_update = True
             progress['actions'] += 1
             progress['level_actions'] += 1
-            ended = level_advance or observation.terminal or len(episode.actions) >= c.max_episode_steps
+            ended = reserved or level_advance or observation.terminal or len(episode.actions) >= c.max_episode_steps
             if pending_update and (baseline is None or progress['actions'] % c.train_every == 0 or ended):
                 for _ in range(c.updates_per_train):
                     batch = replay.sample(sampling_rng, c.batch_episodes, 2, latest=episode, random_prefix=True)
@@ -169,7 +219,12 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                      episode_observations=len(episode.observations),
                      device_cache_mb=round(sum(e.device_bytes for e in replay.episodes) / 2 ** 20, 2),
                      gpu_peak_mb=round(torch.cuda.max_memory_allocated(engine.device) / 2 ** 20) if engine.device.type == 'cuda' else 0)
-            if level_advance:
+            if reserved:
+                # The crossing action counts, but its response never enters memory.
+                episode = None
+                replay = Replay(c.replay_episodes, c.replay_bytes)
+                emit('reserved_level_boundary', actions=progress['actions'])
+            elif level_advance:
                 # Flush the old valid prefix above, then release all old-level
                 # replay. Continue the same SDK game from its new board only.
                 replay = Replay(c.replay_episodes, c.replay_bytes)
@@ -229,7 +284,11 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
             reason = 'curriculum_converged'
     except KeyboardInterrupt:
         reason = 'interrupted'
+    except BaseException:
+        reason = 'error'
+        raise
     finally:
+        progress['stop_reason'] = reason
         checkpoint.save(output / 'latest.pt', learner, progress, run, rng)
     emit('stopped', reason=reason, **progress, statistics=statistics(), checkpoint=str(output / 'latest.pt'))
     return reason
@@ -330,7 +389,8 @@ def main(argv=None):
          network=asdict(network), training=asdict(training), game=run['game'], levels=run['levels'])
     model = WorldModel(network).to(device)
     engine = Engine(model, training, compiled, fp8=fp8, optimizer_bits=optimizer_bits)
-    factory = Factory(run['game'], run['environments_dir'], run['mode'])
+    factory = Factory(run['game'], run['environments_dir'], run['mode'],
+                      reserve_final_level=run.get('reserve_final_level', False))
     emit('ready', parameters=sum(p.numel() for p in model.parameters()), amp=engine.amp, fp8_layers=engine.fp8_layers,
          note='First calls include compilation warmup' if compiled else 'Eager execution')
     if args.command == 'validate':
