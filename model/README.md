@@ -222,6 +222,56 @@ El final y los checkpoints indican `encoder_collapsed`, `level_converged` o
 el límite/interrupción correspondiente. Una varianza alta por sí sola no
 garantiza representaciones útiles: también deben bajar los errores visuales.
 
+## Panel web en directo
+
+El panel lee los eventos JSON del log existente, sin cargar el modelo, usar GPU,
+interrumpir el entrenamiento ni guardar otra copia del historial:
+
+```sh
+.venv/bin/python -m model.dashboard --log model/runs/exploration/run.log
+```
+
+Abre `http://127.0.0.1:8766/`. `--host` y `--port` cambian la dirección de escucha;
+por defecto solo escucha en loopback. Para un entrenamiento nuevo que aún no
+guarde la salida, redirígela a un log (crea primero el directorio):
+
+```sh
+mkdir -p model/runs/practice
+.venv/bin/python -u -m model train --output model/runs/practice > model/runs/practice/run.log 2>&1
+```
+
+Consulta cada 2 segundos y muestra acciones, partidas iniciadas, actualizaciones,
+nivel, acciones/s, pico de memoria asignada por PyTorch y gráficas de pérdidas,
+errores de delta visual y latente, y diversidad del latente. TPS significa
+**acciones por segundo**, media desde el arranque del proceso; incluye validación
+y checkpoints. No son tokens/s ni una medida instantánea. Los errores de predictor
+y decoder se actualizan cuando termina cada validación, a la cadencia configurada.
+Las acciones de validación no se suman al contador de entrenamiento. El selector
+de nivel evita mezclar validaciones de niveles distintos en una curva.
+
+El eje horizontal usa acciones reales. El panel mantiene hasta 2.000 puntos por
+tipo en RAM (`--max-points`) y al abrir un log grande lee los últimos 8 MiB.
+No crea base de datos ni archivos de métricas. Reconoce truncado, sustitución del
+log y nuevos arranques; elimina entonces las curvas de la ejecución anterior.
+Si faltan datos recientes o el log desaparece, lo indica y reintenta; no confunde
+la disponibilidad del servidor web con la actividad del trainer. El log actual
+no incluye timestamps por evento, así que no se inventa un eje de tiempo pasado.
+
+Para servirlo bajo el HTTPS existente, configura un proxy a su puerto local,
+conservando la barra final que elimina el prefijo al reenviar:
+
+```nginx
+location = /arc3-training { return 301 /arc3-training/; }
+location ^~ /arc3-training/ {
+    proxy_pass http://127.0.0.1:8766/;
+    proxy_buffering off;
+}
+```
+
+Solo expone los assets del panel y `/api/state`; no sirve logs, checkpoints,
+archivos arbitrarios ni controles para modificar el entrenamiento. No requiere
+dependencias web, CDN ni compilación de frontend.
+
 ## Checkpoints y validación aislada
 
 ```sh
