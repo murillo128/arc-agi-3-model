@@ -10,6 +10,7 @@ import torch
 
 from . import checkpoint
 from .config import NetworkConfig, TrainConfig
+from .representation_gate import representation_gate
 from .data import Episode, Replay, random_action
 from .environment import Factory
 from .learning import Engine, Learner
@@ -162,6 +163,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
             if progress['actions'] % min(100, c.train_every) == 0 or ended or progress['actions'] == starting_actions + 1:
                 measured = statistics()
                 emit('progress', **progress, level=level, loss=latest_update,
+                     freeze_representation=engine.config.freeze_representation,
                      statistics=measured, actions_per_second=measured['actions_per_second'],
                      replay_episodes=len(replay.episodes), episode_actions=len(episode.actions),
                      episode_observations=len(episode.observations),
@@ -194,7 +196,18 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                 if current['delta_error'] < progress['best_error']:
                     progress['best_error'] = current['delta_error']
                     checkpoint.save(output / 'best.pt', learner, progress, run, rng)
-                if all(r['passes'] for r in reports.values()):
+                gate = representation_gate(engine.config, reports,
+                    levels[:progress['level_index'] + 1], progress.get('representation_gate'))
+                progress['representation_gate'] = gate
+                if gate['changed']:
+                    learner.set_representation_frozen(gate['freeze_representation'])
+                    c = engine.config
+                    progress['passes'] = 0
+                    checkpoint.save(output / 'latest.pt', learner, progress, run, rng)
+                    emit('checkpoint', path=str(output / 'latest.pt'), actions=progress['actions'])
+                if c.auto_representation:
+                    emit('representation_gate', actions=progress['actions'], level=level, **gate)
+                if not gate['changed'] and all(r['passes'] for r in reports.values()):
                     progress['passes'] += 1
                 else:
                     progress['passes'] = 0
@@ -305,6 +318,7 @@ def main(argv=None):
                                       if getattr(args, k) is not None})
     training = TrainConfig(**payload['training']) if payload else TrainConfig()
     overrides = {f.name: getattr(args, f.name) for f in fields(TrainConfig) if getattr(args, f.name) is not None}
+    changed_training = {key for key, value in overrides.items() if getattr(training, key) != value}
     training = replace(training, **overrides)
     if training.freeze_representation and payload is None:
         p.error('--freeze-representation requires a checkpoint with a trained representation')
@@ -335,9 +349,14 @@ def main(argv=None):
                 group['lr'] = training.learning_rate
         # Extending runtime/save limits leaves the learning and validation
         # contract unchanged; retain prior best/error and convergence evidence.
-        if set(overrides) - {'max_steps', 'max_level_steps', 'checkpoint_every'}:
+        if changed_training - {'max_steps', 'max_level_steps', 'checkpoint_every'}:
             progress['passes'] = 0  # previous gates used the saved configuration
             progress['collapse_streak'] = 0
             progress['best_error'] = 1.
-        emit('resumed', **progress, note='Fresh seeded episode and empty device input cache')
+        if changed_training & {'freeze_representation', 'auto_representation',
+                            'representation_unfreeze_error', 'representation_freeze_error',
+                            'representation_gate_patience'}:
+            progress.pop('representation_gate', None)
+        emit('resumed', **progress, freeze_representation=training.freeze_representation,
+             note='Fresh seeded episode and empty device input cache')
     train(engine, learner, factory, run, progress, rng, args.output.resolve(), args.stop_after_level)

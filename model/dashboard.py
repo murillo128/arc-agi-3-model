@@ -27,7 +27,8 @@ VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'la
                    'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs',
                    'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')
 CONFIG_KEYS = ('learning_rate', 'validate_every', 'consecutive_passes', 'delta_error',
-               'latent_delta_mse', 'min_latent_std', 'collapse_std', 'false_change_weight')
+               'latent_delta_mse', 'min_latent_std', 'collapse_std', 'false_change_weight',
+               'representation_unfreeze_error', 'representation_freeze_error', 'representation_gate_patience')
 STATISTICS_KEYS = ('actions', 'updates', 'episodes', 'level_actions', 'elapsed_seconds', 'actions_per_second',
                    'trained_transitions', 'trained_transitions_per_second')
 
@@ -82,8 +83,10 @@ class LogMonitor:
             self.run['levels'] = [number(x) for x in row.get('levels', [])[:100]] if isinstance(row.get('levels'), list) else []
             self.run['training'] = numbers(row.get('training'), CONFIG_KEYS)
             training = row.get('training')
-            if isinstance(training, dict) and type(training.get('freeze_representation')) is bool:
-                self.run['training']['freeze_representation'] = training['freeze_representation']
+            if isinstance(training, dict):
+                for key in ('freeze_representation', 'auto_representation'):
+                    if type(training.get(key)) is bool:
+                        self.run['training'][key] = training[key]
             self.run['compile'] = row.get('compile') is True
             if row.get('statistics_origin') == 'after_first_action':
                 self.run['statistics_origin'] = 'after_first_action'
@@ -124,8 +127,24 @@ class LogMonitor:
             self.phase = 'validation'
         elif event == 'validation_finished':
             self.phase = 'validation_finished'
+        elif event == 'representation_gate':
+            pass  # Evidence updates mode without disguising validation as training.
         elif event not in ('checkpoint', 'level_converged', 'encoder_collapsed'):
             return
+        training = self.run.setdefault('training', {})
+        if type(row.get('freeze_representation')) is bool:
+            training['freeze_representation'] = row['freeze_representation']
+        gate = row if event == 'representation_gate' else row.get('representation_gate')
+        if isinstance(gate, dict):
+            status = numbers(gate, ('reconstruction_error', 'open_streak', 'close_streak',
+                                    'unfreeze_error', 'freeze_error', 'patience'))
+            for key in ('auto_representation', 'freeze_representation', 'eligible', 'changed'):
+                if type(gate.get(key)) is bool:
+                    status[key] = gate[key]
+                    if key in ('auto_representation', 'freeze_representation'):
+                        training[key] = gate[key]
+            status['reason'] = str(gate.get('reason', 'unknown'))[:80]
+            self.run['representation_gate'] = status
         if event != 'progress':
             self.events.append({'event': event, 'actions': self.progress.get('actions'),
                                 'level': number(row.get('level')), 'reason': self.reason})
