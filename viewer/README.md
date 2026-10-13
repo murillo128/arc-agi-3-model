@@ -52,6 +52,24 @@ described below. Missing groups and samples show `Not recorded`.
 
 ## Optional agent and model diagnostics
 
+`ACTION DELTAS` groups **REAL DELTA**, **PREDICTED DELTA** and **DELTA DIFFERENCE**.
+Both deltas use the recorded v1.1 immutable reference frame when available, or
+the immediate pre-action final frame otherwise. Real delta is the net change
+from that reference to the selected result frame, not the change between two
+adjacent animation frames. Final-only predictions appear only on the last frame.
+Older recordings derive predicted deltas from aligned absolute predictions;
+fractional/out-of-range palette estimates are unavailable rather than rounded.
+
+KEEP (16) pixels reveal a gray/white checkerboard; replacement colors stay opaque,
+including white (0). The difference panel marks missed changes, extra changes and
+wrong replacement colors in red; matching delta codes reveal the checkerboard.
+Its error percentage divides disagreements by the union of pixels changed in
+either delta, so unchanged background cannot dilute it. A comparable action with
+no changes reports zero; missing predictions/references never report a false zero.
+The panels clear on file/frame changes, and stack vertically on narrow screens.
+The layout is covered by user visual verification; no screenshots were run or
+regenerated for this addition. Existing screenshot baselines predate this section.
+
 `MODEL PREDICTION` and `DIFFERENCE MAP` refer to the same step result and selected
 frame as `REAL OBSERVATION`; the pre-action thumbnail remains the preceding
 observation's last frame. A `post_action_sequence` prediction aligns frame `i`

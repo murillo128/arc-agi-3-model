@@ -90,6 +90,13 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
 .diagnostics-grid details { margin-top: 14px; font-size: 0.7rem; }
 .diagnostic-screen { height: 180px; margin-top: 16px; background: #09070d; border: 1px solid #503260; padding: 10px; }
 .diagnostic-screen:has(canvas[hidden]) { display: none; }
+.delta-panel { margin-bottom: 18px; }
+.delta-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 16px; }
+.delta-grid h4 { margin: 0; font-size: 0.75rem; color: var(--pink); }
+.delta-grid pre { color: var(--muted); }
+.delta-screen { height: clamp(180px, 24vw, 320px); display: flex; justify-content: center; align-items: center; }
+.delta-screen canvas { width: auto; height: 100%; max-width: 100%; background: conic-gradient(#fff 25%, #ccc 0 50%, #fff 0 75%, #ccc 0) 0 0 / 16px 16px; }
+@media (max-width: 720px) { .delta-grid { grid-template-columns: minmax(0, 1fr); } }
 #level-progress { width: 100%; accent-color: var(--pink); }
 .table-scroll { overflow: auto; max-height: 250px; margin-top: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.7rem; line-height: 1.6; }
