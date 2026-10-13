@@ -672,7 +672,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented Learner.update in model/learning.py. Re-encode full real prefixes, reconstruct causal memory, select up to the last 16 eligible transitions, and minimize latent-delta MSE plus SIGReg. Both real endpoint representations receive gradients. No EMA teacher. AdamW updates encoder and dynamics together. Frozen pre-action validation is separate from replay training and never feeds validation transitions back into replay. Frozen level advancement requires both causal predicted-delta error and real-successor decoder-delta error below threshold, with coverage, latent health and consecutive validation passes unchanged.",
+      "description": "Implemented Learner.update in model/learning.py. Re-encode full real prefixes, reconstruct causal memory, select up to the last 16 eligible transitions, and minimize latent-delta MSE plus SIGReg. Both real endpoint representations receive gradients. No EMA teacher. AdamW updates encoder and dynamics together. Frozen pre-action validation is separate from replay training and never feeds validation transitions back into replay. Frozen level advancement requires both causal predicted-delta error and real-successor decoder-delta error below threshold, with coverage, latent health and consecutive validation passes unchanged. Default schedule is four independently sampled updates per 32 real actions; SIGReg weight .002, variance hinge weight 10, and each visual branch weight 1.",
       "children": [
         "world.target_encoder",
         "world.monitor",
@@ -33056,7 +33056,7 @@
       "attributes": [
         {
           "name": "sigreg_weight",
-          "value": 0.02
+          "value": 0.002
         },
         {
           "name": "variance_weight",

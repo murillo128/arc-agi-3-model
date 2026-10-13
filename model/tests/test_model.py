@@ -383,7 +383,8 @@ class SDKTests(unittest.TestCase):
             main(['train', '--checkpoint', str(path), '--max-steps', '8', *common])
             saved = checkpoint.load(path)
             self.assertEqual(saved['progress']['actions'], 8)
-            self.assertEqual(saved['progress']['updates'], 2)
+            # One training block in each invocation, four updates per block.
+            self.assertEqual(saved['progress']['updates'], 8)
             self.assertEqual(saved['progress']['episodes'], 2)
             self.assertIn('empty RAM replay', output.getvalue())
 

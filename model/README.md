@@ -53,7 +53,8 @@ SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
    No añade una acción artificial a la primera observación.
 2. El comportamiento aleatorio elige una acción de `available_actions`; ACTION6
    incluye coordenadas SDK uniformes en 0…63. Guarda el resultado real en RAM.
-3. Cada 32 acciones, muestrea partidas y vuelve a codificar sus **prefijos
+3. Cada 32 acciones realiza 4 actualizaciones. En cada una muestrea partidas y
+   vuelve a codificar sus **prefijos
    completos** con los pesos actuales. Conserva todos los frames de animación.
    Los deltas entre frames de una animación forman parte de las entradas del
    encoder, junto con los colores y una máscara de píxeles válidos. El primer
@@ -69,7 +70,7 @@ SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
    predictor. Sus tokens son los P patches más uno de memoria y uno de acción.
 5. Entrena encoder y dynamics con `(1-w) * MSE(d_hat, z_(t+1)-z_t) + w * SIGReg
    + 10 * variance_floor`, además de los gradientes visuales del siguiente paso.
-   `--sigreg-weight` controla `w`; los pesos activos se imprimen al iniciar.
+   `--sigreg-weight` controla `w` (por defecto .002); los pesos activos se imprimen al iniciar.
    Ambos latentes reales conservan gradiente. SIGReg usa al menos 64
    observaciones reales distintas, proyecciones aleatorias y cálculo FP32.
    No hay profesor EMA ni etiquetas tomadas de trayectorias imaginadas. SIGReg

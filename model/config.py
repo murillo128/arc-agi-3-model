@@ -34,12 +34,12 @@ class TrainConfig:
     learning_rate: float = 1e-4
     visual_balance: str = 'color'
     color_balance_power: float = .5
-    sigreg_weight: float = .02
+    sigreg_weight: float = .002
     local_reconstruction_weight: float = 1.
     delta_overlap_weight: float = 1.
     variance_weight: float = 10.
     train_every: int = 32
-    updates_per_train: int = 1
+    updates_per_train: int = 4
     batch_episodes: int = 4
     frame_chunk: int = 4
     loss_steps: int = 16
