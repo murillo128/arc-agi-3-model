@@ -1,6 +1,7 @@
 # Browser .arc3 replay console
 
-This static Vite/TypeScript entry point loads the frozen [v1 format](../docs/arc3-format-v1.md)
+This static Vite/TypeScript entry point loads the frozen [v1.0 format](../docs/arc3-format-v1.md)
+and the optional [v1.1 diagnostics extension](../docs/arc3-format-v1.1.md)
 through a local file dialog, drag/drop, a submitted HTTP(S) URL, or an explicit
 `?file=<encoded-https-url>` deep-link. It requires no application backend, SDK,
 game execution, Python process, account, database, or proxy at runtime.
@@ -58,7 +59,8 @@ with real result frame `i`, requiring the full `[F, H, W]` shape to match. A
 `post_action_last_frame` prediction aligns only with the last real result frame;
 earlier frames show `Not recorded` rather than reuse that prediction. Empty real
 sequences and unequal spatial or sequence shapes have no comparable prediction.
-Latents cannot supply a visual prediction without a model-specific decoder.
+Latents never supply a visual prediction in the viewer: the producer must export
+its decoded absolute board. The viewer runs no neural decoder.
 
 The frozen format records predicted palette-index values in `u8`, little-endian
 `f16` or `f32`. The viewer decodes all three. Float estimates are rounded to the
@@ -82,11 +84,11 @@ estimator units/loss objectives. `LEVEL PROGRESS` uses the selected observation'
 public `levels_completed / win_levels` counters. A zero target is labelled
 unavailable; no game reward is fabricated.
 
-`ONLINE LEARNING & TIMING` displays recorded optimizer updates, loss, replay-entry
+`LEARNING & TIMING` displays recorded optimizer updates, loss, replay-entry
 counts and millisecond timings. Notes are plain text, with a bounded preview;
 the separate `Inferred by viewer` event uses only public observation changes,
 level counters and states. Neither is represented as unlogged model reasoning.
-`LATENT TENSOR` shows dtype, shape, element count and an L2 norm in model-specific
+`LATENT STATE & RESIDUAL` shows dtype, shape, element count and an L2 norm in model-specific
 units. Norm computation is limited to **65,536 elements**; no projection or t-SNE
 is claimed. Both tensor calculations are bounded and run locally.
 
@@ -99,6 +101,35 @@ preserved. The selected step is highlighted when its sample is in the range.
 Unknown timing keys remain visible in the timing panel. Charts, notes and tensor
 diagnostics initiate no requests after opening a trace and need no ML library,
 analytics service or backend.
+
+For minor >= 1, the state panel separately labels initial actual z/h or the
+selected action's frozen z_t/h_t, predicted residual, **recorded** z_hat and
+h_next, and real successor z/h before learning. Shapes come from the file and
+each tensor previews its first 16 values within the diagnostic bound. A bounded
+residual-equation check reports inconsistency without replacing z_hat or claiming
+model quality. Recorded latent MSE and no-change MSE use squared latent units,
+separate from pixel MAE/MSE and training losses. Initial selection implies no
+action or prediction, and missing results never borrow cached state.
+
+`PREDICTED VISUAL CHANGE` shows the producer's KEEP/replacement decoder codes,
+labelled with the explicit immutable reference position. `OBSERVED ANIMATION
+CHANGE` derives codes from consecutive real frames, using the immediate
+pre-action last frame for the first result frame when available and same-sized.
+Both label KEEP=16 as cyan and replacement colors as 0..15; raw codes appear in
+a bounded preview. These are change views, not absolute palette-index images or
+subtraction. The predicted view follows final-frame alignment. No valid
+predecessor, unequal geometry, empty frames, unsupported real palette values or
+excessive diagnostic work produce an unavailable message.
+
+Separate world_model/decoder/actor/critic reports show actual per-step optimizer
+counts, reported aggregate/component losses and actual actor/critic reset events.
+Module and recognized component losses have their own chart selections; no
+aggregate learning loss is inferred. Missing samples remain gaps. Reset markers
+use dashed yellow lines and literal reasons in the exact-value table; reset-only
+charts show derived event presence. Recorded random action selection can coexist
+with world-model/decoder diagnostics. Actor/critic reports remain unavailable
+until recorded. Minor 0 never interprets the newly added field names, and opening
+another file clears all state, change, learning and chart panels.
 
 The palette is the only reused SDK visual material, from
 [`COLOR_MAP` at the pinned SDK revision](https://github.com/arcprize/ARC-AGI/blob/f12822c4d550121c35a275008d964afbbed47d2f/arc_agi/rendering.py).
@@ -329,3 +360,48 @@ Use the optional public SDK extraction command in the provenance README when
 authorized environment files are already present. Missing files do not prevent
 any default test. No CI/deploy pipeline, automatic download, upload or submission
 is introduced by this acceptance path.
+
+## Manual v1.1 diagnostics check
+
+The following is a **user-run check**, not an automated/browser validation claim
+for issue #30. The layout additions intentionally change the historical screenshot
+surface; no screenshots were run or regenerated for this issue.
+
+1. From `viewer/`, with Python 3.12 in `../.venv` and Node 22.12+:
+
+   ```sh
+   PYTHON=../.venv/bin/python npm run fixtures
+   npm run build
+   python3 -m http.server 4177 --bind 127.0.0.1 --directory .
+   ```
+
+   Open `http://127.0.0.1:4177/dist/`. The fixtures are original synthetic
+   diagnostics in ignored `viewer/.fixtures/`, with z length 2 and h length 3;
+   no model checkpoint or game source is required.
+
+2. Drag `viewer/.fixtures/recorder-baseline-0.arc3` onto OPEN RECORDING.
+   Verify its old real sequence/action counts replay unchanged and model/module
+   panels say Not recorded. Load `viewer/.fixtures/v11-latent.arc3`: initial
+   position shows actual z=[1,2] and h length 3, with no action/prediction. Select
+   step 0: z_hat=[1.5,1], delta_z=[0.5,-1], real z=[2,1], latent MSE=0.125,
+   no-change MSE=1. Policy mode is random, world-model/decoder reports exist,
+   actor/critic and decoded visual output remain unavailable.
+
+3. Load `viewer/.fixtures/v11-decoder.arc3`. Select step 0, real frame 0:
+   final-target prediction/change/comparison is unavailable; observed change
+   codes are all KEEP. Select real frame 1: real board is `[0,4;5,0]`, recorded
+   prediction `[0,4;2,0]`, disagreement **1/4**, predicted codes `[16,4;16,0]`,
+   observed/derived codes `[16,4;5,0]`. Check the two change labels/reference 0,
+   cyan KEEP legend and separate latent vs pixel errors.
+
+4. Load `viewer/.fixtures/v11-module-timeline.arc3`. Select world_model loss:
+   step 0 is 0.125, step 1 is missing, step 2 is zero. Select actor loss: only
+   step 2 is -0.5. Check actual actor/critic reset markers and literal
+   `<script>literal</script>` text; no script executes. Legacy aggregate loss
+   stays unavailable. Reopen a baseline and confirm all new model panels, change
+   predictions, chart samples and resets clear. The observed/derived panel may
+   still describe real baseline frame changes.
+
+5. Optionally load `viewer/.fixtures/v10-new-names-unknown.arc3`: it replays
+   as 1.0 without interpreting the structurally valid future field names.
+   Stop the static server with Ctrl+C.

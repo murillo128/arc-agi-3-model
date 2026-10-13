@@ -56,18 +56,44 @@ class Decision(TypedDict):
     action_entropy: NotRequired[Number]
 
 
+class Representation(TypedDict):
+    z: Tensor
+    h: Tensor
+
+
+class Dynamics(Representation):
+    delta_z: Tensor
+    h_next: Tensor
+
+
+class VisualDelta(TypedDict):
+    reference_position: int
+    reference_frame: Tensor
+    delta: Tensor
+
+
 class Prediction(TypedDict):
     target: Literal["post_action_last_frame", "post_action_sequence"]
     frames: NotRequired[Tensor]
     latent: NotRequired[Tensor]
     uncertainty: NotRequired[Number]
     errors: NotRequired[dict[str, Number]]
+    dynamics: NotRequired[Dynamics]
+    visual_delta: NotRequired[VisualDelta]
+
+
+class ModuleLearning(TypedDict, total=False):
+    updates: int
+    loss: Number
+    losses: dict[str, Number]
+    reset_reason: str
 
 
 class Learning(TypedDict, total=False):
     updates: int
     loss: Number
     replay_size: int
+    modules: dict[str, ModuleLearning]
 
 
 class Step(TypedDict):
@@ -79,6 +105,8 @@ class Step(TypedDict):
     learning: NotRequired[Learning]
     timing: NotRequired[dict[str, Number]]
     notes: NotRequired[list[str]]
+    representation: NotRequired[Representation]
+    policy_mode: NotRequired[Literal["random", "learned"]]
 
 
 class Termination(TypedDict):
@@ -99,6 +127,7 @@ class Summary(TypedDict):
 class Attempt(TypedDict):
     metadata: Metadata
     initial_observation: Observation
+    initial_representation: NotRequired[Representation]
     steps: list[Step]
     termination: Termination
     summary: Summary

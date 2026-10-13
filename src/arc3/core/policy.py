@@ -47,13 +47,29 @@ class Policy(Protocol):
 class DiagnosticPolicy(Policy, Protocol):
     """Optional read-only trace hook, called after selection, before execution.
 
-    Return available .arc3 step groups (decision, prediction, learning, timing,
-    notes) as plain wire values. Do not update weights or invent diagnostics.
+    Return available .arc3 step groups (decision, prediction, policy_mode,
+    learning, timing, notes) as plain wire values. Do not update weights or invent diagnostics.
     Prediction errors are computed from the real result by the recorder.
     The random baseline deliberately does not implement this hook.
     """
 
     def trace_diagnostics(self, observation: Observation, action: Action) -> dict[str, Any]: ...
+
+
+class RepresentationDiagnosticPolicy(Policy, Protocol):
+    """Optional synchronous read-only hooks, only invoked with tracing enabled.
+
+    Initial output permits only initial_representation. Result output permits
+    representation, learning, timing and notes. The result is the current real
+    SDK result, paired synchronously with its frozen pre-action observation and
+    executed action. Encode the result under the same weights as the prediction,
+    before any update; return plain wire snapshots, never model/device objects.
+    These hooks grant no evaluation-time training permission.
+    """
+
+    def trace_initial_diagnostics(self, observation: Observation) -> dict[str, Any]: ...
+    def trace_result_diagnostics(self, observation: Observation, action: Action,
+                                 result: Observation) -> dict[str, Any]: ...
 
 
 class RandomPolicy:

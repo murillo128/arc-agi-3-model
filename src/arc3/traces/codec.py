@@ -25,10 +25,10 @@ def _cap(value: int) -> int:
     return value
 
 
-def _header(data: bytes, cap: int) -> int:
+def _header(data: bytes, cap: int) -> tuple[int, int]:
     if len(data) < _HEADER.size:
         raise Arc3Error("truncated 16-byte .arc3 header")
-    magic, major, _minor, size = _HEADER.unpack_from(data)
+    magic, major, minor, size = _HEADER.unpack_from(data)
     if magic != b"ARC3":
         raise Arc3Error("invalid .arc3 magic")
     if major != 1:
@@ -38,7 +38,7 @@ def _header(data: bytes, cap: int) -> int:
         raise Arc3Error("invalid uncompressed length: expected 1..536870912 bytes")
     if size > cap:
         raise Arc3ResourceLimitError("declared uncompressed length exceeds reader cap")
-    return size
+    return size, minor
 
 
 def _frame_header(frame: memoryview, size: int, cap: int) -> None:
@@ -65,13 +65,15 @@ def _frame_header(frame: memoryview, size: int, cap: int) -> None:
         raise Arc3ResourceLimitError("Zstandard window size exceeds reader cap")
 
 
-def encode_attempt(attempt: Attempt) -> bytes:
-    """Validate plain wire values and emit a complete v1.0 file as bytes.
+def encode_attempt(attempt: Attempt, *, format_minor: int = 0) -> bytes:
+    """Emit v1.0 by default; explicitly select format_minor=1 for v1.1.
 
     Optional/unknown keys remain intact. This checks syntax and consistency;
     the caller owns provenance, diagnostic capture timing and sanitization.
     """
-    validate_attempt(attempt, MAX_UNCOMPRESSED_BYTES)
+    if type(format_minor) is not int or format_minor not in (0, 1):
+        raise Arc3Error("format_minor must be 0 or 1")
+    validate_attempt(attempt, MAX_UNCOMPRESSED_BYTES, minor=format_minor)
     try:
         raw = msgpack.packb(attempt, use_bin_type=True, strict_types=True)
     except (ValueError, TypeError, OverflowError) as exc:
@@ -86,7 +88,7 @@ def encode_attempt(attempt: Attempt) -> bytes:
         })
     except pyzstd.ZstdError as exc:
         raise Arc3Error(f"Zstandard encoding failed: {exc}") from exc
-    return _HEADER.pack(b"ARC3", 1, 0, len(raw)) + frame
+    return _HEADER.pack(b"ARC3", 1, format_minor, len(raw)) + frame
 
 
 def decode_attempt(data: bytes, *, max_uncompressed_bytes: int = MAX_UNCOMPRESSED_BYTES) -> Attempt:
@@ -98,7 +100,7 @@ def decode_attempt(data: bytes, *, max_uncompressed_bytes: int = MAX_UNCOMPRESSE
     cap = _cap(max_uncompressed_bytes)
     if type(data) is not bytes:
         raise Arc3Error(".arc3 input must be bytes")
-    size = _header(data, cap)
+    size, minor = _header(data, cap)
     frame = memoryview(data)[_HEADER.size:]
     _frame_header(frame, size, cap)
     try:
@@ -117,17 +119,17 @@ def decode_attempt(data: bytes, *, max_uncompressed_bytes: int = MAX_UNCOMPRESSE
     except pyzstd.ZstdError as exc:
         raise Arc3Error(f"Zstandard decoding/checksum failed: {exc}") from exc
     attempt = unpack_payload(raw)
-    validate_attempt(attempt, cap)
+    validate_attempt(attempt, cap, minor=minor)
     return cast(Attempt, attempt)
 
 
-def write_attempt(path: str | os.PathLike[str], attempt: Attempt) -> None:
+def write_attempt(path: str | os.PathLike[str], attempt: Attempt, *, format_minor: int = 0) -> None:
     """Encode first, then fsync a same-directory temporary and atomically replace.
 
     Any failure before replacement leaves the destination absent or unchanged.
     I/O errors propagate as OSError; temporary files are removed on failure.
     """
-    encoded = encode_attempt(attempt)
+    encoded = encode_attempt(attempt, format_minor=format_minor)
     target = Path(path)
     fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
     try:

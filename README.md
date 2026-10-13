@@ -96,6 +96,17 @@ hook in `core/policy.py`: the recorder copies optional step groups before execut
 the action and computes MAE/MSE only for aligned predictions and real pixels.
 This hook must not train or update weights during evaluation.
 
+The optional [.arc3 1.1 extension](docs/arc3-format-v1.1.md) adds file-defined
+latent residual/state, causal KEEP/color decoder output and separate module
+learning reports. Select `EvaluationRecorder(..., format_minor=1)` explicitly;
+the CLI keeps its 1.0 default. A diagnostic policy may additionally implement
+`trace_initial_diagnostics(observation)` and
+`trace_result_diagnostics(before, action, result)` for plain initial/real state
+snapshots. The result hook runs before terminal flush under the same frozen
+weights as the prediction; it cannot overwrite the action/decision/prediction.
+The recorder never calls training. A failing result hook still preserves the
+confirmed real result. See the format document for allowed fields and ordering.
+
 WIN and GAME_OVER finalize immediately with their true SDK state. A later RESET
 starts a new attempt without changing the preceding terminal reason. An explicit
 RESET of an active attempt is stored in its `termination.reset_action`; the
@@ -162,6 +173,11 @@ maps/lists and tensor `bytes` (row-major u8 or little-endian f16/f32).
 `Arc3Error`; lower reader caps and file-memory refusals raise
 `Arc3ResourceLimitError`. I/O failures remain `OSError`. The caller owns public
 provenance, sanitization and capturing predictions before an action.
+Use keyword-only `format_minor=1` on `encode_attempt` or `write_attempt` for
+1.1 validation/export. Readers interpret the new fields only for minor >= 1;
+1.0 treats those names as structurally validated unknown data. Generated
+synthetic examples and the [manual viewer check](viewer/README.md#manual-v11-diagnostics-check)
+exercise the new export boundary without implementing a neural model.
 
 Validate an existing file or run just the offline codec conformance tests:
 

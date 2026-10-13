@@ -86,6 +86,6 @@ export async function decodeAttempt(bytes: Uint8Array, cap = MAX_BYTES): Promise
   }
   if (raw.length !== size) fail('ARC3', 'decompressed length differs from envelope length');
   const value = unpackPayload(raw);
-  validateAttempt(value, cap);
+  validateAttempt(value, cap, minor);
   return { major: 1, minor, uncompressedBytes: size, attempt: plainValue(value) as unknown as Attempt };
 }

@@ -66,7 +66,7 @@ export class ReplayView {
   display(decoded: DecodedAttempt, source: Source): void {
     this.clear();
     const attempt = decoded.attempt;
-    this.replay = new Replay(attempt);
+    this.replay = new Replay(attempt, decoded.minor);
     this.diagnostics.display(this.replay);
     element('public-config').textContent = attempt.metadata.config === undefined ? 'Not recorded.' : previewText(recorded(attempt.metadata.config));
     element('game-id').textContent = previewText(attempt.metadata.game_id);

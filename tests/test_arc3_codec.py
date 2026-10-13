@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import msgpack
 import pyzstd
+from fixtures.diagnostics_v11 import extend_attempt, f32, invalid_cases, replace
 
 from arc3.traces import (
     Arc3Error, Arc3ResourceLimitError, MAX_UNCOMPRESSED_BYTES,
@@ -88,6 +89,90 @@ def change(value, path, replacement):
     for key in path[:-1]:
         value = value[key]
     value[path[-1]] = replacement
+
+
+class Arc3MinorExtensionTests(unittest.TestCase):
+    def test_opt_in_latent_and_decoder_roundtrips_and_default_minor(self):
+        for visual in (False, True):
+            value = extend_attempt(baseline(), visual=visual)
+            with self.subTest(visual=visual):
+                encoded = encode_attempt(value, format_minor=1)
+                self.assertEqual(encoded[:8], b"ARC3\x01\x00\x01\x00")
+                self.assertEqual(decode_attempt(encoded), value)
+                self.assertEqual(encode_attempt(value)[:8], b"ARC3\x01\x00\x00\x00")
+                self.assertEqual(decode_attempt(wire(value, minor=65535)), value)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "new.arc3"
+            write_attempt(path, value, format_minor=1)
+            self.assertEqual(read_attempt(path), value)
+        for minor in (-1, 2, True, 1.0):
+            with self.subTest(minor=minor), self.assertRaisesRegex(Arc3Error, "format_minor"):
+                encode_attempt(baseline(), format_minor=minor)
+
+    def test_v11_semantics_do_not_reinterpret_v10_unknown_names(self):
+        value = baseline()
+        value["initial_representation"] = None
+        step = value["steps"][0]
+        step.update({"representation": "future", "policy_mode": 42, "learning": {"modules": None},
+                     "prediction": {"target": "post_action_last_frame", "latent": prediction()["latent"],
+                                    "dynamics": None, "visual_delta": None,
+                                    "errors": {"latent_mse": "unknown", "no_change_mse": None}}})
+        self.assertEqual(decode_attempt(encode_attempt(value)), value)
+        with self.assertRaises(Arc3Error):
+            decode_attempt(wire(value, minor=1))
+        # Legacy latent f16 profile remains legal in 1.1 without dynamics.
+        legacy = baseline()
+        legacy["steps"][0]["prediction"] = prediction()
+        self.assertEqual(decode_attempt(encode_attempt(legacy, format_minor=1)), legacy)
+
+    def test_new_fields_reject_independently_malformed_values_in_encoder_and_reader(self):
+        for name, path, replacement, error in invalid_cases():
+            value = extend_attempt(baseline())
+            replace(value, path, replacement)
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(Arc3Error, error):
+                    encode_attempt(value, format_minor=1)
+                with self.assertRaisesRegex(Arc3Error, error):
+                    decode_attempt(wire(value, minor=1))
+
+    def test_required_pairs_and_empty_visual_evidence(self):
+        for removed in ("latent", "frames"):
+            value = extend_attempt(baseline())
+            del value["steps"][0]["prediction"][removed]
+            with self.subTest(removed=removed), self.assertRaisesRegex(Arc3Error, "requires"):
+                decode_attempt(wire(value, minor=1))
+        value = extend_attempt(baseline(), visual=False)
+        value["steps"][0]["prediction"]["target"] = "post_action_sequence"
+        with self.assertRaisesRegex(Arc3Error, "last-frame"):
+            decode_attempt(wire(value, minor=1))
+        for removed in ("representation", "dynamics"):
+            value = extend_attempt(baseline(), visual=False)
+            target = value["steps"][0] if removed == "representation" else value["steps"][0]["prediction"]
+            del target[removed]
+            with self.subTest(removed=removed), self.assertRaisesRegex(Arc3Error, "matched"):
+                decode_attempt(wire(value, minor=1))
+        value = extend_attempt(baseline(), visual=False)
+        value["steps"][0]["observation"]["frames"] = {"dtype": "u8", "shape": [0, 0, 0], "data": b""}
+        with self.assertRaisesRegex(Arc3Error, "visual result"):
+            decode_attempt(wire(value, minor=1))
+
+    def test_residual_disagreement_and_different_real_geometry_are_valid_evidence(self):
+        value = extend_attempt(baseline())
+        value["steps"][0]["prediction"]["latent"] = f32("000040400000803f")  # [3, 1], not z + delta
+        value["steps"][0]["observation"]["frames"] = {"dtype": "u8", "shape": [1, 1, 1], "data": b"\x05"}
+        self.assertEqual(decode_attempt(encode_attempt(value, format_minor=1)), value)
+
+    def test_reference_can_precede_an_empty_response_but_never_borrow_future_pixels(self):
+        value = extend_attempt(baseline())
+        empty = deepcopy(baseline()["steps"][0])
+        empty["observation"]["frames"] = {"dtype": "u8", "shape": [0, 0, 0], "data": b""}
+        value["steps"].insert(0, empty)
+        value["steps"][1]["index"] = 1
+        value["summary"]["real_actions"] = 2
+        self.assertEqual(decode_attempt(encode_attempt(value, format_minor=1)), value)
+        value["steps"][1]["prediction"]["visual_delta"]["reference_position"] = 1
+        with self.assertRaisesRegex(Arc3Error, "nonempty causal"):
+            decode_attempt(wire(value, minor=1))
 
 
 class Arc3CodecTests(unittest.TestCase):

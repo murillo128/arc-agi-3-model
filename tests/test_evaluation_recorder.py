@@ -19,6 +19,8 @@ from arc3.envs.sdk import SDKEnvironment, SDK_VERSION
 from arc3.evaluation import run as evaluation
 from arc3.evaluation.recorder import EvaluationRecorder
 from arc3.traces import read_attempt
+from fixtures.diagnostics_v11 import extend_attempt, f32
+from test_arc3_codec import baseline
 from test_smoke import ScriptedArcade
 
 
@@ -38,10 +40,10 @@ class ScriptedPolicy:
 
 
 class RecorderTests(unittest.TestCase):
-    def run_recorded(self, directory, frames, policy, budget, **kwargs):
+    def run_recorded(self, directory, frames, policy, budget, *, format_minor=0, **kwargs):
         arcade = ScriptedArcade({"fixture": frames})
         env = SDKEnvironment(arcade, "fixture", 42)
-        recorder = EvaluationRecorder(directory, run_id="run-1", seed=42, sdk_version=SDK_VERSION)
+        recorder = EvaluationRecorder(directory, run_id="run-1", seed=42, sdk_version=SDK_VERSION, format_minor=format_minor)
         metrics = run_game(env, policy, budget, attempt_observer=recorder, **kwargs)
         attempts = sorted((read_attempt(path) for path in Path(directory).glob("*.arc3")),
                           key=lambda attempt: attempt["metadata"]["attempt_index"])
@@ -261,6 +263,224 @@ class RecorderTests(unittest.TestCase):
             _, attempts, _ = self.run_recorded(directory, [frame(), frame()], Policy(), 1)
             self.assertNotIn("errors", attempts[0]["steps"][0]["prediction"])
 
+    def test_initial_and_real_latents_are_frozen_scored_and_attached_before_terminal_flush(self):
+        for state in (GameState.WIN, GameState.GAME_OVER):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as directory:
+                oracle = extend_attempt(baseline())
+                predicted = oracle["steps"][0]["prediction"]
+                predicted["errors"] = {"future_metric": 0.3}
+                initial = {"initial_representation": oracle["initial_representation"]}
+                reports = {"representation": oracle["steps"][0]["representation"],
+                           "learning": oracle["steps"][0]["learning"]}
+                arcade = ScriptedArcade({"fixture": [frame(), frame(
+                    state=state, pixels=[[[0, 1], [2, 3]], [[0, 4], [5, 0]]]) ]})
+                env = SDKEnvironment(arcade, "fixture", 42)
+                test = self
+
+                class Policy:
+                    def choose_action(self, observation):
+                        return Action(1, {})
+
+                    def trace_initial_diagnostics(self, observation):
+                        test.assertEqual(observation.frame, (((0, 1), (2, 3)),))
+                        test.assertEqual(len(arcade.actions), 0)
+                        return initial
+
+                    def trace_diagnostics(self, observation, action):
+                        return {"prediction": predicted, "policy_mode": "random"}
+
+                    def trace_result_diagnostics(self, before, action, result):
+                        test.assertEqual(before.frame, (((0, 1), (2, 3)),))
+                        test.assertEqual(result.frame[-1], ((0, 4), (5, 0)))
+                        test.assertEqual(action, Action(1, {}))
+                        test.assertEqual(len(arcade.actions), 1)
+                        test.assertEqual(list(Path(directory).glob("*.arc3")), [])
+                        action.data["late"] = 9  # Hook cannot mutate stored action.
+                        return reports
+
+                    def train(self):
+                        raise AssertionError("Evaluation must never train")
+
+                original_step = env.step
+
+                def execute(action):
+                    initial["initial_representation"]["z"]["data"] = bytes(8)
+                    predicted["latent"]["data"] = bytes(8)
+                    predicted["dynamics"]["delta_z"]["data"] = bytes(8)
+                    predicted["visual_delta"]["delta"]["data"] = bytes(4)
+                    return original_step(action)
+
+                env.step = execute
+                recorder = EvaluationRecorder(directory, run_id="run-1", seed=42, sdk_version=SDK_VERSION, format_minor=1)
+                run_game(env, Policy(), 1, attempt_observer=recorder)
+                path = next(Path(directory).glob("*.arc3"))
+                reports["representation"]["z"]["data"] = bytes(8)
+                recorded = read_attempt(path)
+                step = recorded["steps"][0]
+                self.assertEqual(path.read_bytes()[6:8], b"\x01\x00")
+                self.assertEqual(recorded["initial_representation"]["z"]["data"], bytes.fromhex("0000803f00000040"))
+                self.assertEqual(step["prediction"]["latent"]["data"], bytes.fromhex("0000c03f0000803f"))
+                self.assertEqual(step["representation"]["z"]["data"], bytes.fromhex("000000400000803f"))
+                self.assertEqual(step["prediction"]["errors"], {
+                    "future_metric": 0.3, "latent_mse": 0.125, "no_change_mse": 1.0, "mae": 0.75, "mse": 2.25,
+                })
+                self.assertEqual(step["action"], {"id": 1, "data": {}})
+                self.assertEqual(step["learning"]["modules"]["world_model"]["updates"], 2)
+                self.assertNotIn("loss", step["learning"])
+                self.assertEqual(recorded["termination"]["reason"], "win" if state == GameState.WIN else "game_over")
+
+    def test_missing_empty_and_unmatched_representation_omit_latent_scores(self):
+        for mode in ("missing", "empty", "unmatched"):
+            oracle = extend_attempt(baseline(), visual=False)
+            prediction = oracle["steps"][0]["prediction"]
+            prediction.pop("errors")
+            reports = {} if mode == "missing" else {"representation": oracle["steps"][0]["representation"]}
+            if mode == "unmatched":
+                reports["representation"]["z"] = f32("00000040", 1)
+
+            class Policy(ScriptedPolicy):
+                def trace_diagnostics(self, observation, action):
+                    return {"prediction": prediction}
+
+                def trace_result_diagnostics(self, observation, action, result):
+                    return reports
+
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                _, attempts, _ = self.run_recorded(directory, [frame(), frame(pixels=[] if mode == "empty" else None)],
+                    Policy(Action(1, {})), 1, format_minor=1)
+                step = attempts[0]["steps"][0]
+                self.assertNotIn("errors", step["prediction"])
+                if mode != "unmatched":
+                    self.assertNotIn("representation", step)
+                self.assertNotIn("initial_representation", attempts[0])
+
+    def test_late_diagnostics_cannot_overwrite_frozen_groups_and_failure_retains_confirmed_results(self):
+        for field in ("action", "decision", "prediction", "index", "observation", "malformed", "raises"):
+            for state in (GameState.NOT_FINISHED, GameState.WIN):
+                class Policy(ScriptedPolicy):
+                    def trace_diagnostics(self, observation, action):
+                        return {"prediction": {"target": "post_action_last_frame", "frames": {
+                            "dtype": "u8", "shape": [2, 2], "data": bytes.fromhex("00040200")}}}
+
+                    def trace_result_diagnostics(self, observation, action, result):
+                        if field == "raises":
+                            raise RuntimeError("private hook detail")
+                        if field == "malformed":
+                            return {"representation": {"z": None, "h": None}}
+                        return {field: {}}
+
+                with self.subTest(field=field, state=state), tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaises((ValueError, RuntimeError)):
+                        self.run_recorded(directory, [frame(), frame(state=state, pixels=[[[0, 4], [5, 0]]])],
+                                          Policy(Action(1, {})), 1, format_minor=1)
+                    attempt = read_attempt(next(Path(directory).glob("*.arc3")))
+                    self.assertEqual(attempt["summary"]["real_actions"], 1)
+                    self.assertEqual(len(attempt["steps"]), 1)
+                    step = attempt["steps"][0]
+                    self.assertEqual(step["observation"]["frames"]["data"], bytes.fromhex("00040500"))
+                    self.assertEqual(step["prediction"]["frames"]["data"], bytes.fromhex("00040200"))
+                    self.assertEqual(step["prediction"]["errors"], {"mae": 0.75, "mse": 2.25})
+                    self.assertNotIn("representation", step)
+                    self.assertEqual(attempt["termination"]["reason"], "win" if state == GameState.WIN else "error")
+                    self.assertNotIn("private hook detail", attempt["termination"]["detail"])
+
+    def test_diagnostics_do_not_leak_across_reset(self):
+        calls = []
+        oracle = extend_attempt(baseline(), visual=False)
+
+        class Policy(ScriptedPolicy):
+            def trace_initial_diagnostics(self, observation):
+                calls.append(("initial", observation.frame))
+                return {"initial_representation": oracle["initial_representation"]} if len(calls) == 1 else {}
+
+            def trace_diagnostics(self, observation, action):
+                calls.append(("before", observation.frame))
+                return {"prediction": {key: value for key, value in oracle["steps"][0]["prediction"].items() if key != "errors"}} if len(calls) == 2 else {}
+
+            def trace_result_diagnostics(self, observation, action, result):
+                calls.append(("result", result.frame))
+                return {"representation": oracle["steps"][0]["representation"]} if len(calls) == 3 else {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            _, attempts, _ = self.run_recorded(directory, [frame(), frame(), frame(pixels=[[[9]]]), frame(pixels=[[[8]]])],
+                Policy(Action(1, {}), Action(0, {}), Action(1, {})), 3, format_minor=1)
+            self.assertEqual([name for name, _ in calls], ["initial", "before", "result", "initial", "before", "result"])
+            self.assertIn("representation", attempts[0]["steps"][0])
+            self.assertNotIn("initial_representation", attempts[1])
+            self.assertEqual(set(attempts[1]["steps"][0]), {"index", "action", "observation"})
+
+    def test_post_result_reports_merge_without_inventing_an_aggregate(self):
+        class Policy(ScriptedPolicy):
+            def trace_diagnostics(self, observation, action):
+                return {"learning": {"replay_size": 0, "modules": {"world_model": {"updates": 0}}},
+                        "timing": {"decision_ms": 0.0}, "notes": ["before"]}
+
+            def trace_result_diagnostics(self, observation, action, result):
+                return {"learning": {"modules": {"decoder": {"updates": 1, "loss": -0.5}}},
+                        "timing": {"environment_ms": 0.0}, "notes": ["after"]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            _, attempts, _ = self.run_recorded(directory, [frame(), frame()], Policy(Action(1, {})), 1, format_minor=1)
+            step = attempts[0]["steps"][0]
+            self.assertEqual(step["learning"], {"replay_size": 0, "modules": {
+                "world_model": {"updates": 0}, "decoder": {"updates": 1, "loss": -0.5},
+            }})
+            self.assertEqual(step["timing"], {"decision_ms": 0.0, "environment_ms": 0.0})
+            self.assertEqual(step["notes"], ["before", "after"])
+
+    def test_recorder_default_retains_new_names_as_unknown_even_with_empty_real_result(self):
+        class Policy(ScriptedPolicy):
+            def trace_initial_diagnostics(self, observation):
+                return {"initial_representation": None}
+
+            def trace_diagnostics(self, observation, action):
+                return {"policy_mode": 42, "prediction": {
+                    "target": "post_action_last_frame", "latent": f32("0000c03f0000803f"),
+                    "dynamics": None, "visual_delta": None, "errors": {"latent_mse": "unknown"},
+                }}
+
+            def trace_result_diagnostics(self, observation, action, result):
+                return {"representation": None, "learning": {"modules": None}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            _, attempts, _ = self.run_recorded(directory, [frame(), frame(pixels=[])], Policy(Action(1, {})), 1)
+            attempt = attempts[0]
+            self.assertIsNone(attempt["initial_representation"])
+            step = attempt["steps"][0]
+            self.assertIsNone(step["representation"])
+            self.assertEqual(step["policy_mode"], 42)
+            self.assertEqual(step["prediction"]["errors"], {"latent_mse": "unknown"})
+            self.assertEqual(step["learning"], {"modules": None})
+
+    def test_initial_hook_rejects_late_fields_without_executing_an_action(self):
+        class Policy(ScriptedPolicy):
+            def trace_initial_diagnostics(self, observation):
+                return {"prediction": {}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "only initial_representation"):
+                self.run_recorded(directory, [frame()], Policy(Action(1, {})), 1, format_minor=1)
+            attempt = read_attempt(next(Path(directory).glob("*.arc3")))
+            self.assertEqual(attempt["steps"], [])
+            self.assertEqual(attempt["summary"]["real_actions"], 0)
+            self.assertEqual(attempt["termination"]["reason"], "error")
+    def test_failed_pending_action_does_not_leak_into_a_new_attempt(self):
+        # Reusing a recorder after a failing pre-action hook must clear that pending snapshot.
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = EvaluationRecorder(directory, run_id="run-1", seed=42, sdk_version=SDK_VERSION, format_minor=1)
+            env = SDKEnvironment(ScriptedArcade({"fixture": [frame(), frame()]}), "fixture", 42)
+
+            class InvalidPolicy(ScriptedPolicy):
+                def trace_diagnostics(self, observation, action):
+                    return {"prediction": {"target": "post_action_last_frame", "latent": f32("0000c03f0000803f"), "errors": {"latent_mse": 0}}}
+
+            with self.assertRaisesRegex(ValueError, "after the real action"):
+                run_game(env, InvalidPolicy(Action(1, {})), 1, attempt_observer=recorder)
+            run_game(env, ScriptedPolicy(Action(1, {})), 1, attempt_observer=recorder)
+            attempts = sorted((read_attempt(p) for p in Path(directory).glob("*.arc3")), key=lambda a: a["metadata"]["attempt_index"])
+            self.assertEqual(attempts[0]["steps"], [])
+            self.assertEqual(set(attempts[1]["steps"][0]), {"index", "action", "observation"})
+
     def test_atomic_publication_never_overwrites_and_cleans_failed_staging(self):
         with tempfile.TemporaryDirectory() as directory:
             recorder = EvaluationRecorder(directory, run_id="run-1", seed=42, sdk_version=SDK_VERSION)
@@ -327,6 +547,15 @@ class RecorderTests(unittest.TestCase):
 
             def trace_diagnostics(self, observation, action):
                 raise AssertionError("Disabled tracing must not collect diagnostics")
+
+            def trace_initial_diagnostics(self, observation):
+                raise AssertionError("Disabled tracing must not collect initial diagnostics")
+
+            def trace_result_diagnostics(self, observation, action, result):
+                raise AssertionError("Disabled tracing must not collect result diagnostics")
+
+            def train(self):
+                raise AssertionError("Evaluation must not train")
 
         env = SDKEnvironment(ScriptedArcade({"fixture": [frame(), frame()]}), "fixture", 42)
         self.assertEqual(run_game(env, Policy(), 1)["actions"], 1)
