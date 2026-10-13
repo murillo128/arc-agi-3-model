@@ -1,5 +1,5 @@
 """Only public observation data and executed actions enter neural code."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import random
 
 import numpy as np
@@ -54,6 +54,14 @@ class Observation:
     @property
     def terminal(self):
         return self.state in {'WIN', 'GAME_OVER'}
+
+    def starts_new_level(self, previous):
+        """A nonterminal SDK count change separates recurrent histories."""
+        return not self.terminal and self.levels_completed != previous.levels_completed
+
+    def level_initial(self):
+        """Earlier frames may show the old level's winning animation."""
+        return replace(self, frames=self.frames[-1:], action_input=None)
 
 
 def random_action(observation: Observation, rng: random.Random) -> Action:

@@ -135,7 +135,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented by model/environment.py using arc-agi==0.9.9. START creates a fresh seeded SDK environment and emits its initial observation; ordinary actions emit subsequent observations. One serial interaction at a time. The runner constructs a new Episode and clears recurrent state at every restart, without an is_first port. Any installed SDK game supports native progression. Optional isolated-level curriculum is restricted to bundled synthetic sc01-v1 and si01-v1 with pinned arcengine==0.9.3; only the adapter can access that environment-side capability. It ends at native WIN without appending the next random level. Learners receive only public frames, executed action id/data, available actions and public game-state/score fields; no private rules or scene state. Empty and repeated frames retain their order and geometry. Square Cross applies a game-side seeded permutation of all 16 palette colors, including background and HUD; the palette remains fixed within the seeded game and is never supplied to the learner. Its first two levels also translate the initial layout within legal bounds using a separate seeded RNG, so the square has no fixed central start; route and action semantics are preserved."
+      "description": "Implemented by model/environment.py using arc-agi==0.9.9. START creates a fresh seeded SDK environment and emits its initial observation; ordinary actions emit subsequent observations. One serial interaction at a time. The runner constructs a new Episode and clears recurrent state at every restart, without an is_first port. Any installed SDK game supports native progression. Optional isolated-level curriculum is restricted to bundled synthetic sc01-v1 and si01-v1 with pinned arcengine==0.9.3; only the adapter can access that environment-side capability. It ends at native WIN without appending the next random level. Learners receive only public frames, executed action id/data, available actions and public game-state/score fields; no private rules or scene state. Empty and repeated frames retain their order and geometry. Square Cross applies a game-side seeded permutation of all 16 palette colors, including background and HUD; the palette remains fixed within the seeded game and is never supplied to the learner. Its first two levels also translate the initial layout within legal bounds using a separate seeded RNG, so the square has no fixed central start; route and action semantics are preserved. A nonterminal public levels_completed change starts a new history without restarting the live SDK game. Exclude the cross-level target and use only the response final board as initialization; earlier frames may belong to the previous level animation. Terminal WIN/GAME_OVER successors remain valid targets."
     },
     {
       "id": "agent",
@@ -430,7 +430,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Bounded real-episode replay, limited by episode count and a combined 128 MiB device-input budget. Old episodes are evicted before allocating beyond that budget. Reset starts a new independent live history; stored episodes remain separate training examples. Clear replay on level change or process restart; never persist a dataset.",
+      "description": "Bounded real-episode replay, limited by episode count and a combined 128 MiB device-input budget. Old episodes are evicted before allocating beyond that budget. Reset starts a new independent live history; stored episodes remain separate training examples. Clear replay on level change or process restart; never persist a dataset. Native nonterminal level advances also flush pending same-level learning before clearing all old-level replay and starting a separate prefix from the new final board.",
       "children": [
         "history.deltas",
         "history.store",
@@ -677,7 +677,7 @@
           "value": false
         }
       ],
-      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games may require explicitly resuming joint learning.",
+      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games may require explicitly resuming joint learning. Reject prefixes spanning nonterminal SDK levels_completed changes. The runner excludes those targets and flushes pending valid prefixes before clearing replay; terminal WIN/GAME_OVER targets remain trainable.",
       "children": [
         "world.target_encoder",
         "world.monitor",
@@ -1504,7 +1504,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented during frozen validation, independent of training batches. Predict before each real action, pair its next real observation, and compare latent and visual deltas. Include first and terminal actions. Validation uses disjoint odd seeds; random training uses even seeds. No optimizer updates or replay writes during validation.",
+      "description": "Implemented during frozen validation, independent of training batches. Predict before each real action, pair its next real observation, and compare latent and visual deltas. Include first and terminal actions. Validation uses disjoint odd seeds; random training uses even seeds. No optimizer updates or replay writes during validation. At a nonterminal levels_completed change, exclude both prediction and reconstruction deltas, reinitialize h=0 and z from the final board only, and continue the same native game. Report excluded level_advances separately from invalid-data skipped counts; existing minimum coverage and success gates are unchanged.",
       "parent_id": "world.learner",
       "children": [
         "world.monitor.pending",
@@ -31184,7 +31184,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Stateful ordered scan. Initialization emits z from the first valid encoder result and h=zeros(2048) without invoking dynamics. Subsequent records issue previous_state and executed_action from observation.action_input; context.h returns the updated memory and current observed embedding supplies z. Replay includes full prefix, keeps autograd and emits states/actions for valid next-action transitions. Missing visual results advance memory only, retain previous z for acting, and mask visual targets; no fabricated observation. Never concatenate unrelated episodes. Memory after a weight update is reconstructed before another action prediction.",
+      "description": "Stateful ordered scan. Initialization emits z from the first valid encoder result and h=zeros(2048) without invoking dynamics. Subsequent records issue previous_state and executed_action from observation.action_input; context.h returns the updated memory and current observed embedding supplies z. Replay includes full prefix, keeps autograd and emits states/actions for valid next-action transitions. Missing visual results advance memory only, retain previous z for acting, and mask visual targets; no fabricated observation. Never concatenate unrelated episodes. Memory after a weight update is reconstructed before another action prediction. Native nonterminal level changes start a new scan from the response final board with zero memory, excluding old-level animation and the action that crossed the boundary.",
       "operation": "carry",
       "formula": "state, previous_state, executed_action = assimilate_real_inputs(embedding, observation, context)"
     },
@@ -32439,7 +32439,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Stateful ordered scan. Initialization emits z from the first valid encoder result and h=zeros(2048) without invoking dynamics. Subsequent records issue previous_state and executed_action from observation.action_input; context.h returns the updated memory and current observed embedding supplies z. Replay includes full prefix, keeps autograd and emits states/actions for valid next-action transitions. Missing visual results advance memory only, retain previous z for acting, and mask visual targets; no fabricated observation. Never concatenate unrelated episodes. Memory after a weight update is reconstructed before another action prediction.",
+      "description": "Stateful ordered scan. Initialization emits z from the first valid encoder result and h=zeros(2048) without invoking dynamics. Subsequent records issue previous_state and executed_action from observation.action_input; context.h returns the updated memory and current observed embedding supplies z. Replay includes full prefix, keeps autograd and emits states/actions for valid next-action transitions. Missing visual results advance memory only, retain previous z for acting, and mask visual targets; no fabricated observation. Never concatenate unrelated episodes. Memory after a weight update is reconstructed before another action prediction. Native nonterminal level changes start a new scan from the response final board with zero memory, excluding old-level animation and the action that crossed the boundary.",
       "operation": "carry",
       "formula": "training_batch, previous_state, executed_action = assimilate_real_inputs(real_batch, encoded_batch, context)"
     },

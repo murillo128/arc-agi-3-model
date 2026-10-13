@@ -598,7 +598,149 @@ class NumericalTests(unittest.TestCase):
         self.assertEqual(result['samples'], 1)  # only the final pair has two real boards
 
 
+    def test_learner_rejects_native_level_crossing_but_keeps_terminal_targets(self):
+        learner = Learner(self.engine)
+        before = {k: v.clone() for k, v in self.model.state_dict().items()}
+        crossing = Episode([observation(1), replace(observation(2), levels_completed=1)], [Action(4)])
+        with self.assertRaisesRegex(ValueError, 'native level'):
+            learner.update([crossing])
+        self.assertTrue(all(torch.equal(v, before[k]) for k, v in self.model.state_dict().items()))
+        for state, completed in (('WIN', 1), ('GAME_OVER', 0)):
+            with self.subTest(state=state):
+                terminal = Episode([observation(1), replace(observation(2), state=state,
+                                                          levels_completed=completed)], [Action(4)])
+                self.assertEqual(learner.update([terminal])['samples'], 1)
+
+
 class SDKTests(unittest.TestCase):
+    def test_native_level_advance_splits_training_and_preserves_win_targets(self):
+        import json
+        # Literal route for native SDK seed 1654615998, drawn by Random(0).
+        # The fifth ACTION4 advances; ACTION1 continues in level 2.
+        cases = ((None, 1, 6, [1, 2, 3, 4, 1], [1, 1, 1, 1, 1]),
+                 (None, 8, 8, [1, 4, 3], [1, 4, 3]),
+                 (1, 1, 6, [1, 2, 3, 4, 5, 1], [1, 1, 1, 1, 1, 1]))
+        for level, cadence, steps, lengths, samples in cases:
+            with self.subTest(level=level, cadence=cadence):
+                factory = Factory('sc01-v1', ROOT / 'games')
+                self.addCleanup(factory.arcade.close_scorecard)
+                make, starts, responses = factory.make, [], []
+
+                def traced_make(seed, level):
+                    env = make(seed, level)
+                    starts.append(env.observation)
+                    step = env.step
+                    def traced_step(action):
+                        obs = step(action)
+                        responses.append(obs)
+                        return obs
+                    env.step = traced_step
+                    return env
+                factory.make = traced_make
+                config = replace(TrainConfig(), max_steps=steps, train_every=cadence,
+                                 loss_steps=cadence, replay_episodes=4)
+                engine = Engine(WorldModel(NetworkConfig.small()), config)
+                learner, seen, memories = Learner(engine), [], []
+                update, predict = learner.update, engine.predict
+
+                def traced_predict(z, h, actions, *args, **kwargs):
+                    memories.append(h.detach().clone())
+                    return predict(z, h, actions, *args, **kwargs)
+                engine.predict = traced_predict
+
+                def traced_update(episodes):
+                    self.assertEqual(len(episodes), 1)
+                    ep = episodes[0]
+                    result = update(episodes)
+                    seen.append((tuple(ep.observations), tuple(ep.actions), result['samples']))
+                    return result
+                learner.update = traced_update
+                progress = dict(actions=0, updates=0, episodes=0, level_index=0,
+                                level_actions=0, passes=0, best_error=1.)
+                actions = [Action(4)] * 5 + [Action(1)] * (steps - 5)
+                with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()) as output:
+                    with patch('model.runner.random_action', side_effect=actions):
+                        train(engine, learner, factory, {'levels': [level]}, progress,
+                              random.Random(0), Path(directory))
+                self.assertEqual([len(a) for _, a, _ in seen], lengths)
+                self.assertEqual([n for _, _, n in seen], samples)
+                self.assertEqual(progress['actions'], steps)
+                self.assertEqual(progress['updates'], len(samples))
+                self.assertEqual(progress['episodes'], 2)
+                self.assertEqual(responses[4].levels_completed, 1)
+                torch.testing.assert_close(memories[-1][0], torch.zeros(engine.model.config.memory),
+                                           rtol=0, atol=0)
+                if level is None:
+                    self.assertEqual(len(starts), 1)  # Continue the same live SDK game.
+                    self.assertEqual(responses[4].state, 'NOT_FINISHED')
+                    self.assertEqual(len(responses[4].frames), 2)  # Old win frame + new board.
+                    new_start = seen[-1][0][0]
+                    self.assertEqual(new_start.levels_completed, 1)
+                    self.assertEqual(len(new_start.frames), 1)
+                    self.assertIsNone(new_start.action_input)
+                    np.testing.assert_array_equal(new_start.final, responses[4].final)
+                    self.assertEqual([o.levels_completed for o in seen[-1][0]], [1] * (lengths[-1] + 1))
+                    points = [json.loads(line) for line in output.getvalue().splitlines()
+                              if json.loads(line)['event'] == 'progress']
+                    self.assertEqual(points[-1]['replay_episodes'], 1)
+                else:
+                    self.assertEqual(len(starts), 2)
+                    self.assertEqual(responses[4].state, 'WIN')
+                    self.assertEqual(seen[4][0][-1].state, 'WIN')
+
+    def test_native_level_advance_is_excluded_from_frozen_validation(self):
+        factory = Factory('sc01-v1', ROOT / 'games')
+        self.addCleanup(factory.arcade.close_scorecard)
+        make, starts, responses = factory.make, [], []
+
+        def traced_make(seed, level):
+            self.assertEqual(seed, 1)  # Normal odd validation seed for seed=0.
+            env = make(seed, level)
+            starts.append(env.observation)
+            step = env.step
+            def traced_step(action):
+                obs = step(action)
+                responses.append(obs)
+                return obs
+            env.step = traced_step
+            return env
+        factory.make = traced_make
+        config = replace(TrainConfig(), validation_steps=4, validation_episodes=1)
+        engine = Engine(WorldModel(NetworkConfig.small()), config)
+        before = {k: v.clone() for k, v in engine.model.state_dict().items()}
+        predict, add, states, scored = engine.prediction, Metrics.add, [], []
+
+        def traced_prediction(state, action, reference):
+            states.append((state.z.clone(), state.h.clone()))
+            return predict(state, action, reference)
+        engine.prediction = traced_prediction
+
+        def traced_add(metrics, before, after, *args):
+            scored.append((before.copy(), after.copy()))
+            return add(metrics, before, after, *args)
+        # Three ACTION4 commands solve seed 1's first level; next ACTION1 is
+        # scored from the new board, with no old animation/recurrent context.
+        with redirect_stdout(io.StringIO()), patch('model.runner.random_action',
+                side_effect=[Action(4), Action(4), Action(4), Action(1)]), patch.object(Metrics, 'add', traced_add):
+            report = validation(engine, factory, [None], 0)['None']
+        self.assertEqual([o.levels_completed for o in responses], [0, 0, 1, 1])
+        self.assertEqual(report['transitions'], 3)
+        self.assertEqual(report['decoder_transitions'], 3)
+        self.assertEqual(report['actions'], 4)
+        self.assertEqual(report['level_advances'], 1)
+        self.assertEqual(report['skipped'], 0)
+        expected = ((starts[0].final, responses[0].final),
+                    (responses[0].final, responses[1].final),
+                    (responses[2].final, responses[3].final))
+        self.assertEqual(len(scored), len(expected))
+        for pair, reference in zip(scored, expected, strict=True):
+            for actual, wanted in zip(pair, reference, strict=True):
+                np.testing.assert_array_equal(actual, wanted)
+        clean = engine.initial(replace(responses[2], frames=responses[2].frames[-1:], action_input=None))
+        torch.testing.assert_close(states[3][0], clean.z, rtol=0, atol=0)
+        torch.testing.assert_close(states[3][1], clean.h, rtol=0, atol=0)
+        self.assertTrue(all(torch.equal(v, before[k]) for k, v in engine.model.state_dict().items()))
+
     def test_statistics_start_after_first_completed_action_on_resume(self):
         import json
         clock = [0.]

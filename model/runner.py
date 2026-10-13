@@ -29,7 +29,7 @@ def validation(engine, factory, levels, seed):
     c, results = engine.config, {}
     start = time.monotonic()
     for level in levels:
-        metrics, wins, losses, actions = Metrics(), 0, 0, 0
+        metrics, wins, losses, actions, level_advances = Metrics(), 0, 0, 0, 0
         reconstruction_wrong, reconstruction_union, reconstruction_transitions = 0, 0, 0
         prediction_quality, reconstruction_quality = VisualQuality(), VisualQuality()
         for index in range(c.validation_episodes):
@@ -47,11 +47,17 @@ def validation(engine, factory, levels, seed):
                 before = observation.final
                 prediction = engine.prediction(state, action, before)
                 next_observation = env.step(action)
-                next_state = engine.observe(state, action, next_observation)
+                level_advance = next_observation.starts_new_level(observation)
+                next_state = (engine.initial(next_observation.level_initial()) if level_advance
+                              else engine.observe(state, action, next_observation))
                 after = next_observation.final
                 if next_state.z is not None and after is not None:
                     metrics.observe_latent(next_state.z.cpu().numpy(), after.shape)
-                if prediction is not None and after is not None and before.shape == after.shape:
+                if level_advance:
+                    # A new level board is initialization, not an old-level
+                    # successor. Count this exclusion separately from invalid data.
+                    level_advances += 1
+                elif prediction is not None and after is not None and before.shape == after.shape:
                     metrics.add(before, after, prediction[0], state.z.cpu().numpy(),
                                 next_state.z.cpu().numpy(), prediction[1])
                     prediction_quality.add(before, after, prediction[0])
@@ -76,6 +82,7 @@ def validation(engine, factory, levels, seed):
                   and reconstruction_error <= c.delta_error)
         report = metrics.report() | {'passes': passes, 'wins': wins, 'game_overs': losses,
                                       'actions': actions, 'episodes': c.validation_episodes,
+                                      'level_advances': level_advances,
                                       'decoder_delta_error': reconstruction_error,
                                       'decoder_transitions': reconstruction_transitions,
                                       'prediction_quality': prediction_quality.report(),
@@ -91,7 +98,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
     levels = run['levels']
     start, baseline = None, None
     starting_actions = progress['actions']
-    episode, env = None, None
+    episode, env, pending_update = None, None, False
     replay = Replay(c.replay_episodes, c.replay_bytes)
     sampling_rng = random.Random(run.get('seed', 0) ^ 0x5245504C)
     progress.setdefault('trained_transitions', 0)
@@ -121,15 +128,19 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                 env = factory.make(episode_seed, level)
                 episode = Episode([env.observation])
                 progress['episodes'] += 1
+                pending_update = False
             action = random_action(episode.observations[-1], rng)
             observation = env.step(action)
-            episode.append(action, observation)
-            replay.prepare(episode, engine.device, engine.model.config.patch,
-                           torch.bfloat16 if engine.amp else torch.float32)
+            level_advance = observation.starts_new_level(episode.observations[-1])
+            if not level_advance:
+                episode.append(action, observation)
+                replay.prepare(episode, engine.device, engine.model.config.patch,
+                               torch.bfloat16 if engine.amp else torch.float32)
+                pending_update = True
             progress['actions'] += 1
             progress['level_actions'] += 1
-            ended = observation.terminal or len(episode.actions) >= c.max_episode_steps
-            if baseline is None or progress['actions'] % c.train_every == 0 or ended:
+            ended = level_advance or observation.terminal or len(episode.actions) >= c.max_episode_steps
+            if pending_update and (baseline is None or progress['actions'] % c.train_every == 0 or ended):
                 for _ in range(c.updates_per_train):
                     batch = replay.sample(sampling_rng, c.batch_episodes, 2, latest=episode, random_prefix=True)
                     update_start = time.monotonic()
@@ -140,6 +151,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                         latest_update = result
                         progress['updates'] += 1
                         progress['trained_transitions'] += result['samples']
+                pending_update = False
             if baseline is None:
                 # The first action and its learning step establish the origin,
                 # including on resume. Checkpoint/curriculum counters stay intact.
@@ -155,7 +167,15 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                      episode_observations=len(episode.observations),
                      device_cache_mb=round(sum(e.device_bytes for e in replay.episodes) / 2 ** 20, 2),
                      gpu_peak_mb=round(torch.cuda.max_memory_allocated(engine.device) / 2 ** 20) if engine.device.type == 'cuda' else 0)
-            if ended:
+            if level_advance:
+                # Flush the old valid prefix above, then release all old-level
+                # replay. Continue the same SDK game from its new board only.
+                replay = Replay(c.replay_episodes, c.replay_bytes)
+                episode = Episode([observation.level_initial()])
+                progress['episodes'] += 1
+                emit('native_level_advance', actions=progress['actions'],
+                     levels_completed=observation.levels_completed)
+            elif ended:
                 # Live state resets. Real episodes may remain as independent
                 # training examples; no learned latent or recurrent graph survives.
                 episode = None

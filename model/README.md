@@ -131,6 +131,8 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    incluye coordenadas SDK uniformes en 0…63. Prepara el resultado real una sola
    vez en el dispositivo del modelo y lo añade al buffer de la partida actual.
 3. Actualiza cada `--train-every` acciones, además de la primera y GAME_OVER/WIN.
+   Un avance nativo de nivel también vacía cualquier actualización pendiente del
+   prefijo válido, antes de liberar el replay del nivel anterior.
    El modo por acción sigue disponible con `--train-every 1`. El lote incluye el
    prefijo actual y, si se configura replay, prefijos de otras partidas reales.
    Vuelve a codificar cada **prefijo completo desde su propio inicio** con los pesos
@@ -319,6 +321,15 @@ Cualquier otro juego instalado en el SDK usa su progresión nativa:
 .venv/bin/python -m model train --game si01-v1 --levels 1 2 3 --output model/runs/interacciones
 ```
 
+En la progresión nativa, un cambio no terminal de `levels_completed` separa los
+historiales. La acción cuenta como interacción real, pero el tablero inicial del
+nuevo nivel no es un objetivo de predicción del anterior. El runner conserva el
+mismo juego del SDK, libera el replay previo e inicia otro episodio con memoria
+cero y **solo el último frame** de la respuesta: los anteriores pueden contener
+la animación ganadora del nivel anterior. El learner rechaza prefijos que mezclen
+ambos niveles. Los sucesores terminales WIN y GAME_OVER siguen siendo objetivos
+válidos, incluido el WIN de un nivel sintético aislado.
+
 `--mode normal` permite el modo normal del SDK; por defecto se usa offline.
 Este runner es entrenamiento local, no una entrega de competición. No utiliza
 datos privados ni incorpora un solucionador del juego. En juegos arbitrarios,
@@ -330,6 +341,10 @@ Cada 1.000 acciones se ejecutan 8 episodios de hasta 128 acciones con pesos
 congelados. Las semillas de entrenamiento son pares; las de validación son
 impares, fijas y separadas. La validación no escribe replay ni actualiza pesos.
 Incluye la primera acción, los cambios del HUD y las transiciones terminales.
+En modo nativo, también reinicia la memoria desde el último frame al avanzar de
+nivel y excluye ese cruce de los errores predictivo y de reconstrucción. Reporta
+esas acciones como `level_advances`, separadas de `skipped` (datos no evaluables);
+las transiciones mínimas y los umbrales del currículo conservan su significado.
 
 Para avanzar, **cada nivel evaluado** debe cumplir:
 

@@ -188,6 +188,9 @@ class Learner:
     def update(self, episodes):
         if not episodes:
             return None
+        if any(after.starts_new_level(before) for episode in episodes
+               for before, after in zip(episode.observations, episode.observations[1:])):
+            raise ValueError('Training prefixes must not cross a native level boundary')
         e, c = self.engine, self.engine.config
         self.model.train()
         for opt in self.optimizers:
