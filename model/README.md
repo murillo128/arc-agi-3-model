@@ -23,9 +23,10 @@ uv pip install --python .venv/bin/python -r model/requirements.txt --extra-index
 
 Se elige CUDA cuando está disponible y se activa `torch.compile`, SDPA, BF16
 cuando el dispositivo lo soporta, AdamW fusionado y checkpointing de activaciones.
-La primera actualización incluye el coste de compilación. `--no-compile` permite
-ejecución eager; una compilación fallida no se oculta como un cambio automático
-de modo. El rendimiento depende del hardware y de las longitudes de las partidas.
+La primera actualización incluye el coste de compilación. En el entrenamiento
+CUDA se mantiene siempre `torch.compile`; `--no-compile` se reserva al desarrollo
+en CPU. Una compilación fallida no se oculta como un cambio automático de modo.
+El rendimiento depende del hardware y de las longitudes de las partidas.
 No se afirma que compile siempre sea más rápido; evita recompilar usando la misma
 configuración. Se registra el tiempo total, incluido el arranque, en el progreso.
 
@@ -43,9 +44,9 @@ El modelo **base** tiene 214.143.104 parámetros:
 cuántas partidas se muestrean como mínimo. Por defecto mezcla 4 partidas y
 exige 64 observaciones reales, con microbatches de 4 frames. El perfil base no se reduce
 automáticamente al encontrar límites de memoria.
-La compilación puede aumentar el pico de memoria. En una GPU compartida de
-12 GiB, la mezcla de partidas puede requerir `--no-compile`; mantiene BF16 y
-SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
+La compilación puede aumentar el pico de memoria. Si no cabe en una GPU compartida,
+hay que ajustar el uso de memoria del cálculo compilado, conservando BF16, SDPA
+y el tamaño de la red; desactivar la compilación no es la solución de entrenamiento.
 
 ## Flujo y entrenamiento
 
@@ -140,6 +141,10 @@ uint8, inicialización y acciones. Se entrenan hasta las últimas 16 transicione
 de cada prefijo; los gradientes atraviesan el prefijo completo. Si las partidas son
 cortas se combinan varias hasta reunir las observaciones mínimas, sin mezclar
 sus memorias. Los episodios anteriores permanecen hasta su expulsión por capacidad.
+Un reset o GAME_OVER inicia una memoria recurrente nueva, pero no vacía el replay:
+las partidas cortas necesitan combinarse para reunir las 64 observaciones mínimas.
+El replay contiene arrays en RAM de CPU, no grafos ni activaciones de GPU. Los
+pesos y estados del optimizador también se conservan entre partidas.
 Una respuesta sin frames se conserva, avanza la memoria con la acción cuando
 hay estado y no inventa un objetivo visual. El encoder admite geometrías nativas
 rectangulares y padding interno; predecir cambios de tamaño de canvas queda fuera

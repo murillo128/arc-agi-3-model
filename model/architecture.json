@@ -360,7 +360,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented by model/data.py, model/networks.py and model/learning.py. Preserve all real frames and ordered episode/action boundaries in RAM. A shared visual encoder is used for replay and frozen live validation. Rebuild causal state from the complete real prefix whenever representations are recomputed. No persisted latent caches, version counters or synthetic training transitions. Active collection uses a random policy, so representation inference is deferred to replay batches when it has no online consumer. Default replay update mixes at least 4 episodes and 64 real observations; encoder/decoder frame microbatches contain at most 4 frames. Episode activation recomputation bounds memory; compilation may require more device memory than eager BF16/SDPA.",
+      "description": "Implemented by model/data.py, model/networks.py and model/learning.py. Preserve all real frames and ordered episode/action boundaries in RAM. A shared visual encoder is used for replay and frozen live validation. Rebuild causal state from the complete real prefix whenever representations are recomputed. No persisted latent caches, version counters or synthetic training transitions. Active collection uses a random policy, so representation inference is deferred to replay batches when it has no online consumer. Default replay update mixes at least 4 episodes and 64 real observations; encoder/decoder frame microbatches contain at most 4 frames. CUDA training keeps torch.compile enabled with BF16/SDPA and activation recomputation; resolve device-memory limits without switching training to eager. CPU development remains available.",
       "children": [
         "observation",
         "world.encoder",
@@ -430,7 +430,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented RAM-only real episode replay. Store native uint8 frames, actions and public observation metadata; no trace export, disk replay or compression codec in this phase. Keep full prefixes and re-encode them under current weights. Capacity defaults to 32 episodes and 128 MiB. Empty visual responses remain records but cannot supply visual targets. No imagined transitions.",
+      "description": "Implemented CPU RAM-only real episode replay. Store native uint8 frames, actions and public observation metadata, never GPU graphs or activations; no trace export, disk replay or compression codec in this phase. Keep full prefixes and re-encode them under current weights. Capacity defaults to 32 episodes and 128 MiB. Reset/GAME_OVER starts a separate episode with fresh recurrent memory; previous episodes remain until capacity eviction so short episodes can supply mixed training batches. Learned weights and optimizer state persist. Empty visual responses remain records but cannot supply visual targets. No imagined transitions.",
       "children": [
         "history.deltas",
         "history.store",
