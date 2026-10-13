@@ -397,6 +397,12 @@ recorren en ese orden, reservando también el último nivel de cada uno. Un cat�
 incompleto o con versiones duplicadas exige revisar el plan antes de continuar.
 El plan y la etapa residen juntos en el checkpoint: un reinicio no repite una
 transferencia. El supervisor bloquea un segundo supervisor del mismo output.
+El trainer hereda ese bloqueo y lo conserva aunque el supervisor desaparezca:
+un reinicio se rechaza mientras el trainer anterior siga vivo. SIGINT o SIGTERM
+al supervisor pide al trainer guardar el checkpoint y espera a que termine;
+las señales repetidas no interrumpen ese guardado. Tras una muerte forzada del
+supervisor, detener el trainer anterior con SIGINT y esperar su salida antes de
+reanudar la secuencia.
 
 Tras completar Square Cross, crea una rama **local privada** en la ruta indicada,
 actualiza `origin/main` y hace rebase allí. No reescribe ni publica la rama de la

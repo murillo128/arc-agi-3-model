@@ -138,26 +138,43 @@ def owner(output):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError('Another supervisor owns this training output') from exc
-        yield
+        # flock follows the open file description across exec. Closing the
+        # supervisor's copy must not unlock an orphaned trainer's output.
+        yield lock
 
 
-def launch(checkout, output, device):
+def launch(checkout, output, device, lock):
     command = [sys.executable, '-u', '-m', 'model', 'train',
                '--checkpoint', str(output / 'latest.pt'), '--output', str(output),
                '--device', device, '--max-steps', '0', '--max-level-steps', '0']
     # CUDA compilation, precision and optimizer mode are restored by the trainer.
-    process = subprocess.Popen(command, cwd=checkout, start_new_session=True)
+    process, interrupted, forwarded = None, False, False
+
+    def interrupt(signum, frame):
+        nonlocal interrupted, forwarded
+        interrupted = True
+        if process is not None and not forwarded:
+            forwarded = True
+            process.send_signal(signal.SIGINT)
+
+    handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        return process.wait()
-    except KeyboardInterrupt:
-        process.send_signal(signal.SIGINT)
-        process.wait()  # Trainer atomically saves latest.pt before exiting.
-        return None
+        if interrupted:
+            return None
+        process = subprocess.Popen(command, cwd=checkout, start_new_session=True,
+                                   pass_fds=(lock.fileno(),))
+        if interrupted:  # A stop request during Popen also reaches the child.
+            interrupt(None, None)
+        code = process.wait()  # Repeated stop requests cannot interrupt saving.
+        return None if interrupted else code
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
 
 
 def supervise(output, plan, device):
     output = Path(output).resolve()
-    with owner(output):
+    with owner(output) as lock:
         payload = checkpoint.load(output / 'latest.pt')
         if enroll(payload, plan):
             checkpoint.write(output / 'latest.pt', payload)
@@ -178,7 +195,7 @@ def supervise(output, plan, device):
             checkout = state['checkout']
             del payload
             gc.collect()
-            code = launch(checkout, output, device)
+            code = launch(checkout, output, device, lock)
             if code is None:
                 emit('sequence_stopped', reason='interrupted')
                 return

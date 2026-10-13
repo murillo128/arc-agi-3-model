@@ -3,10 +3,15 @@ from contextlib import redirect_stdout
 from copy import deepcopy
 from dataclasses import replace
 import io
+import json
+import os
 from pathlib import Path
 import random
+import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -43,6 +48,103 @@ def payload(root):
 
 
 class SequenceTests(unittest.TestCase):
+    def test_output_ownership_survives_supervisor_loss_until_trainer_exits(self):
+        # Real supervisor/launch/lock; only the expensive neural trainer is a
+        # temporary process with a controlled save boundary.
+        for stop_signal in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+            with self.subTest(signal=stop_signal), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output = root / 'output'
+                output.mkdir()
+                package = root / 'model'
+                package.mkdir()
+                (package / '__init__.py').touch()
+                (package / '__main__.py').write_text('''
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+output = Path(sys.argv[sys.argv.index('--output') + 1])
+stopping = False
+def interrupt(signum, frame):
+    global stopping
+    stopping = True
+signal.signal(signal.SIGINT, interrupt)
+(output / 'trainer.tmp').write_text(str(os.getpid()))
+(output / 'trainer.tmp').replace(output / 'trainer.pid')
+while not stopping:
+    time.sleep(.01)
+(output / 'saving').touch()
+while not (output / 'release-save').exists():
+    time.sleep(.01)
+(output / 'saved').touch()
+''')
+                checkpoint.write(output / 'latest.pt', payload(root))
+                policy = plan(root)
+                (root / 'plan.json').write_text(json.dumps(policy))
+                supervisor = subprocess.Popen(
+                    [sys.executable, '-c',
+                     'import json, sys; from pathlib import Path; '
+                     'from model.sequence import supervise; '
+                     'supervise(Path(sys.argv[1]), json.loads(Path(sys.argv[2]).read_text()), "cpu")',
+                     str(output), str(root / 'plan.json')],
+                    cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                trainer_pid = None
+                def await_condition(condition):
+                    deadline = time.monotonic() + 10
+                    while not condition():
+                        if time.monotonic() >= deadline:
+                            self.fail('Timed out waiting for temporary trainer lifecycle')
+                        time.sleep(.01)
+                try:
+                    await_condition(lambda: (output / 'trainer.pid').exists() or supervisor.poll() is not None)
+                    self.assertIsNone(supervisor.poll())
+                    trainer_pid = int((output / 'trainer.pid').read_text())
+                    with self.assertRaisesRegex(RuntimeError, 'Another supervisor'):
+                        with owner(output):
+                            self.fail('Live trainer allowed another output owner')
+                    supervisor.send_signal(stop_signal)
+                    if stop_signal == signal.SIGKILL:
+                        self.assertEqual(supervisor.wait(timeout=10), -signal.SIGKILL)
+                        os.kill(trainer_pid, 0)  # Trainer remains alive without its parent.
+                    else:
+                        await_condition(lambda: (output / 'saving').exists() or supervisor.poll() is not None)
+                        self.assertIsNone(supervisor.poll(), 'Supervisor must wait for the trainer save')
+                        self.assertFalse((output / 'saved').exists())
+                        # Repeated stop requests must not interrupt an atomic save.
+                        supervisor.send_signal(stop_signal)
+                    with self.assertRaisesRegex(RuntimeError, 'Another supervisor'):
+                        with owner(output):
+                            self.fail('Restart acquired output while previous trainer remained alive')
+                    self.assertEqual(checkpoint.load(output / 'latest.pt')['run']['sequence']['stage'], 0)
+                    if stop_signal == signal.SIGKILL:
+                        os.kill(trainer_pid, signal.SIGINT)
+                    (output / 'release-save').touch()
+                    if stop_signal != signal.SIGKILL:
+                        stdout, stderr = supervisor.communicate(timeout=10)
+                        self.assertEqual(supervisor.returncode, 0, stderr.decode())
+                        self.assertIn('"reason": "interrupted"', stdout.decode())
+                    await_condition(lambda: (output / 'saved').exists())
+                    def available():
+                        try:
+                            with owner(output):
+                                return True
+                        except RuntimeError:
+                            return False
+                    await_condition(available)
+                finally:
+                    (output / 'release-save').touch()
+                    if trainer_pid is not None:
+                        try:
+                            os.kill(trainer_pid, signal.SIGINT)
+                        except ProcessLookupError:
+                            pass
+                    if supervisor.poll() is None:
+                        supervisor.kill()
+                    supervisor.communicate(timeout=10)
+
     def test_transfer_preserves_learned_tensors_and_rng_and_resets_only_game_progress(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
