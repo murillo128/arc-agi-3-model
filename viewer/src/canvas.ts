@@ -5,7 +5,7 @@ export const PALETTE = ['ffffff', 'cccccc', '999999', '666666', '333333', '00000
   'f93c31', '1e93ff', '88d8f1', 'ffdc00', 'ff851b', '921231', '4fcc30', 'a356d6'];
 const colors = PALETTE.map(hex => [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4), 16)]);
 
-export function drawObservation(canvas: HTMLCanvasElement, observation: Observation | undefined, frame: number): string {
+export function drawObservation(canvas: HTMLCanvasElement, observation: Observation | undefined, frame: number, transparentValue?: number): string {
   canvas.hidden = true;
   canvas.width = canvas.height = 1; // Release the previous bitmap, including on missing/oversized frames.
   if (!observation) return 'No pre-action observation for the initial view.';
@@ -23,6 +23,7 @@ export function drawObservation(canvas: HTMLCanvasElement, observation: Observat
     const unknown = new Set<number>();
     for (let i = 0; i < width * height; i++) {
       const value = observation.frames.data[offset + i]!;
+      if (value === transparentValue) continue; // Alpha stays zero; CSS supplies the delta checkerboard.
       const color = colors[value];
       if (!color) unknown.add(value);
       // A distinct viewer-only fallback, explicitly labelled with the exact indices below.

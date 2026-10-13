@@ -222,11 +222,21 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('latent-info').textContent).toContain('[1.5, 1]');
     expect(get('predicted-change-canvas').hidden).toBe(false);
     expect(get('observed-change-canvas').hidden).toBe(false);
+    for (const id of ['real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas']) expect(get(id).hidden).toBe(false);
+    expect(get('delta-difference-info').textContent).toContain('33.33% (1/3');
+    // Moving only the animation frame must also clear final-only predictions.
+    replay.selectFrame(0); view.render(replay);
+    expect(get('real-delta-canvas').hidden).toBe(false);
+    expect(get('predicted-delta-canvas').hidden).toBe(true);
+    expect(get('delta-difference-canvas').hidden).toBe(true);
+    replay.selectFrame(1); view.render(replay);
+    expect(get('delta-difference-canvas').hidden).toBe(false);
     expect(get('module-learning-info').textContent).toContain('optimizer steps: 2');
     expect(get('diagnostic-chart').children.length).toBeGreaterThan(0);
     expect(get('chart-values').children.length).toBe(1);
     view.clear();
-    for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas']) {
+    for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas',
+      'real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas']) {
       expect(get(id).hidden).toBe(true); expect(get(id).width).toBe(1);
     }
     expect(get('latent-info').textContent).toBe('Not recorded.');
@@ -240,5 +250,11 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('module-learning-info').textContent).not.toContain('optimizer steps:');
     expect(get('recorded-errors').textContent).not.toContain('0.125');
     expect(get('metric-select').disabled).toBe(true);
+    expect(get('real-delta-canvas').hidden).toBe(false);
+    expect(get('predicted-delta-canvas').hidden).toBe(true);
+    expect(get('delta-difference-info').textContent).toContain('Not recorded');
+    baseline.select(0); view.render(baseline);
+    expect(get('real-delta-canvas').hidden).toBe(true);
+    expect(get('real-delta-info').textContent).toContain('Unavailable');
   } finally { vi.unstubAllGlobals(); }
 });
