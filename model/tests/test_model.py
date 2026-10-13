@@ -7,6 +7,7 @@ import random
 import sys
 import tempfile
 import unittest
+import weakref
 from unittest.mock import patch
 
 import numpy as np
@@ -19,7 +20,7 @@ from model.environment import Factory
 from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss, soft_delta_error
 from model.metrics import Metrics, VisualQuality, delta_counts
 from model.networks import WorldModel, sigreg, variance_floor
-from model.runner import main, validation
+from model.runner import main, train, validation
 
 ROOT = Path(__file__).resolve().parents[2]
 torch.set_num_threads(2)
@@ -42,6 +43,58 @@ class NumericalTests(unittest.TestCase):
         self.model = WorldModel(NetworkConfig.small())
         self.config = replace(TrainConfig(), min_observations=4, loss_steps=4, frame_chunk=2)
         self.engine = Engine(self.model, self.config)
+
+    def test_first_transition_trains_without_waiting_for_regularization(self):
+        engine = Engine(self.model, replace(self.config, min_observations=64, loss_steps=1))
+        result = Learner(engine).update([episode(1)])
+        self.assertIsNotNone(result)
+        self.assertEqual(result['samples'], 1)
+        self.assertEqual(result['sigreg'], 0.)
+        self.assertEqual(result['variance_floor'], 0.)
+        for component in (self.model.encoder, self.model.dynamics, self.model.decoder):
+            self.assertGreater(sum(float(p.grad.abs().sum()) for p in component.parameters()
+                                   if p.grad is not None), 0.)
+
+    def test_prepared_inputs_reuse_storage_without_changing_gradients(self):
+        ep = episode()
+        ep.prepare('cpu', 4)
+        original = ep.prepared[0][1]
+        ep.prepare('cpu', 4)
+        self.assertIs(ep.prepared[0][1], original)
+        self.assertFalse(any(t.requires_grad for item in ep.prepared for t in item if t is not None))
+        torch.testing.assert_close(ep.prepared[1][0], torch.tensor(ep.observations[1].frames, dtype=torch.long))
+        self.assertEqual(float(ep.prepared[1][2][4]), 1.)
+        self.assertEqual(float(original[0, 16 + 17, 1, 1]), 1.)
+        other = WorldModel(NetworkConfig.small())
+        other.load_state_dict(self.model.state_dict())
+        for model, data in ((self.model, ep), (other, episode())):
+            torch.manual_seed(91)
+            Learner(Engine(model, self.config)).update([data])
+        for (name, a), b in zip(self.model.named_parameters(), other.parameters()):
+            torch.testing.assert_close(a.grad, b.grad, rtol=0, atol=0, msg=name)
+        before = len(ep.prepared)
+        ep.append(Action(2), observation(9))
+        with self.assertRaises(MemoryError):
+            ep.prepare('cpu', 4, byte_limit=ep.device_bytes)
+        self.assertEqual(len(ep.prepared), before)
+
+    def test_optimizer_precision_change_requires_explicit_reset(self):
+        learner = Learner(self.engine)
+        learner.update([episode()])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'latest.pt'
+            rng = random.Random(1)
+            checkpoint.save(path, learner, {}, {}, rng)
+            payload = checkpoint.load(path)
+            self.assertEqual(payload['runtime'], {'fp8': False, 'optimizer_bits': 32})
+            payload['runtime']['optimizer_bits'] = 8
+            restored = Learner(Engine(WorldModel(NetworkConfig.small()), self.config))
+            with self.assertRaisesRegex(ValueError, 'precision changed'):
+                checkpoint.restore(payload, restored, rng)
+            checkpoint.restore(payload, restored, rng, reset_optimizer=True)
+            self.assertTrue(all(not opt.state for opt in restored.optimizers))
+            for a, b in zip(learner.model.parameters(), restored.model.parameters()):
+                torch.testing.assert_close(a, b, rtol=0, atol=0)
 
     def test_delta_denominator_rejects_background_shortcut(self):
         before = np.array([[0, 1], [2, 3]])
@@ -254,8 +307,8 @@ class NumericalTests(unittest.TestCase):
             engine = Engine(model, replace(self.config, frame_chunk=chunk))
             # Hold encoder batching fixed: this tests the decoder VJP bridge,
             # not FP32 batch-GEMM rounding amplified by the variance hinge.
-            engine.encode = lambda observations, training=False: model.encode(
-                observations, engine.spatial, chunk=4, checkpoint_blocks=training)
+            engine.encode = lambda observations, training=False, prepared=None: model.encode(
+                observations, engine.spatial, chunk=4, checkpoint_blocks=training, prepared=prepared)
             learner = Learner(engine)
             torch.manual_seed(51)
             def direct(function, *args, **kwargs):
@@ -306,6 +359,41 @@ class NumericalTests(unittest.TestCase):
 
 
 class SDKTests(unittest.TestCase):
+    def test_every_action_trains_terminal_before_releasing_episode(self):
+        class Environment:
+            def __init__(self, color):
+                self.color, self.steps = color, 0
+                self.observation = observation(color)
+            def step(self, action):
+                self.steps += 1
+                return replace(observation(self.color + self.steps),
+                               state='GAME_OVER' if self.steps == 2 else 'NOT_FINISHED')
+        class Environments:
+            def __init__(self):
+                self.count = 0
+            def make(self, seed, level):
+                self.count += 1
+                return Environment(self.count)
+        config = replace(TrainConfig(), max_steps=5, min_observations=64)
+        engine = Engine(WorldModel(NetworkConfig.small()), config)
+        learner, seen, refs = Learner(engine), [], []
+        update = learner.update
+        def record(episodes):
+            self.assertEqual(len(episodes), 1)
+            ep = episodes[0]
+            seen.append((len(ep.actions), ep.observations[-1].terminal,
+                         int(ep.observations[0].frames[0, 1, 1])))
+            refs.append(weakref.ref(ep))
+            return update(episodes)
+        learner.update = record
+        progress = dict(actions=0, updates=0, episodes=0, level_index=0, level_actions=0, passes=0, best_error=1.)
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            train(engine, learner, Environments(), {'levels': [1]}, progress,
+                  random.Random(1), Path(directory))
+        self.assertEqual(seen, [(1, False, 1), (2, True, 1), (1, False, 2), (2, True, 2), (1, False, 3)])
+        self.assertEqual(progress['updates'], 5)
+        self.assertTrue(all(ref() is None for ref in refs))
+
     def test_unlimited_practice_stops_on_sustained_collapse_or_level_pass(self):
         # Only validation verdicts are controlled; the CLI, SDK interaction and
         # checkpoint/final stop path are real. This does not assert convergence.
@@ -372,16 +460,16 @@ class SDKTests(unittest.TestCase):
     def test_cli_resume_advances_counters_with_empty_replay(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()) as output:
             common = ['--device', 'cpu', '--no-compile', '--output', directory]
-            main(['train', '--profile', 'small', '--max-steps', '4', '--train-every', '4',
+            main(['train', '--profile', 'small', '--max-steps', '4',
                   '--min-observations', '4', *common])
             path = Path(directory) / 'latest.pt'
             main(['train', '--checkpoint', str(path), '--max-steps', '8', *common])
             saved = checkpoint.load(path)
             self.assertEqual(saved['progress']['actions'], 8)
-            # One training block in each invocation, four updates per block.
+            # One update per action, including after resume with an empty episode.
             self.assertEqual(saved['progress']['updates'], 8)
             self.assertEqual(saved['progress']['episodes'], 2)
-            self.assertIn('empty RAM replay', output.getvalue())
+            self.assertIn('empty device input cache', output.getvalue())
 
 
 if __name__ == '__main__':

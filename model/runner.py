@@ -10,7 +10,7 @@ import torch
 
 from . import checkpoint
 from .config import NetworkConfig, TrainConfig
-from .data import Episode, Replay, random_action
+from .data import Episode, random_action
 from .environment import Factory
 from .learning import Engine, Learner
 from .metrics import Metrics, VisualQuality, delta_counts
@@ -88,7 +88,6 @@ def validation(engine, factory, levels, seed):
 
 def train(engine, learner, factory, run, progress, rng, output, stop_after_level=False):
     c = engine.config
-    replay = Replay(c.replay_episodes, c.replay_bytes)
     levels = run['levels']
     start = time.monotonic()
     starting_actions = progress['actions']
@@ -105,29 +104,33 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                 episode_seed = rng.randrange(2 ** 30) * 2  # disjoint from odd validation seeds
                 env = factory.make(episode_seed, level)
                 episode = Episode([env.observation])
-                replay.add(episode)
                 progress['episodes'] += 1
             action = random_action(episode.observations[-1], rng)
             observation = env.step(action)
             episode.append(action, observation)
-            replay.trim()
+            episode.prepare(engine.device, engine.model.config.patch,
+                            torch.bfloat16 if engine.amp else torch.float32, c.replay_bytes)
             progress['actions'] += 1
             progress['level_actions'] += 1
-            if progress['actions'] % c.train_every == 0:
+            ended = observation.terminal or len(episode.actions) >= c.max_episode_steps
+            if progress['actions'] % c.train_every == 0 or ended:
                 for _ in range(c.updates_per_train):
-                    batch = replay.sample(rng, c.batch_episodes, c.min_observations)
-                    result = learner.update(batch)
+                    result = learner.update([episode])
                     if result is not None:
                         latest_update = result
                         progress['updates'] += 1
-            if observation.terminal or len(episode.actions) >= c.max_episode_steps:
-                episode = None
-            if progress['actions'] % min(100, c.train_every) == 0:
+            if progress['actions'] % min(100, c.train_every) == 0 or ended or progress['actions'] == starting_actions + 1:
                 elapsed = time.monotonic() - start
                 emit('progress', **progress, level=level, loss=latest_update,
                      actions_per_second=round((progress['actions'] - starting_actions) / max(elapsed, 1e-6), 2),
-                     replay_episodes=len(replay.episodes),
+                     replay_episodes=1, episode_actions=len(episode.actions),
+                     episode_observations=len(episode.observations),
+                     device_cache_mb=round(episode.device_bytes / 2 ** 20, 2),
                      gpu_peak_mb=round(torch.cuda.max_memory_allocated(engine.device) / 2 ** 20) if engine.device.type == 'cuda' else 0)
+            if ended:
+                # The terminal transition has already trained. No reference to
+                # this episode's prepared tensors or recurrent graph survives.
+                episode = None
             if progress['actions'] % c.validate_every == 0:
                 reports = validation(engine, factory, levels[:progress['level_index'] + 1], run['seed'])
                 current = reports[str(level)]
@@ -152,7 +155,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                     progress.update(level_index=progress['level_index'] + 1,
                                     level_actions=0, passes=0, best_error=1., collapse_streak=0,
                                     healthy_latent_seen=False)
-                    # Old real episodes remain in RAM for mixed rehearsal.
+                    # A new level never inherits the previous episode's memory.
                     episode = None
                     if stop_after_level:
                         reason = 'level_converged'
@@ -184,6 +187,10 @@ def parser():
     p.add_argument('--profile', choices=('base', 'small'), default=None)
     p.add_argument('--device', default='auto')
     p.add_argument('--compile', action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument('--fp8', action=argparse.BooleanOptionalAction, default=None,
+                   help='FP8 tensorwise training for large Transformer linears (CUDA)')
+    p.add_argument('--optimizer-bits', type=int, choices=(8, 32), default=None)
+    p.add_argument('--reset-optimizer', action='store_true', help='Explicitly discard saved optimizer moments')
     p.add_argument('--threads', type=int, default=4)
     p.add_argument('--stop-after-level', action='store_true', help='Stop after the current level passes all gates')
     for field in fields(TrainConfig):
@@ -203,9 +210,17 @@ def main(argv=None):
     torch.set_num_threads(args.threads)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if args.device == 'auto' else torch.device(args.device)
     compiled = device.type == 'cuda' if args.compile is None else args.compile
+    if device.type == 'cuda' and not compiled:
+        p.error('CUDA execution requires torch.compile; --no-compile is for CPU development')
     torch.set_float32_matmul_precision('high')
     torch.backends.cudnn.benchmark = True
     payload = checkpoint.load(args.checkpoint) if args.checkpoint else None
+    saved_runtime = payload.get('runtime', {}) if payload else {}
+    fp8 = args.fp8 if args.fp8 is not None else (saved_runtime.get('fp8', False) if device.type == 'cuda' else False)
+    optimizer_bits = args.optimizer_bits if args.optimizer_bits is not None else (
+        saved_runtime.get('optimizer_bits', 32) if device.type == 'cuda' else 32)
+    if payload and args.command == 'train' and optimizer_bits != saved_runtime.get('optimizer_bits', 32) and not args.reset_optimizer:
+        p.error('Changing optimizer precision requires --reset-optimizer; weights are preserved')
     run = dict(payload['run']) if payload else {
         'game': args.game or 'sc01-v1', 'environments_dir': str(args.environments_dir or ROOT / 'games'),
         'mode': args.mode or 'offline', 'seed': args.seed if args.seed is not None else 0,
@@ -226,17 +241,19 @@ def main(argv=None):
                 run['levels'][:min(len(run['levels']), payload['progress']['level_index'] + 1)])
     network = NetworkConfig(**payload['network']) if payload else (
         NetworkConfig.small() if args.profile == 'small' else NetworkConfig())
-    training = TrainConfig(**payload['training']) if payload else TrainConfig()
+    training = TrainConfig(**{k: v for k, v in payload['training'].items()
+                              if k not in {'replay_episodes', 'batch_episodes'}}) if payload else TrainConfig()
     overrides = {f.name: getattr(args, f.name) for f in fields(TrainConfig) if getattr(args, f.name) is not None}
     training = replace(training, **overrides)
     random.seed(run['seed'])
     torch.manual_seed(run['seed'])
     rng = random.Random(run['seed'])
-    emit('initializing', device=str(device), compile=compiled, network=asdict(network), training=asdict(training), game=run['game'], levels=run['levels'])
+    emit('initializing', device=str(device), compile=compiled, fp8=fp8, optimizer_bits=optimizer_bits,
+         network=asdict(network), training=asdict(training), game=run['game'], levels=run['levels'])
     model = WorldModel(network).to(device)
-    engine = Engine(model, training, compiled)
+    engine = Engine(model, training, compiled, fp8=fp8, optimizer_bits=optimizer_bits)
     factory = Factory(run['game'], run['environments_dir'], run['mode'])
-    emit('ready', parameters=sum(p.numel() for p in model.parameters()), amp=engine.amp,
+    emit('ready', parameters=sum(p.numel() for p in model.parameters()), amp=engine.amp, fp8_layers=engine.fp8_layers,
          note='First calls include compilation warmup' if compiled else 'Eager execution')
     if args.command == 'validate':
         model.load_state_dict(payload['weights'])
@@ -246,7 +263,9 @@ def main(argv=None):
     progress = dict(payload['progress']) if payload else dict(
         actions=0, updates=0, episodes=0, level_index=0, level_actions=0, passes=0, best_error=1.)
     if payload:
-        checkpoint.restore(payload, learner, rng)
+        checkpoint.restore(payload, learner, rng, reset_optimizer=args.reset_optimizer)
+        if args.reset_optimizer:
+            emit('optimizer_reset', previous_bits=saved_runtime.get('optimizer_bits', 32), optimizer_bits=optimizer_bits)
         for opt in learner.optimizers:
             for group in opt.param_groups:
                 group['lr'] = training.learning_rate
@@ -254,5 +273,5 @@ def main(argv=None):
             progress['passes'] = 0  # previous gates used the saved configuration
             progress['collapse_streak'] = 0
             progress['best_error'] = 1.
-        emit('resumed', **progress, note='Fresh seeded episode and empty RAM replay')
+        emit('resumed', **progress, note='Fresh seeded episode and empty device input cache')
     train(engine, learner, factory, run, progress, rng, args.output.resolve(), args.stop_after_level)

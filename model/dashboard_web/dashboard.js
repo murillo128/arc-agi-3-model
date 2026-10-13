@@ -117,7 +117,9 @@ function render(data) {
   $('level-actions').textContent = `${fmt(p.level_actions)} acciones en este nivel`;
   $('actions').textContent = fmt(p.actions); $('episodes').textContent = `${fmt(p.episodes)} partidas iniciadas`;
   $('tps').textContent = fmt(p.actions_per_second, 2); $('updates').textContent = fmt(p.updates);
-  $('replay').textContent = `${fmt(p.replay_episodes)} partidas en memoria`;
+  $('replay').textContent = finite(p.episode_actions)
+    ? `Partida actual: ${fmt(p.episode_actions)} acciones · ${fmt(p.device_cache_mb, 1)} MiB de entradas`
+    : `${fmt(p.replay_episodes)} partidas en memoria`;
   $('prediction').textContent = pct(latest?.delta_error); $('reconstruction').textContent = pct(latest?.decoder_delta_error);
   $('prediction-note').textContent = latest ? `Validado en acción ${fmt(latest.actions)}` : 'Todavía sin validación de este nivel';
   $('gpu').textContent = finite(p.gpu_peak_mb) ? `${fmt(p.gpu_peak_mb / 1024, 2)} GiB` : '—';

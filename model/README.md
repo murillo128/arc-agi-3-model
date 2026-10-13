@@ -21,8 +21,32 @@ uv pip install --python .venv/bin/python -r model/requirements.txt --extra-index
 .venv/bin/python -m model train
 ```
 
+Para el entrenamiento acelerado en la RTX 4070 Ti (Ada):
+
+```sh
+uv pip install --python .venv/bin/python -r model/requirements-cuda.txt
+.venv/bin/python -m model train --device cuda --compile --fp8 --optimizer-bits 8
+```
+
+FP8 usa escalado dinámico por tensor de torchao 0.8.0, compatible con PyTorch
+2.6: convierte las 156 proyecciones Q/K/V/salida y MLP de los bloques Transformer.
+Usa E4M3 para entradas/pesos y E5M2 para operandos de gradiente; conserva pesos
+maestros FP32. Las proyecciones de entrada/salida del modelo, las recurrencias y
+las normalizaciones quedan fuera de la conversión. La suma `z + delta`, las
+pérdidas y las estadísticas anticolapso conservan FP32; el resto usa autocast BF16.
+Se rellena internamente la dimensión de reducción cuando FP8 exige múltiplos de
+16, sin modificar el tablero ni sus objetivos. FP8 requiere CUDA >= SM 8.9 y
+`torch.compile`; no se emula ni se cambia silenciosamente a eager.
+
+AdamW de bitsandbytes 0.45.5 conserva momentos cuantizados por bloques en tensores
+grandes y FP32 en tensores pequeños; no cuantiza los pesos maestros. CPU usa AdamW
+de 32 bits. `--no-fp8 --optimizer-bits 32` permite una comparación CUDA compilada.
+Estos formatos no garantizan mayor velocidad ni igual convergencia: se observan
+por separado el tiempo por acción, el uso de memoria y el error de delta.
+
 Se elige CUDA cuando está disponible y se activa `torch.compile`, SDPA, BF16
-cuando el dispositivo lo soporta, AdamW fusionado y checkpointing de activaciones.
+cuando el dispositivo lo soporta y checkpointing de activaciones. AdamW de 32
+bits usa la implementación fusionada; el de 8 bits usa kernels de bitsandbytes.
 La primera actualización incluye el coste de compilación. En el entrenamiento
 CUDA se mantiene siempre `torch.compile`; `--no-compile` se reserva al desarrollo
 en CPU. Una compilación fallida no se oculta como un cambio automático de modo.
@@ -40,10 +64,10 @@ El modelo **base** tiene 214.143.104 parámetros:
 
 `--profile small --device cpu --no-compile` usa la misma computación con
 74.872 parámetros para desarrollo. No es un sustituto de capacidad equivalente.
-`--frame-chunk` limita frames por llamada espacial; `--batch-episodes` controla
-cuántas partidas se muestrean como mínimo. Por defecto mezcla 4 partidas y
-exige 64 observaciones reales, con microbatches de 4 frames. El perfil base no se reduce
-automáticamente al encontrar límites de memoria.
+`--frame-chunk` limita frames por llamada espacial (4 por defecto). Cada
+actualización usa únicamente el prefijo de la partida actual y supervisa su
+última transición. El perfil base no se reduce automáticamente al encontrar
+límites de memoria.
 La compilación puede aumentar el pico de memoria. Si no cabe en una GPU compartida,
 hay que ajustar el uso de memoria del cálculo compilado, conservando BF16, SDPA
 y el tamaño de la red; desactivar la compilación no es la solución de entrenamiento.
@@ -57,10 +81,11 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    del conjunto en los niveles 1–2, conservando sus reglas. Son propiedades del entorno:
    el modelo no recibe el mapa de colores ni etiquetas de objetos.
 2. El comportamiento aleatorio elige una acción de `available_actions`; ACTION6
-   incluye coordenadas SDK uniformes en 0…63. Guarda el resultado real en RAM.
-3. Cada 32 acciones realiza 4 actualizaciones. En cada una muestrea partidas y
-   vuelve a codificar sus **prefijos
-   completos** con los pesos actuales. Conserva todos los frames de animación.
+   incluye coordenadas SDK uniformes en 0…63. Prepara el resultado real una sola
+   vez en el dispositivo del modelo y lo añade al buffer de la partida actual.
+3. **Cada acción con una transición visual válida realiza una actualización**, desde
+   la primera y también en GAME_OVER/WIN. Vuelve a codificar el **prefijo completo
+   de la partida actual** con los pesos actuales. Conserva todos los frames de animación.
    Los deltas entre frames de una animación forman parte de las entradas del
    encoder, junto con los colores y una máscara de píxeles válidos. El primer
    frame de cada respuesta usa un símbolo absoluto.
@@ -76,8 +101,10 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
 5. Entrena encoder y dynamics con `(1-w) * MSE(d_hat, z_(t+1)-z_t) + w * SIGReg
    + 10 * variance_floor`, además de los gradientes visuales del siguiente paso.
    `--sigreg-weight` controla `w` (por defecto .002); los pesos activos se imprimen al iniciar.
-   Ambos latentes reales conservan gradiente. SIGReg usa al menos 64
-   observaciones reales distintas, proyecciones aleatorias y cálculo FP32.
+   Ambos latentes reales conservan gradiente. SIGReg usa al menos 2
+   observaciones reales de igual geometría, proyecciones aleatorias y cálculo FP32.
+   `--min-observations` controla solamente este mínimo de regularización: nunca
+   bloquea una actualización predictiva/visual válida.
    No hay profesor EMA ni etiquetas tomadas de trayectorias imaginadas. SIGReg
    integra ambos lados de la función par. Muestrea hasta 16 posiciones, siempre
    las mismas dentro de un batch de geometría común, y calcula estadísticas
@@ -121,9 +148,9 @@ defecto. Los dos optimizadores conservan conjuntos de parámetros disjuntos,
 pero todas las pérdidas se calculan con los mismos pesos previos a la actualización.
 Para limitar memoria, cada microbatch del decoder acumula gradientes en una hoja
 temporal; al terminar se propagan explícitamente por el grafo original de ambos
-latentes. El encoder conserva las salidas de cada episodio y recalcula sus
-activaciones internas durante backward, para poder mezclar más partidas sin
-retener todos sus grafos internos a la vez. Ese puente **no corta el gradiente**.
+latentes. El encoder conserva las salidas del prefijo y recalcula sus
+activaciones internas durante backward, para no retener todos los intermedios
+de la partida a la vez. Ese puente **no corta el gradiente**.
 Se comprueban y recortan ambos
 conjuntos de gradientes antes de actualizar ningún peso.
 
@@ -136,15 +163,16 @@ entrenamiento aleatorio no calcula inferencias en vivo que no va a consumir: las
 reconstruye en los batches. `Engine.rebuild` permite reconstruir un estado en vivo
 después de actualizar los pesos. No existe caché persistente de latentes obsoletos.
 
-El replay es una cola limitada a 32 episodios / 128 MiB, con observaciones nativas
-uint8, inicialización y acciones. Se entrenan hasta las últimas 16 transiciones
-de cada prefijo; los gradientes atraviesan el prefijo completo. Si las partidas son
-cortas se combinan varias hasta reunir las observaciones mínimas, sin mezclar
-sus memorias. Los episodios anteriores permanecen hasta su expulsión por capacidad.
-Un reset o GAME_OVER inicia una memoria recurrente nueva, pero no vacía el replay:
-las partidas cortas necesitan combinarse para reunir las 64 observaciones mínimas.
-El replay contiene arrays en RAM de CPU, no grafos ni activaciones de GPU. Los
-pesos y estados del optimizador también se conservan entre partidas.
+El buffer contiene **una única partida**. Sus observaciones SDK originales siguen
+en CPU y sus píxeles, features visuales y acciones preparados residen en GPU durante
+el entrenamiento CUDA. Se reutilizan únicamente entradas inmutables: no hay caché
+de latentes ni grafos. `--replay-bytes` limita los tensores preparados de la partida
+(128 MiB por defecto); excederlo produce un error explícito. CPU usa la misma ruta
+con tensores CPU. Por defecto se supervisa la última transición (`--loss-steps 1`)
+y los gradientes atraviesan el prefijo completo. Después de entrenar la transición
+terminal, se libera el buffer; el siguiente episodio empieza con memoria vacía.
+También se vacía al alcanzar el límite de pasos o cambiar de nivel. Los pesos y
+estados del optimizador se conservan. No se mezclan partidas anteriores.
 Una respuesta sin frames se conserva, avanza la memoria con la acción cuando
 hay estado y no inventa un objetivo visual. El encoder admite geometrías nativas
 rectangulares y padding interno; predecir cambios de tamaño de canvas queda fuera
@@ -288,10 +316,16 @@ dependencias web, CDN ni compilación de frontend.
 `latest.pt` se reemplaza atómicamente cada 1.000 acciones y al detenerse;
 `best.pt` conserva la mejor evaluación visual del nivel actual. Guardan pesos,
 ambos optimizadores, configuración, contadores, currículo y RNG. Al reanudar,
-empieza una partida nueva con el replay vacío: recupera el entrenamiento, no la
+empieza una partida nueva con la caché de entradas vacía: recupera el entrenamiento, no la
 misma trayectoria a mitad de partida. Los argumentos de entrenamiento dados
 explícitamente sustituyen los guardados y reinician las rachas de aprobación.
 `--output` permite ubicar checkpoints fuera del repositorio.
+El checkpoint incluye FP8 y la precisión del optimizador. Reanudar con la misma
+precisión restaura los momentos. Cambiar entre AdamW de 32 y 8 bits exige
+`--reset-optimizer`: conserva pesos, contadores y RNG, pero reinicia los momentos.
+La validación CPU puede leer los pesos FP32 de un entrenamiento FP8 sin necesitar
+los paquetes CUDA adicionales. Al migrar una ejecución antigua al aprendizaje por
+jugada, usar `--train-every 1 --updates-per-train 1 --loss-steps 1 --min-observations 2`.
 Los checkpoints anteriores al estado espacial no son compatibles con esta
 arquitectura: se empieza un entrenamiento nuevo, sin adaptar pesos silenciosamente.
 

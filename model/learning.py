@@ -19,9 +19,26 @@ class State:
 
 
 class Engine:
-    def __init__(self, model, config, compile_model=False):
+    def __init__(self, model, config, compile_model=False, *, fp8=False, optimizer_bits=32):
         self.model, self.config = model, config
         self.device = next(model.parameters()).device
+        self.optimizer_bits = optimizer_bits
+        self.fp8_layers = 0
+        if fp8:
+            if self.device.type != 'cuda' or torch.cuda.get_device_capability(self.device) < (8, 9):
+                raise ValueError('FP8 requires CUDA compute capability >= 8.9')
+            if not compile_model:
+                raise ValueError('FP8 training requires torch.compile')
+            from torchao.float8 import Float8LinearConfig, convert_to_float8_training
+            def eligible(module, name):
+                return (isinstance(module, torch.nn.Linear) and '.blocks.' in name
+                        and min(module.in_features, module.out_features) >= 128
+                        and module.in_features % 16 == 0 and module.out_features % 16 == 0)
+            self.fp8_layers = sum(eligible(m, n) for n, m in model.named_modules())
+            if not self.fp8_layers:
+                raise ValueError('No large Transformer linears eligible for FP8')
+            convert_to_float8_training(model, module_filter_fn=eligible,
+                config=Float8LinearConfig(pad_inner_dim=True))
         self.amp = False
         if self.device.type == 'cuda':
             with torch.cuda.device(self.device):
@@ -43,9 +60,9 @@ class Engine:
     def actions(self, actions):
         return torch.tensor([a.features() for a in actions], device=self.device)
 
-    def encode(self, observations, training=False):
+    def encode(self, observations, training=False, prepared=None):
         return self.model.encode(observations, self.spatial, self.config.frame_chunk,
-                                 checkpoint_blocks=training)
+                                 checkpoint_blocks=training, prepared=prepared)
 
     @torch.no_grad()
     def initial(self, observation):
@@ -90,12 +107,18 @@ class Engine:
         return state
 
 
-def optimizer(parameters, learning_rate, cuda):
+def optimizer(parameters, learning_rate, cuda, bits=32):
     parameters = list(parameters)
-    return torch.optim.AdamW([
+    groups = [
         {'params': [p for p in parameters if p.ndim >= 2], 'weight_decay': .01},
         {'params': [p for p in parameters if p.ndim < 2], 'weight_decay': 0.},
-    ], lr=learning_rate, betas=(.9, .95), eps=1e-8, fused=cuda)
+    ]
+    if bits == 8:
+        if not cuda:
+            raise ValueError('8-bit AdamW requires CUDA; use --optimizer-bits 32 on CPU')
+        from bitsandbytes.optim import AdamW8bit
+        return AdamW8bit(groups, lr=learning_rate, betas=(.9, .95), eps=1e-8)
+    return torch.optim.AdamW(groups, lr=learning_rate, betas=(.9, .95), eps=1e-8, fused=cuda)
 
 
 def delta_log_probabilities(color_logits, reference):
@@ -149,7 +172,7 @@ class Learner:
         self.model = engine.model
         self.primary = list(itertools.chain(self.model.encoder.parameters(), self.model.dynamics.parameters()))
         self.visual = list(self.model.decoder.parameters())
-        self.optimizers = [optimizer(p, engine.config.learning_rate, engine.device.type == 'cuda')
+        self.optimizers = [optimizer(p, engine.config.learning_rate, engine.device.type == 'cuda', engine.optimizer_bits)
                            for p in (self.primary, self.visual)]
 
     def update(self, episodes):
@@ -166,12 +189,14 @@ class Learner:
                 # every sampled prefix. Recompute one episode at a time during
                 # backward; all branches still receive the same joint gradients.
                 zs = activation_checkpoint(e.encode, episode.observations,
-                                           training=True, use_reentrant=False)
+                                           training=True, prepared=episode.prepared, use_reentrant=False)
                 for obs, z in zip(episode.observations, zs):
                     if z is not None:
                         real_z.setdefault(obs.final.shape, []).append(z)
                 h = torch.zeros(1, self.model.config.memory, device=e.device)
                 current = zs[0]
+                episode_actions = (torch.stack([item[2] for item in episode.prepared[1:]])
+                                   if episode.prepared else e.actions(episode.actions))
                 first_loss = max(0, len(episode.actions) - c.loss_steps)
                 for t, action in enumerate(episode.actions):
                     next_z = zs[t + 1]
@@ -180,16 +205,18 @@ class Learner:
                             before is not None and after is not None and before.shape == after.shape):
                         states.append(current)
                         memories.append(h[0])
-                        actions.append(action)
+                        actions.append(episode_actions[t])
                         targets.append(next_z - current)
                         successors.append(next_z)
-                        boards.append(after)
-                        references.append(before)
+                        boards.append(episode.prepared[t + 1][0][-1] if episode.prepared else
+                                      torch.tensor(np.array(after, copy=True), device=e.device, dtype=torch.long))
+                        references.append(episode.prepared[t][0][-1] if episode.prepared else
+                                          torch.tensor(np.array(before, copy=True), device=e.device, dtype=torch.long))
                     if current is not None:
-                        h, _ = e.advance(current[None], h, e.actions([action]))
+                        h, _ = e.advance(current[None], h, episode_actions[t:t + 1])
                     if next_z is not None:
                         current = next_z
-            if not states or sum(map(len, real_z.values())) < c.min_observations:
+            if not states:
                 return None
         buckets = {}
         for i, board in enumerate(boards):
@@ -201,7 +228,7 @@ class Learner:
         for shape, indices in buckets.items():
             with e.autocast():
                 predicted_z, _, delta = e.predict(torch.stack([states[i] for i in indices]),
-                    torch.stack([memories[i] for i in indices]), e.actions([actions[i] for i in indices]))
+                    torch.stack([memories[i] for i in indices]), torch.stack([actions[i] for i in indices]))
             prediction_loss = prediction_loss + len(indices) / len(states) * F.mse_loss(
                 delta.float(), torch.stack([targets[i] for i in indices]).float())
             real_successors = torch.stack([successors[i] for i in indices])
@@ -211,8 +238,8 @@ class Learner:
             for branch in (0, 1):
                 for start in range(0, len(indices), c.frame_chunk):
                     selected = indices[start:start + c.frame_chunk]
-                    actual = torch.tensor(np.stack([boards[i] for i in selected]), device=e.device, dtype=torch.long)
-                    before = torch.tensor(np.stack([references[i] for i in selected]), device=e.device, dtype=torch.long)
+                    actual = torch.stack([boards[i] for i in selected])
+                    before = torch.stack([references[i] for i in selected])
                     offset = branch * len(indices) + start
                     with e.autocast():
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
@@ -236,7 +263,7 @@ class Learner:
             backward_gradients.extend(decoder_inputs.grad.chunk(2))
         # Match positions only within the same native canvas geometry. A single
         # observation cannot establish diversity, regardless of patch count.
-        eligible = [zs for zs in real_z.values() if len(zs) >= 2]
+        eligible = [zs for zs in real_z.values() if len(zs) >= c.min_observations]
         count = sum(map(len, eligible))
         regularization = sum(len(zs) * sigreg(torch.stack(zs), self.model.config.sigreg_slices)
                              for zs in eligible) / count if count else prediction_loss * 0

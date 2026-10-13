@@ -167,14 +167,14 @@ class WorldModel(nn.Module):
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
 
-    def encode(self, observations, spatial, chunk=8, checkpoint_blocks=False):
+    def encode(self, observations, spatial, chunk=8, checkpoint_blocks=False, prepared=None):
         device = next(self.parameters()).device
         features, owners, result = {}, {}, [None] * len(observations)
         # Bucket native geometries; the batch axis contains independent frames.
         for index, observation in enumerate(observations):
             if not len(observation.frames):
                 continue
-            x = frame_features(observation, device, self.config.patch)
+            x = prepared[index][1] if prepared else frame_features(observation, device, self.config.patch)
             key = tuple(x.shape[-2:])
             features.setdefault(key, []).append(x)
             owners.setdefault(key, []).append((index, len(x)))

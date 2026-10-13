@@ -69,6 +69,7 @@ def random_action(observation: Observation, rng: random.Random) -> Action:
 class Episode:
     observations: list[Observation]
     actions: list[Action] = field(default_factory=list)
+    prepared: list = field(default_factory=list, repr=False)
 
     def append(self, action, observation):
         self.actions.append(action)
@@ -77,6 +78,31 @@ class Episode:
     @property
     def nbytes(self):
         return sum(o.frames.nbytes for o in self.observations)
+
+    @property
+    def device_bytes(self):
+        return sum(t.numel() * t.element_size() for item in self.prepared
+                   for t in item if t is not None)
+
+    def prepare(self, device, patch, dtype=torch.float32, byte_limit=128 * 1024 * 1024):
+        """Cache immutable inputs only, owned and released by this episode.
+
+        Nothing here depends on learned weights. Learned states and autograd
+        graphs must be rebuilt after each optimizer update.
+        """
+        for index in range(len(self.prepared), len(self.observations)):
+            obs = self.observations[index]
+            f, h, w = obs.frames.shape
+            padded_h, padded_w = h + (-h) % patch, w + (-w) % patch
+            itemsize = torch.empty((), dtype=dtype).element_size()
+            estimated = f * h * w * 8 + f * padded_h * padded_w * 35 * itemsize
+            estimated += 48 if index else 0
+            if self.device_bytes + estimated > byte_limit:
+                raise MemoryError('Current episode exceeds device-input budget; lower max_episode_steps')
+            pixels = torch.tensor(np.array(obs.frames, copy=True), device=device, dtype=torch.long)
+            features = frame_features(obs, device, patch, pixels=pixels, dtype=dtype) if f else None
+            action = torch.tensor(self.actions[index - 1].features(), device=device) if index else None
+            self.prepared.append((pixels, features, action))
 
 
 class Replay:
@@ -111,14 +137,15 @@ class Replay:
         return [Episode(list(e.observations), list(e.actions)) for e in chosen]
 
 
-def frame_features(observation: Observation, device, patch):
+def frame_features(observation: Observation, device, patch, *, pixels=None, dtype=torch.float32):
     """16 colors + 18 animation-delta symbols + one native-pixel validity channel."""
-    pixels = torch.tensor(np.array(observation.frames, copy=True), device=device, dtype=torch.long)
+    if pixels is None:
+        pixels = torch.tensor(np.array(observation.frames, copy=True), device=device, dtype=torch.long)
     delta = torch.full_like(pixels, 17)  # first frame is absolute, not a predicted transition
     if len(pixels) > 1:
         delta[1:] = torch.where(pixels[1:] == pixels[:-1], 16, pixels[1:])
     color = F.one_hot(pixels, 16)
     changes = F.one_hot(delta, 18)
-    x = torch.cat((color, changes, torch.ones_like(pixels[..., None])), -1).float().permute(0, 3, 1, 2)
+    x = torch.cat((color, changes, torch.ones_like(pixels[..., None])), -1).to(dtype).permute(0, 3, 1, 2)
     h, w = pixels.shape[-2:]
     return F.pad(x, (0, (-w) % patch, 0, (-h) % patch))

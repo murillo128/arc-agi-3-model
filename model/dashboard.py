@@ -19,7 +19,8 @@ MAX_READ = 8 * 1024 * 1024
 MAX_LINE = 64 * 1024
 ASSETS = Path(__file__).with_name('dashboard_web')
 PROGRESS_KEYS = ('actions', 'updates', 'episodes', 'level_index', 'level_actions',
-                 'passes', 'collapse_streak', 'actions_per_second', 'replay_episodes', 'gpu_peak_mb')
+                 'passes', 'collapse_streak', 'actions_per_second', 'replay_episodes', 'gpu_peak_mb',
+                 'episode_actions', 'episode_observations', 'device_cache_mb')
 LOSS_KEYS = ('loss', 'latent_mse', 'sigreg', 'variance_floor', 'decoder_ce',
              'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm')
 VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'latent_std',
