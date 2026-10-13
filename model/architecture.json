@@ -167,7 +167,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Phase-one implementation in model/: random legal SDK interaction, shared visual encoder, action-conditioned residual simulator, RAM-only real replay, separate visual-decoder optimization and frozen validation. Sources retained by the neural components document the research adaptations. Actor, critic, goal, auxiliary heads and imagination training are future components. Python orchestrates episode initialization and terminates each live memory at reset; no START input is sent to Agent. Total active neural parameters: 214143104. The random collector avoids unused online encoder calls; replay reconstructs states with current parameters and frozen validation runs online inference.",
+      "description": "Phase-one implementation in model/: random legal SDK interaction, shared spatial visual encoder, action-conditioned residual simulator, current-episode input memory and jointly trained visual decoder. One update per valid real action; frozen validation is separate. CUDA uses torch.compile, BF16, selective FP8 and 8-bit optimizer moments. CPU development remains available. Actor, critic, goal, auxiliary heads and imagination training remain future components. Episode inputs and recurrent context are discarded after the terminal update; learned weights persist. No START input is sent to Agent. Total active neural parameters: 214143104.",
       "children": [
         "world.representation",
         "world_model",
@@ -2968,7 +2968,7 @@
           "value": 17
         }
       ],
-      "description": "For each observed animation, retain the first frame absolutely; each later frame has KEEP for equal cells and its new color for changed cells. A shape change starts another absolute segment. One-hot colors (16), delta codes (18), and pixel validity (1) give 35 channels. The first frame does not require a previous response. Replay keeps native uint8 frames in RAM; this operation creates the encoder features at each forward, without a persisted storage codec.",
+      "description": "For each observed animation, retain the first frame absolutely; each later frame has KEEP for equal cells and its new color for changed cells. A shape change starts another absolute segment. One-hot colors (16), delta codes (18), and pixel validity (1) give 35 channels. The first frame does not require a previous response. Keep original native uint8 observations on CPU. During training, Episode.prepare constructs these nonlearned features once per observation on the model device and reuses them throughout the current episode. Frozen validation constructs features as observations arrive. No persisted storage codec.",
       "operation": "deltas",
       "formula": "features = categorical_frames_and_deltas(frames, keep_id, absolute_id)"
     },
@@ -9791,7 +9791,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries. Training checkpoints the complete encoder invocation per episode as well as individual Transformer blocks. During backward it recomputes one episode at a time, retaining identical gradients while bounding activation memory across mixed episodes.",
+      "description": "Training invocation of the shared visual encoder. Reuse immutable prepared inputs for the complete current-episode prefix and encode them under the latest weights. Checkpoint the complete encoder invocation and individual Transformer blocks; backward recomputes activations to bound memory. No previous-episode mixture or stale learned latent cache.",
       "children": [
         "world.encoder.replay.frames",
         "world.encoder.replay.deltas",
@@ -9889,7 +9889,7 @@
           "value": 17
         }
       ],
-      "description": "For each observed animation, retain the first frame absolutely; each later frame has KEEP for equal cells and its new color for changed cells. A shape change starts another absolute segment. One-hot colors (16), delta codes (18), and pixel validity (1) give 35 channels. The first frame does not require a previous response. Replay keeps native uint8 frames in RAM; this operation creates the encoder features at each forward, without a persisted storage codec.",
+      "description": "For each observed animation, retain the first frame absolutely; each later frame has KEEP for equal cells and its new color for changed cells. A shape change starts another absolute segment. One-hot colors (16), delta codes (18), and pixel validity (1) give 35 channels. The first frame does not require a previous response. Keep original native uint8 observations on CPU. During training, Episode.prepare constructs these nonlearned features once per observation on the model device and reuses them throughout the current episode. Frozen validation constructs features as observations arrive. No persisted storage codec.",
       "operation": "deltas",
       "formula": "features = categorical_frames_and_deltas(frames, keep_id, absolute_id)"
     },
