@@ -21,6 +21,29 @@ def delta_counts(before, actual, predicted):
     return int(wrong.sum()), int(union.sum()), int(changed.sum())
 
 
+class VisualQuality:
+    """Color-macro pixel errors expose rare/static detail loss without game rules."""
+    def __init__(self):
+        self.counts = np.zeros((3, 16), dtype=np.int64)
+        self.wrong = np.zeros_like(self.counts)
+
+    def add(self, before, actual, predicted):
+        if before.shape != actual.shape or actual.shape != predicted.shape:
+            raise ValueError('Visual quality requires matching geometry')
+        for i, mask in enumerate((np.ones_like(actual, dtype=bool), actual == before, actual != before)):
+            self.counts[i] += np.bincount(actual[mask], minlength=16)
+            self.wrong[i] += np.bincount(actual[mask & (actual != predicted)], minlength=16)
+
+    def report(self):
+        result = {}
+        for i, name in enumerate(('color_error', 'static_color_error', 'changed_color_error')):
+            present = self.counts[i] > 0
+            result[name] = float((self.wrong[i, present] / self.counts[i, present]).mean()) if present.any() else None
+        result['by_color'] = {str(i): {'pixels': int(n), 'error': float(self.wrong[0, i] / n)}
+                              for i, n in enumerate(self.counts[0]) if n}
+        return result
+
+
 @dataclass
 class Metrics:
     transitions: int = 0

@@ -40,8 +40,12 @@ El modelo **base** tiene 214.143.104 parámetros:
 `--profile small --device cpu --no-compile` usa la misma computación con
 74.872 parámetros para desarrollo. No es un sustituto de capacidad equivalente.
 `--frame-chunk` limita frames por llamada espacial; `--batch-episodes` controla
-cuántas partidas se muestrean como mínimo. El perfil base no se reduce
+cuántas partidas se muestrean como mínimo. Por defecto mezcla 4 partidas y
+exige 64 observaciones reales, con microbatches de 4 frames. El perfil base no se reduce
 automáticamente al encontrar límites de memoria.
+La compilación puede aumentar el pico de memoria. En una GPU compartida de
+12 GiB, la mezcla de partidas puede requerir `--no-compile`; mantiene BF16 y
+SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
 
 ## Flujo y entrenamiento
 
@@ -63,9 +67,10 @@ automáticamente al encontrar límites de memoria.
    **`z_hat_(t+1) = z_t + d_hat_(t+1)`**, sin normalización posterior a la suma.
    Para actualizar `h` se resume `z`, pero los P latentes completos llegan al
    predictor. Sus tokens son los P patches más uno de memoria y uno de acción.
-5. Entrena encoder y dynamics con `.98 * MSE(d_hat, z_(t+1)-z_t) + .02 * SIGReg
+5. Entrena encoder y dynamics con `(1-w) * MSE(d_hat, z_(t+1)-z_t) + w * SIGReg
    + 10 * variance_floor`, además de los gradientes visuales del siguiente paso.
-   Ambos latentes reales conservan gradiente. SIGReg usa al menos 32
+   `--sigreg-weight` controla `w`; los pesos activos se imprimen al iniciar.
+   Ambos latentes reales conservan gradiente. SIGReg usa al menos 64
    observaciones reales distintas, proyecciones aleatorias y cálculo FP32.
    No hay profesor EMA ni etiquetas tomadas de trayectorias imaginadas. SIGReg
    integra ambos lados de la función par. Muestrea hasta 16 posiciones, siempre
@@ -78,20 +83,46 @@ automáticamente al encontrar límites de memoria.
    color por patch, una por píxel. La probabilidad del color anterior se asigna
    a `KEEP=16`; los otros colores indican reemplazos. Compara este **delta
    predicho con el delta real** mediante NLL, equilibrando celdas cambiadas y
-   no cambiadas. Esa asignación es biyectiva: la NLL equivale a CE de color;
+   no cambiadas. Dentro de cada grupo, pondera cada píxel por la inversa de la
+   raíz cuadrada de la frecuencia de su **color real**, normalizando los pesos.
+   Así los detalles estáticos pequeños ganan peso sin darles tanta masa como
+   a todo el fondo; no se identifican objetos ni colores especiales del juego.
+   `--color-balance-power` controla el exponente (0: uniforme por píxel,
+   1: igual masa por color; por defecto .5). `--visual-balance pixel` selecciona
+   explícitamente la ponderación original; el valor por defecto es `color`.
+   Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
+   Añade un término diferenciable de error sobre la unión de deltas: si `c` es
+   el número de celdas realmente cambiadas, `f` la suma de probabilidades de
+   cambio falso en celdas estáticas y `m` la suma de probabilidades de error en
+   celdas cambiadas, usa `(m+f)/(c+f)`. Así los cambios inventados pesan según
+   el tamaño del delta. En frames sin cambios reales usa la probabilidad media
+   de cambio falso para conservar gradiente. `--delta-overlap-weight` controla
+   este término (1 por defecto, 0 lo desactiva); la métrica de validación sigue
+   usando argmax y su unión real, sin suavizarla.
 7. El mismo decoder reconstruye también el sucesor desde su latente **real**,
    con peso 1, igual que la rama predicha. Ambas pérdidas propagan gradiente
    al encoder; la predicha también al predictor. Los targets son siempre
    píxeles reales. La reconstrucción permite comprobar que el latente conserva
    información visual mientras el predictor aprende. No es una predicción causal.
+8. Una lectura auxiliar **local por patch** reconstruye los píxeles del sucesor
+   real usando la proyección latente, LayerNorm y clasificador del decoder,
+   compartidos. Omite posiciones y atención entre patches. Obliga a que cada
+   latente contenga información de sus propios píxeles: cambiar otro patch no
+   puede alterar esta lectura. `--local-reconstruction-weight` controla su peso
+   (1 por defecto; 0 la desactiva). No añade parámetros ni forma parte de la
+   predicción en inferencia; sus targets y gradientes son exclusivamente reales.
 
-El objetivo total suma las cinco pérdidas anteriores. AdamW usa `lr=1e-4` por
+El objetivo total suma los términos latentes y las tres pérdidas visuales
+(NLL más error de unión suave por rama). AdamW usa `lr=1e-4` por
 defecto. Los dos optimizadores conservan conjuntos de parámetros disjuntos,
 pero todas las pérdidas se calculan con los mismos pesos previos a la actualización.
 Para limitar memoria, cada microbatch del decoder acumula gradientes en una hoja
 temporal; al terminar se propagan explícitamente por el grafo original de ambos
-latentes. Ese puente **no corta el gradiente**. Se comprueban y recortan ambos
+latentes. El encoder conserva las salidas de cada episodio y recalcula sus
+activaciones internas durante backward, para poder mezclar más partidas sin
+retener todos sus grafos internos a la vez. Ese puente **no corta el gradiente**.
+Se comprueban y recortan ambos
 conjuntos de gradientes antes de actualizar ningún peso.
 
 Los píxeles del tablero anterior no entran a la red del decoder: solo determinan
@@ -152,6 +183,8 @@ Para avanzar, **cada nivel evaluado** debe cumplir:
 - Al menos 128 transiciones evaluables y 32 con cambios reales.
 - Error del delta visual ≤ 1%: celdas incorrectas / unión de cambios reales y
   predichos. Penaliza cambios omitidos, inventados y colores erróneos.
+- Error del delta reconstruido desde el latente real ≤ 1%, con la misma
+  cobertura mínima. Acertar el predictor no basta si falla la reconstrucción.
 - MSE del delta latente ≤ .01 y desviación típica media del latente ≥ .1, para
   impedir que un encoder colapsado apruebe por producir siempre el mismo vector.
 - Ninguna transición omitida por falta de frames o incompatibilidad geométrica.
@@ -165,6 +198,10 @@ reconstrucción desde el latente real posterior. La segunda se calcula después
 de puntuar la primera y nunca se utiliza para corregirla. `latent_std` mide
 variación entre observaciones de la misma geometría y posición, sin mezclar
 posiciones o tamaños distintos para aparentar diversidad.
+`prediction_quality` y `reconstruction_quality` añaden errores promediados por
+color, separados entre píxeles estáticos y cambiados, junto con recuentos y
+errores por color. Ayudan a detectar detalles olvidados aunque el fondo domine
+la imagen. Son diagnósticos; no sustituyen el error de delta ni los umbrales.
 
 Se detiene guardando `latest.pt` al llegar a 100.000 acciones sin converger en
 un nivel, a 500.000 acciones totales, al completar el currículo o con Ctrl+C.

@@ -32,15 +32,20 @@ class NetworkConfig:
 @dataclass(frozen=True)
 class TrainConfig:
     learning_rate: float = 1e-4
+    visual_balance: str = 'color'
+    color_balance_power: float = .5
+    sigreg_weight: float = .02
+    local_reconstruction_weight: float = 1.
+    delta_overlap_weight: float = 1.
     variance_weight: float = 10.
     train_every: int = 32
     updates_per_train: int = 1
-    batch_episodes: int = 1
-    frame_chunk: int = 8
+    batch_episodes: int = 4
+    frame_chunk: int = 4
     loss_steps: int = 16
     replay_episodes: int = 32
     replay_bytes: int = 128 * 1024 * 1024
-    min_observations: int = 32
+    min_observations: int = 64
     max_episode_steps: int = 256
     validate_every: int = 1000
     validation_episodes: int = 8
@@ -60,12 +65,16 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
+            if k == 'visual_balance':
+                if v not in {'pixel', 'color'}:
+                    raise ValueError('visual_balance must be pixel or color')
+                continue
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
-            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps'}:
+            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'color_balance_power', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:
                 raise ValueError(f'{k} must be positive')
-        if self.delta_error > 1 or self.min_observations < 2:
+        if self.delta_error > 1 or self.min_observations < 2 or self.color_balance_power > 1 or self.sigreg_weight > 1:
             raise ValueError('Invalid error threshold / representation sample count')

@@ -167,7 +167,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Phase-one implementation in model/: random legal SDK interaction, shared visual encoder, action-conditioned residual simulator, RAM-only real replay, separate visual-decoder optimization and frozen validation. Sources retained by the neural components document the research adaptations. Actor, critic, goal, auxiliary heads and imagination training are future components. Python orchestrates episode initialization and terminates each live memory at reset; no START input is sent to Agent. Total active neural parameters: 214139520. The random collector avoids unused online encoder calls; replay reconstructs states with current parameters and frozen validation runs online inference.",
+      "description": "Phase-one implementation in model/: random legal SDK interaction, shared visual encoder, action-conditioned residual simulator, RAM-only real replay, separate visual-decoder optimization and frozen validation. Sources retained by the neural components document the research adaptations. Actor, critic, goal, auxiliary heads and imagination training are future components. Python orchestrates episode initialization and terminates each live memory at reset; no START input is sent to Agent. Total active neural parameters: 214143104. The random collector avoids unused online encoder calls; replay reconstructs states with current parameters and frozen validation runs online inference.",
       "children": [
         "world.representation",
         "world_model",
@@ -360,7 +360,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented by model/data.py, model/networks.py and model/learning.py. Preserve all real frames and ordered episode/action boundaries in RAM. A shared visual encoder is used for replay and frozen live validation. Rebuild causal state from the complete real prefix whenever representations are recomputed. No persisted latent caches, version counters or synthetic training transitions. Active collection uses a random policy, so representation inference is deferred to replay batches when it has no online consumer.",
+      "description": "Implemented by model/data.py, model/networks.py and model/learning.py. Preserve all real frames and ordered episode/action boundaries in RAM. A shared visual encoder is used for replay and frozen live validation. Rebuild causal state from the complete real prefix whenever representations are recomputed. No persisted latent caches, version counters or synthetic training transitions. Active collection uses a random policy, so representation inference is deferred to replay batches when it has no online consumer. Default replay update mixes at least 4 episodes and 64 real observations; encoder/decoder frame microbatches contain at most 4 frames. Episode activation recomputation bounds memory; compilation may require more device memory than eager BF16/SDPA.",
       "children": [
         "observation",
         "world.encoder",
@@ -672,7 +672,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented Learner.update in model/learning.py. Re-encode full real prefixes, reconstruct causal memory, select up to the last 16 eligible transitions, and minimize latent-delta MSE plus SIGReg. Both real endpoint representations receive gradients. No EMA teacher. AdamW updates encoder and dynamics together. Frozen pre-action validation is separate from replay training and never feeds validation transitions back into replay.",
+      "description": "Implemented Learner.update in model/learning.py. Re-encode full real prefixes, reconstruct causal memory, select up to the last 16 eligible transitions, and minimize latent-delta MSE plus SIGReg. Both real endpoint representations receive gradients. No EMA teacher. AdamW updates encoder and dynamics together. Frozen pre-action validation is separate from replay training and never feeds validation transitions back into replay. Frozen level advancement requires both causal predicted-delta error and real-successor decoder-delta error below threshold, with coverage, latent health and consecutive validation passes unchanged.",
       "children": [
         "world.target_encoder",
         "world.monitor",
@@ -2081,7 +2081,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Joint primary objective: .98 latent residual MSE + .02 position-aware SIGReg + 10 variance hinge, plus visual-prediction and real-reconstruction gradients supplied by the decoder. Both visual branches have weight 1. Real observations define all targets.",
+      "description": "Primary objective: (1-w) latent residual MSE + w position-aware SIGReg + variance_weight variance hinge, plus visual-prediction, full real-reconstruction and local real-reconstruction gradients from the shared decoder. All targets come from real observations. Weights are configurable and recorded at startup.",
       "children": [
         "world.model_state.objective.alignment",
         "world.model_state.objective.regression",
@@ -2816,7 +2816,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "SIGReg on global z vectors of distinct real observations, following https://github.com/galilai-group/lejepa/blob/main/MINIMAL.md. No patch-position pseudo-samples, no imaginary data, no BatchNorm or fixed-norm latent. At least 32 distinct observations selected before an update; this is a baseline sampling rule, not a proof of non-collapse with small data.",
+      "description": "SIGReg and variance hinge across distinct real observations at matching spatial positions. Encoder output is LayerNorm-normalized per patch; positional codes alone cannot count as across-observation diversity. At least min_observations real observations, potentially from multiple episodes; no imaginary data or BatchNorm. Sample at most 16 matching positions for SIGReg; use all positions for the variance hinge.",
       "children": [
         "world.model_state.regularizer.observations",
         "world.model_state.regularizer.projections",
@@ -9695,7 +9695,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries.",
+      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries. Training checkpoints the complete encoder invocation per episode as well as individual Transformer blocks. During backward it recomputes one episode at a time, retaining identical gradients while bounding activation memory across mixed episodes.",
       "children": [
         "world.encoder.replay.frames",
         "world.encoder.replay.deltas",
@@ -32653,7 +32653,7 @@
       "attributes": [
         {
           "name": "min_observations",
-          "value": 32
+          "value": 64
         }
       ],
       "description": "Deduplicate observation IDs and exclude invalid/padded inputs. At most one latent per actual observation, retaining gradients. Defer optimization when insufficient samples; M is the actual count.",
@@ -32882,7 +32882,8 @@
         }
       ],
       "operation": "gaussian",
-      "formula": "error = (real - exp(-frequencies^2 / 2))^2 + imag^2"
+      "formula": "error = (real - exp(-frequencies^2 / 2))^2 + imag^2",
+      "description": "Characteristic function exp(-t^2/2) of the standard normal target, evaluated at the quadrature points."
     },
     {
       "id": "world.model_state.regularizer.integral",
@@ -34813,7 +34814,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Joint real-delta supervision and auxiliary real-successor reconstruction, using the same decoder parameters. Each branch has weight 1. Chunk decoder backward, accumulate latent VJPs, then propagate them through encoder/predictor once before either optimizer steps. Own decoder parameters use a separate AdamW; visual gradients also train encoder/dynamics.",
+      "description": "Joint real-delta supervision and auxiliary real-successor reconstruction, using the same decoder parameters. Each branch has weight 1. Chunk decoder backward, accumulate latent VJPs, then propagate them through encoder/predictor once before either optimizer steps. Own decoder parameters use a separate AdamW; visual gradients also train encoder/dynamics. A local real-successor auxiliary readout shares projection, final norm and classifier while bypassing positions and attention; default weight 1. It adds gradients to the real-successor branch.",
       "children": [
         "world.decoder.learning.parameters",
         "world.decoder.learning.targets",
@@ -34821,7 +34822,9 @@
         "world.decoder.learning.loss",
         "world.decoder.learning.grad",
         "world.decoder.learning.optimizer",
-        "world.decoder.learning.metrics"
+        "world.decoder.learning.metrics",
+        "world.decoder.learning.local",
+        "world.decoder.learning.total"
       ]
     },
     {
@@ -34996,14 +34999,15 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Sum the balanced real-delta NLL of predicted successors and reconstructed real successors. Each branch weight is 1; changed/unchanged cell means each have weight .5 when both sets are nonempty. Never differentiate discrete argmax metrics.",
+      "description": "Joint real-delta NLL of predicted and reconstructed real successors. Each branch weight is 1. Changed/static groups have equal mass; real-color frequency weights inside each group protect small static details without privileging game objects or colors. Argmax metrics are not differentiated. Add a differentiable delta-union surrogate; NLL remains to supply strong gradients before useful predictions emerge.",
       "children": [
         "world.decoder.learning.loss.unpack",
         "world.decoder.learning.loss.log_softmax",
         "world.decoder.learning.loss.labels",
         "world.decoder.learning.loss.nll",
         "world.decoder.learning.loss.mean",
-        "world.decoder.learning.loss.delta_probabilities"
+        "world.decoder.learning.loss.delta_probabilities",
+        "world.decoder.learning.loss.overlap"
       ]
     },
     {
@@ -35050,7 +35054,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Accumulate decoder parameter gradients and latent gradients for both prediction and reconstruction branches. Send latent VJPs back through the shared encoder/dynamics computation graph; validate both parameter gradient sets before either optimizer step.",
+      "description": "Accumulate decoder parameter gradients and latent gradients for both prediction and reconstruction branches. Send latent VJPs back through the shared encoder/dynamics computation graph; validate both parameter gradient sets before either optimizer step. Include the patch-local real reconstruction term in both shared decoder and real-successor gradients.",
       "operation": "grad",
       "formula": "gradients, latent_gradients = grad(loss, parameters, batch.z)"
     },
@@ -50304,7 +50308,7 @@
       "id": "world.decoder.learning.loss.mean",
       "parent_id": "world.decoder.learning.loss",
       "kind": "operation",
-      "label": "Balanced Pixel Mean",
+      "label": "Color-balanced Delta Mean",
       "ports": [
         {
           "id": "nll",
@@ -50337,6 +50341,12 @@
           "label": "loss",
           "direction": "output",
           "shape": []
+        },
+        {
+          "id": "overlap",
+          "label": "overlap",
+          "direction": "input",
+          "shape": []
         }
       ],
       "parameter_ids": [],
@@ -50345,11 +50355,19 @@
         {
           "name": "changed_weight",
           "value": 0.5
+        },
+        {
+          "name": "color_balance_power",
+          "value": 0.5
+        },
+        {
+          "name": "delta_overlap_weight",
+          "value": 1.0
         }
       ],
-      "description": "Split valid pixels by labels != reference_frame, using batch metadata already supplied. If both groups are nonempty, give each group half the frame loss; if either group is empty use the ordinary mean. Average selected real frames; decoder microbatches accumulate this exact mean before one optimizer step.",
+      "description": "Separate changed/static groups using real before/after pixels. In each group weight each pixel by count(actual_color, group)^(-color_balance_power), normalizing by total weight. Average the nonempty groups. Default power .5; power 0 is pixel averaging, power 1 equal color mass. KEEP is grouped by its real color too. Chunked accumulation preserves the exact mean. Add the soft delta-union error to penalize invented changes relative to the size of the real delta.",
       "operation": "mean",
-      "formula": "loss = sum_branches(mean_frames(balanced_pixel_nll(nll, batch, changed_weight)))"
+      "formula": "loss = sum_branches(mean_frames(color_weighted_delta_nll(nll, batch, changed_weight, color_balance_power))) + delta_overlap_weight * overlap"
     },
     {
       "id": "world.decoder.learning.optimizer.finite",
@@ -50672,7 +50690,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Report balanced predicted-delta NLL and real-successor reconstruction NLL separately. Frozen validation reports causal delta error, reconstruction delta error and across-observation latent spread independently. Training metrics never become replay targets.",
+      "description": "Report predicted-delta and reconstruction NLL separately. Frozen validation reports delta errors plus color-macro, static color-macro and changed color-macro errors for both branches, per-color pixel counts/errors, and across-observation latent spread. No game objects, colors or private rules are privileged. Training reports NLL and weighted soft delta-union terms independently for all three readout branches.",
       "operation": "metrics",
       "formula": "record_decoder_fit_metrics(logits, batch, loss)"
     },
@@ -105584,7 +105602,473 @@
       "references": [],
       "attributes": [],
       "operation": "penalty",
-      "formula": "regularization = {sigreg, variance_floor}"
+      "formula": "regularization = {sigreg, variance_floor}",
+      "description": "Keep SIGReg and the variance hinge as separate scalar penalties; the primary objective applies their configured weights."
+    },
+    {
+      "id": "world.decoder.learning.local",
+      "parent_id": "world.decoder.learning",
+      "kind": "group",
+      "label": "Local Reconstruction",
+      "ports": [
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "parameters",
+          "label": "parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, patch_classifier}"
+        },
+        {
+          "id": "loss",
+          "label": "loss",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Training-only real-successor readout. Each latent patch reconstructs only its own pixels. Reuse decoder latent projection, affine LayerNorm and color classifier; bypass positions and all attention blocks. No extra parameters, no observed pixel inputs to the readout, and no inference-path change.",
+      "children": [
+        "world.decoder.learning.local.select",
+        "world.decoder.learning.local.projection",
+        "world.decoder.learning.local.norm",
+        "world.decoder.learning.local.color",
+        "world.decoder.learning.local.grid",
+        "world.decoder.learning.local.loss"
+      ]
+    },
+    {
+      "id": "world.decoder.learning.local.select",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Real Successor Latents",
+      "ports": [
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "real_batch",
+          "label": "real_batch",
+          "direction": "output",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Select only freshly encoded real successor latents and their aligned real before/after targets. Retain gradients into the encoder.",
+      "operation": "select",
+      "formula": "z, real_batch = select_real_successor_branch(batch)"
+    },
+    {
+      "id": "world.decoder.learning.local.projection",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Shared Latent Projection",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "parameters",
+          "label": "parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, patch_classifier}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 768
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Same 1024-to-768 projection as the full decoder; applied independently at each patch.",
+      "operation": "projection",
+      "formula": "out = linear(z, parameters.latent_projection)"
+    },
+    {
+      "id": "world.decoder.learning.local.norm",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Shared LayerNorm",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 768
+            }
+          ]
+        },
+        {
+          "id": "parameters",
+          "label": "parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, patch_classifier}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 768
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "eps",
+          "value": 1e-06
+        }
+      ],
+      "description": "Shared decoder affine LayerNorm across features, never across patches.",
+      "operation": "norm",
+      "formula": "out = layer_norm(x, parameters.final_norm, eps)"
+    },
+    {
+      "id": "world.decoder.learning.local.color",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Shared Patch Classifier",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 768
+            }
+          ]
+        },
+        {
+          "id": "parameters",
+          "label": "parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, patch_classifier}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Shared 768-to-256 classifier: local row, local column, 16 colors. No position features.",
+      "operation": "color",
+      "formula": "out = linear(x, parameters.patch_classifier)"
+    },
+    {
+      "id": "world.decoder.learning.local.grid",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Native Pixel Grid",
+      "ports": [
+        {
+          "id": "patch_logits",
+          "label": "patch_logits",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 256
+            }
+          ]
+        },
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "logits",
+          "label": "logits",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Row-major patches; reshape B,rows,cols,4,4,16 then permute 0,1,3,2,4,5, merge rows/columns and crop padding. Uses only geometry from the batch.",
+      "operation": "grid",
+      "formula": "logits = crop_native(unpatchify(patch_logits, batch.geometry), batch.geometry)"
+    },
+    {
+      "id": "world.decoder.learning.local.loss",
+      "parent_id": "world.decoder.learning.local",
+      "kind": "operation",
+      "label": "Local Real Delta Loss",
+      "ports": [
+        {
+          "id": "logits",
+          "label": "logits",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        },
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "loss",
+          "label": "loss",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "local_reconstruction_weight",
+          "value": 1.0
+        },
+        {
+          "name": "changed_weight",
+          "value": 0.5
+        },
+        {
+          "name": "color_balance_power",
+          "value": 0.5
+        },
+        {
+          "name": "delta_overlap_weight",
+          "value": 1.0
+        }
+      ],
+      "description": "Same canonical KEEP/replacement NLL and normalized inverse-square-root real-color weights as full reconstruction. Only real before/after targets. Weight 0 disables this auxiliary training term. Include the same soft delta-union error as the full visual branches.",
+      "operation": "loss",
+      "formula": "loss = local_reconstruction_weight * mean(color_weighted_delta_nll(logits, batch, changed_weight, color_balance_power) + delta_overlap_weight * soft_delta_error(logits, batch))"
+    },
+    {
+      "id": "world.decoder.learning.total",
+      "parent_id": "world.decoder.learning",
+      "kind": "operation",
+      "label": "Total Visual Loss",
+      "ports": [
+        {
+          "id": "visual_loss",
+          "label": "visual_loss",
+          "direction": "input",
+          "shape": []
+        },
+        {
+          "id": "local_loss",
+          "label": "local_loss",
+          "direction": "input",
+          "shape": []
+        },
+        {
+          "id": "loss",
+          "label": "loss",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Prediction, full real reconstruction and local real reconstruction all contribute before either optimizer updates. Local gradients add to the real-successor VJP.",
+      "operation": "total",
+      "formula": "loss = visual_loss + local_loss"
+    },
+    {
+      "id": "world.decoder.learning.loss.overlap",
+      "parent_id": "world.decoder.learning.loss",
+      "kind": "operation",
+      "label": "Soft Delta Union Error",
+      "ports": [
+        {
+          "id": "logits",
+          "label": "logits",
+          "direction": "input",
+          "shape": null,
+          "value_type": "ColorLogits {tensor: float32[B,H,W,16], transition_ids}"
+        },
+        {
+          "id": "batch",
+          "label": "batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderBatch {z: float32[B,P,1024] differentiable, labels: int64[B,H,W], pixel_mask: bool[B,H,W], reference_frame: uint8[B,H,W], geometry, transition_ids}"
+        },
+        {
+          "id": "overlap",
+          "label": "overlap",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "overlap",
+      "formula": "overlap = mean_frames(soft_delta_error(logits, batch))",
+      "description": "Softmax colors in FP32. For each frame, c = count(actual != reference), f = sum_static(1-p(actual)), m = sum_changed(1-p(actual)); error = (m+f)/(c+f) for c>0. For c=0 use mean false-change probability to retain a useful gradient. Average each branch separately and sum branches. This approaches wrong/union in the one-hot limit for nonempty real deltas. Actual argmax validation and its denominator remain unchanged."
     }
   ],
   "edges": [
@@ -117411,7 +117895,7 @@
     {
       "id": "detail.985",
       "source": {
-        "node_id": "world.decoder.learning.loss",
+        "node_id": "world.decoder.learning.total",
         "port_id": "loss"
       },
       "target": {
@@ -122835,7 +123319,7 @@
     {
       "id": "decoder.detail.1437",
       "source": {
-        "node_id": "world.decoder.learning.loss",
+        "node_id": "world.decoder.learning.total",
         "port_id": "loss"
       },
       "target": {
@@ -123027,7 +123511,7 @@
     {
       "id": "decoder.detail.1453",
       "source": {
-        "node_id": "world.decoder.learning.loss",
+        "node_id": "world.decoder.learning.total",
         "port_id": "loss"
       },
       "target": {
@@ -137757,6 +138241,234 @@
       "target": {
         "node_id": "world.model_state.regularizer.penalty",
         "port_id": "variance_floor"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2681",
+      "source": {
+        "node_id": "world.decoder.learning.targets",
+        "port_id": "batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2682",
+      "source": {
+        "node_id": "world.decoder.learning.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "parameters"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2683",
+      "source": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.select",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2684",
+      "source": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.projection",
+        "port_id": "parameters"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2685",
+      "source": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.norm",
+        "port_id": "parameters"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2686",
+      "source": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.color",
+        "port_id": "parameters"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2687",
+      "source": {
+        "node_id": "world.decoder.learning.local.select",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.projection",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2688",
+      "source": {
+        "node_id": "world.decoder.learning.local.projection",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.norm",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2689",
+      "source": {
+        "node_id": "world.decoder.learning.local.norm",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.color",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2690",
+      "source": {
+        "node_id": "world.decoder.learning.local.color",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.grid",
+        "port_id": "patch_logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2691",
+      "source": {
+        "node_id": "world.decoder.learning.local.select",
+        "port_id": "real_batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.grid",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2692",
+      "source": {
+        "node_id": "world.decoder.learning.local.select",
+        "port_id": "real_batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.loss",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2693",
+      "source": {
+        "node_id": "world.decoder.learning.local.grid",
+        "port_id": "logits"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local.loss",
+        "port_id": "logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2694",
+      "source": {
+        "node_id": "world.decoder.learning.local.loss",
+        "port_id": "loss"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "loss"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2695",
+      "source": {
+        "node_id": "world.decoder.learning.loss",
+        "port_id": "loss"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.total",
+        "port_id": "visual_loss"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "local.2696",
+      "source": {
+        "node_id": "world.decoder.learning.local",
+        "port_id": "loss"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.total",
+        "port_id": "local_loss"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "overlap.2697",
+      "source": {
+        "node_id": "world.decoder.learning.loss",
+        "port_id": "logits"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.loss.overlap",
+        "port_id": "logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "overlap.2698",
+      "source": {
+        "node_id": "world.decoder.learning.loss",
+        "port_id": "batch"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.loss.overlap",
+        "port_id": "batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "overlap.2699",
+      "source": {
+        "node_id": "world.decoder.learning.loss.overlap",
+        "port_id": "overlap"
+      },
+      "target": {
+        "node_id": "world.decoder.learning.loss.mean",
+        "port_id": "overlap"
       },
       "kind": "data"
     }

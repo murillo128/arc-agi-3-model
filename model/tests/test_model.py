@@ -1,5 +1,5 @@
 """Numerical, SDK and persistence boundaries; no browser or trained artifacts."""
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from dataclasses import replace
 import io
 from pathlib import Path
@@ -16,8 +16,8 @@ from model import checkpoint
 from model.config import NetworkConfig, TrainConfig
 from model.data import Action, Episode, Observation, Replay, frame_features
 from model.environment import Factory
-from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss
-from model.metrics import Metrics, delta_counts
+from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss, soft_delta_error
+from model.metrics import Metrics, VisualQuality, delta_counts
 from model.networks import WorldModel, sigreg, variance_floor
 from model.runner import main, validation
 
@@ -127,6 +127,42 @@ class NumericalTests(unittest.TestCase):
             for a, b in zip(self.model.parameters(), restored.model.parameters()):
                 torch.testing.assert_close(a, b, rtol=0, atol=0)
 
+    def test_soft_delta_union_error_and_false_change_gradients(self):
+        before = torch.tensor([[[0, 1, 2]]])
+        actual = torch.tensor([[[0, 3, 4]]])
+        probability = torch.empty(1, 1, 3, 16)
+        for i, (color, correct) in enumerate(((0, .8), (3, .6), (4, .7))):
+            probability[0, 0, i].fill_((1 - correct) / 15)
+            probability[0, 0, i, color] = correct
+        logits = probability.log().requires_grad_(True)
+        loss = soft_delta_error(logits, before, actual)
+        # One static cell contributes .2 false changes; two real changed
+        # cells contribute .4 + .3 wrong colors. Expected union = 2 + .2.
+        self.assertAlmostEqual(float(loss.detach()[0]), .9 / 2.2, places=6)
+        loss.sum().backward()
+        for i, color in enumerate((0, 3, 4)):
+            self.assertLess(float(logits.grad[0, 0, i, color]), 0.)
+        self.assertAlmostEqual(float(soft_delta_error(logits.detach(), actual, actual)[0]), .3, places=6)
+        # Hard limit: one false change, one missed change, one right change.
+        hard = torch.full_like(logits, -100.)
+        for i, color in enumerate((5, 1, 4)):
+            hard[0, 0, i, color] = 100.
+        self.assertAlmostEqual(float(soft_delta_error(hard, before, actual)[0]), 2 / 3, places=6)
+
+    def test_local_readout_preserves_patch_locality(self):
+        z = torch.randn(1, 4, 16, requires_grad=True)
+        decoded = self.model.decoder(z, 5, 7, local=True)
+        perturbed = z.detach().clone()
+        perturbed[:, 1] += torch.randn(16)
+        after = self.model.decoder(perturbed, 5, 7, local=True)
+        # Row-major patch 1 covers rows 0..3, columns 4..6 after native crop.
+        torch.testing.assert_close(decoded[:, :, :4], after[:, :, :4], rtol=0, atol=0)
+        torch.testing.assert_close(decoded[:, 4:], after[:, 4:], rtol=0, atol=0)
+        self.assertGreater(float((decoded[:, :4, 4:] - after[:, :4, 4:]).detach().abs().sum()), 0.)
+        decoded[:, :4, 4:].square().sum().backward()
+        self.assertGreater(float(z.grad[:, 1].abs().sum()), 0.)
+        self.assertEqual(float(z.grad[:, [0, 2, 3]].abs().sum()), 0.)
+
     def test_visual_targets_train_encoder_and_predictor(self):
         # Isolate supervision from real pixels: neither latent alignment nor
         # distribution regularization may account for these gradients.
@@ -150,14 +186,49 @@ class NumericalTests(unittest.TestCase):
         torch.testing.assert_close(delta[..., 16], torch.tensor([[[.25, .5], [.25, .5]]]))
         self.assertEqual(float(delta.gather(-1, before[..., None]).sum()), 0.)
         expected = .5 * (-np.log(.25) + (-2 * np.log(.25) - np.log(.5)) / 3)
-        loss = visual_delta_loss(logits, before, actual)
+        loss = visual_delta_loss(logits, before, actual, 'pixel')
         self.assertAlmostEqual(float(loss.detach()[0]), expected, places=6)
         loss.sum().backward()
         self.assertTrue(torch.isfinite(logits.grad).all())
         # No-change and all-change boundaries use ordinary mean NLL.
         for target in (before, 1 - before):
             expected = torch.nn.functional.cross_entropy(logits.permute(0, 3, 1, 2), target)
-            torch.testing.assert_close(visual_delta_loss(logits, before, target)[0], expected)
+            torch.testing.assert_close(visual_delta_loss(logits, before, target, 'pixel')[0], expected)
+
+    def test_static_rare_color_is_not_diluted_by_background(self):
+        before = torch.tensor([[[0, 0, 0, 1, 2]]])
+        actual = torch.tensor([[[0, 0, 0, 1, 3]]])
+        probabilities = torch.tensor([.25, .5, .025, .125] + [.1 / 12] * 12)
+        logits = probabilities.log().expand(1, 1, 5, 16).clone().requires_grad_(True)
+        # The changed group is color 3; the static group splits its mass equally
+        # between the three background pixels and the single color-1 detail.
+        expected = .5 * (-np.log(.125) + .5 * (-np.log(.25) - np.log(.5)))
+        self.assertAlmostEqual(float(visual_delta_loss(logits, before, actual, power=1).detach()[0]), expected, places=6)
+        uniform = torch.zeros(1, 1, 5, 16, requires_grad=True)
+        visual_delta_loss(uniform, before, actual, power=1).sum().backward()
+        self.assertAlmostEqual(float(uniform.grad[0, 0, :3, 0].sum()), -15 / 64, places=6)
+        self.assertAlmostEqual(float(uniform.grad[0, 0, 3, 1]), -15 / 64, places=6)
+        # Static-only and changed-only frames still balance their real colors.
+        for reference in (actual, torch.full_like(actual, 15)):
+            expected = (-np.log(.25) - np.log(.5) - np.log(.125)) / 3
+            self.assertAlmostEqual(float(visual_delta_loss(logits, reference, actual, power=1).detach()[0]), expected, places=6)
+        # Sqrt weighting keeps the rare detail relevant without equalizing its
+        # total mass with a much larger background. Independent five-pixel oracle.
+        expected = .5 * (-np.log(.125) + (-np.sqrt(3)*np.log(.25)-np.log(.5))/(np.sqrt(3)+1))
+        self.assertAlmostEqual(float(visual_delta_loss(logits, before, actual).detach()[0]), expected, places=6)
+        torch.testing.assert_close(visual_delta_loss(logits, before, actual, power=0),
+                                   visual_delta_loss(logits, before, actual, 'pixel'))
+
+    def test_visual_quality_exposes_static_rare_color_failure(self):
+        quality = VisualQuality()
+        before = np.array([[0, 0, 0, 1, 2]])
+        actual = np.array([[0, 0, 0, 1, 3]])
+        quality.add(before, actual, np.array([[0, 0, 0, 0, 3]]))
+        result = quality.report()
+        self.assertAlmostEqual(result['color_error'], 1 / 3)
+        self.assertEqual(result['static_color_error'], .5)
+        self.assertEqual(result['changed_color_error'], 0.)
+        self.assertEqual(result['by_color']['1'], {'pixels': 1, 'error': 1.})
 
     def test_sigreg_integrates_both_sides_of_even_statistic(self):
         t = np.linspace(-3, 3, 33)
@@ -182,7 +253,7 @@ class NumericalTests(unittest.TestCase):
 
     def test_joint_backward_is_independent_of_decoder_chunking(self):
         gradients = []
-        for chunk in (1, 4):
+        for chunk, recompute in ((1, True), (4, True), (4, False)):
             model = WorldModel(NetworkConfig.small())
             model.load_state_dict(self.model.state_dict())
             engine = Engine(model, replace(self.config, frame_chunk=chunk))
@@ -192,11 +263,17 @@ class NumericalTests(unittest.TestCase):
                 observations, engine.spatial, chunk=4, checkpoint_blocks=training)
             learner = Learner(engine)
             torch.manual_seed(51)
-            learner.update([episode()])
+            def direct(function, *args, **kwargs):
+                kwargs.pop('use_reentrant')
+                return function(*args, **kwargs)
+            context = nullcontext() if recompute else patch('model.learning.activation_checkpoint', side_effect=direct)
+            with context:
+                learner.update([episode()])
             gradients.append({n: p.grad.clone() for n, p in model.named_parameters()})
-        for name in gradients[0]:
-            torch.testing.assert_close(gradients[0][name], gradients[1][name], rtol=2e-4, atol=1e-6,
-                                       msg=lambda message: name + ': ' + message)
+        for other in gradients[1:]:
+            for name in gradients[0]:
+                torch.testing.assert_close(gradients[0][name], other[name], rtol=2e-4, atol=1e-6,
+                                           msg=lambda message: name + ': ' + message)
 
     def test_short_episodes_can_train_without_crossing_boundaries(self):
         replay = Replay(4)
@@ -286,13 +363,15 @@ class SDKTests(unittest.TestCase):
         actual = clickable.step(Action(6, {'x': 20, 'y': 20}))
         self.assertEqual(actual.action_input, Action(6, {'x': 20, 'y': 20}))
         model = WorldModel(NetworkConfig.small())
-        config = replace(TrainConfig(), validation_steps=2, validation_episodes=1)
+        config = replace(TrainConfig(), validation_steps=2, validation_episodes=1, min_validation_transitions=2)
         engine = Engine(model, config)
         before = {k: v.clone() for k, v in model.state_dict().items()}
-        with redirect_stdout(io.StringIO()):
+        # Even a passing predictor/latent gate must not hide a broken decoder.
+        with redirect_stdout(io.StringIO()), patch('model.runner.Metrics.passes', return_value=True):
             result = validation(engine, factory, [None], 0)
         self.assertEqual(result['None']['transitions'], 2)
         self.assertFalse(result['None']['passes'])
+        self.assertGreater(result['None']['decoder_delta_error'], config.delta_error)
         self.assertTrue(all(torch.equal(v, before[k]) for k, v in model.state_dict().items()))
 
     def test_cli_resume_advances_counters_with_empty_replay(self):

@@ -6,6 +6,7 @@ import itertools
 import numpy as np
 import torch
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from .networks import sigreg, variance_floor
 from .metrics import visual_delta
@@ -110,19 +111,52 @@ def delta_log_probabilities(color_logits, reference):
     return torch.cat((replacements, keep), -1)
 
 
-def visual_delta_loss(color_logits, reference, actual):
-    """Per-example real-delta NLL, balancing changed and unchanged pixels."""
+def visual_delta_loss(color_logits, reference, actual, balance='color', power=.5):
+    """Balance changed/static groups, then observed colors within each group.
+
+    Color-frequency weights protect small static details without identifying
+    game objects or a special color. Power .5 moderates the rare-color boost;
+    power 1 gives equal color mass, while power 0 gives equal pixel mass.
+    Pixel mode retains the original objective for controlled comparisons.
+    """
     changed = actual != reference
     target = torch.where(changed, actual, 16)
     logp = delta_log_probabilities(color_logits, reference)
     nll = -logp.gather(-1, target[..., None]).squeeze(-1)
 
     def mean_where(mask):
+        if balance == 'color':
+            # Group by the real final color, including KEEP pixels. Grouping
+            # only by delta code would put every static color back into KEEP.
+            classes = F.one_hot(actual, 16).to(nll.dtype) * mask[..., None]
+            counts = classes.sum((1, 2))
+            sums = (classes * nll[..., None]).sum((1, 2))
+            weights = counts.clamp_min(1).pow(-power)
+            return (sums * weights).sum(-1) / (counts * weights).sum(-1).clamp_min(1)
+        if balance != 'pixel':
+            raise ValueError('Unknown visual balance')
         return (nll * mask).sum((1, 2)) / mask.sum((1, 2)).clamp_min(1)
 
     changed_count = changed.sum((1, 2))
     return torch.where((changed_count > 0) & (changed_count < actual.shape[1] * actual.shape[2]),
-                       .5 * (mean_where(changed) + mean_where(~changed)), nll.mean((1, 2)))
+                       .5 * (mean_where(changed) + mean_where(~changed)), mean_where(torch.ones_like(changed)))
+
+
+def soft_delta_error(color_logits, reference, actual):
+    """Differentiable delta-union error, including expected false changes.
+
+    Equals the reported delta error in the one-hot limit for nonempty real
+    deltas. All-static frames use mean false-change probability so their
+    gradient remains useful even when the expected union is large.
+    """
+    probability = color_logits.float().softmax(-1)
+    correct = probability.gather(-1, actual[..., None]).squeeze(-1)
+    changed = actual != reference
+    false_changes = ((1 - correct) * ~changed).sum((1, 2))
+    count = changed.sum((1, 2))
+    wrong = ((1 - correct) * changed).sum((1, 2)) + false_changes
+    return torch.where(count > 0, wrong / (count + false_changes).clamp_min(1),
+                       false_changes / (actual.shape[1] * actual.shape[2]))
 
 
 class Learner:
@@ -144,7 +178,11 @@ class Learner:
         real_z, states, memories, actions, targets, boards, references, successors = {}, [], [], [], [], [], [], []
         with e.autocast():
             for episode in episodes:
-                zs = e.encode(episode.observations, training=True)
+                # Keep episode outputs, not all encoder intermediates across
+                # every sampled prefix. Recompute one episode at a time during
+                # backward; all branches still receive the same joint gradients.
+                zs = activation_checkpoint(e.encode, episode.observations,
+                                           training=True, use_reentrant=False)
                 for obs, z in zip(episode.observations, zs):
                     if z is not None:
                         real_z.setdefault(obs.final.shape, []).append(z)
@@ -173,7 +211,8 @@ class Learner:
         for i, board in enumerate(boards):
             buckets.setdefault(board.shape, []).append(i)
         prediction_loss = torch.zeros((), device=e.device)
-        visual_losses = [0., 0.]
+        visual_losses = [0., 0., 0.]
+        overlap_losses = [0., 0., 0.]
         backward_values, backward_gradients = [], []
         for shape, indices in buckets.items():
             with e.autocast():
@@ -194,9 +233,21 @@ class Learner:
                     with e.autocast():
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
                                           checkpoint_blocks=True)
-                    part_loss = visual_delta_loss(logits, before, actual).sum() / len(boards)
-                    part_loss.backward()
+                    part_loss = visual_delta_loss(logits, before, actual, c.visual_balance, c.color_balance_power).sum() / len(boards)
+                    overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
+                    (part_loss + overlap).backward()
                     visual_losses[branch] += float(part_loss.detach())
+                    overlap_losses[branch] += float(overlap.detach())
+                    if branch == 1 and c.local_reconstruction_weight:
+                        with e.autocast():
+                            local_logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape, local=True)
+                        local_loss = c.local_reconstruction_weight * visual_delta_loss(
+                            local_logits, before, actual, c.visual_balance, c.color_balance_power).sum() / len(boards)
+                        local_overlap = c.local_reconstruction_weight * c.delta_overlap_weight * soft_delta_error(
+                            local_logits, before, actual).sum() / len(boards)
+                        (local_loss + local_overlap).backward()
+                        visual_losses[2] += float(local_loss.detach())
+                        overlap_losses[2] += float(local_overlap.detach())
             backward_values.extend((predicted_z, real_successors))
             backward_gradients.extend(decoder_inputs.grad.chunk(2))
         # Match positions only within the same native canvas geometry. A single
@@ -206,15 +257,19 @@ class Learner:
         regularization = sum(len(zs) * sigreg(torch.stack(zs), self.model.config.sigreg_slices)
                              for zs in eligible) / count if count else prediction_loss * 0
         variance = sum(len(zs) * variance_floor(torch.stack(zs)) for zs in eligible) / count if count else prediction_loss * 0
-        loss = .98 * prediction_loss + .02 * regularization + c.variance_weight * variance
+        loss = (1 - c.sigreg_weight) * prediction_loss + c.sigreg_weight * regularization + c.variance_weight * variance
         torch.autograd.backward((loss, *backward_values), (None, *backward_gradients))
         # Validate both gradient sets before either optimizer mutates weights.
         norms = [torch.nn.utils.clip_grad_norm_(p, 1., error_if_nonfinite=True)
                  for p in (self.primary, self.visual)]
         for opt in self.optimizers:
             opt.step()
-        return {'loss': float(loss.detach()) + sum(visual_losses), 'latent_mse': float(prediction_loss.detach()),
+        return {'loss': float(loss.detach()) + sum(visual_losses) + sum(overlap_losses), 'latent_mse': float(prediction_loss.detach()),
                 'sigreg': float(regularization.detach()), 'decoder_ce': visual_losses[0],
                 'variance_floor': float(variance.detach()),
                 'reconstruction_ce': visual_losses[1],
+                'local_reconstruction_ce': visual_losses[2],
+                'decoder_overlap': overlap_losses[0],
+                'reconstruction_overlap': overlap_losses[1],
+                'local_reconstruction_overlap': overlap_losses[2],
                 'gradient_norm': float(norms[0]), 'samples': len(states)}

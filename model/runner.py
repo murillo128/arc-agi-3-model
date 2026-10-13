@@ -13,7 +13,7 @@ from .config import NetworkConfig, TrainConfig
 from .data import Episode, Replay, random_action
 from .environment import Factory
 from .learning import Engine, Learner
-from .metrics import Metrics, delta_counts
+from .metrics import Metrics, VisualQuality, delta_counts
 from .networks import WorldModel
 
 
@@ -31,6 +31,7 @@ def validation(engine, factory, levels, seed):
     for level in levels:
         metrics, wins, losses, actions = Metrics(), 0, 0, 0
         reconstruction_wrong, reconstruction_union, reconstruction_transitions = 0, 0, 0
+        prediction_quality, reconstruction_quality = VisualQuality(), VisualQuality()
         for index in range(c.validation_episodes):
             episode_seed = 2 * ((seed * 100003 + (level or 0) * 1009 + index) % (2 ** 30)) + 1
             rng = random.Random(episode_seed)
@@ -53,11 +54,14 @@ def validation(engine, factory, levels, seed):
                 if prediction is not None and after is not None and before.shape == after.shape:
                     metrics.add(before, after, prediction[0], state.z.cpu().numpy(),
                                 next_state.z.cpu().numpy(), prediction[1])
+                    prediction_quality.add(before, after, prediction[0])
                     # Diagnostic readout from the REAL successor, evaluated only
                     # after scoring the causal prediction. Never feed it back.
                     with torch.no_grad(), engine.autocast():
                         reconstruction = engine.decode(next_state.z[None], *after.shape).argmax(-1)[0]
-                    wrong, union, _ = delta_counts(before, after, reconstruction.cpu().numpy())
+                    reconstructed = reconstruction.cpu().numpy()
+                    reconstruction_quality.add(before, after, reconstructed)
+                    wrong, union, _ = delta_counts(before, after, reconstructed)
                     reconstruction_wrong += wrong
                     reconstruction_union += union
                     reconstruction_transitions += 1
@@ -67,10 +71,15 @@ def validation(engine, factory, levels, seed):
                 actions += 1
             wins += observation.state == 'WIN'
             losses += observation.state == 'GAME_OVER'
-        report = metrics.report() | {'passes': metrics.passes(c), 'wins': wins, 'game_overs': losses,
+        reconstruction_error = reconstruction_wrong / max(1, reconstruction_union)
+        passes = (metrics.passes(c) and reconstruction_transitions >= c.min_validation_transitions
+                  and reconstruction_error <= c.delta_error)
+        report = metrics.report() | {'passes': passes, 'wins': wins, 'game_overs': losses,
                                       'actions': actions, 'episodes': c.validation_episodes,
-                                      'decoder_delta_error': reconstruction_wrong / max(1, reconstruction_union),
-                                      'decoder_transitions': reconstruction_transitions}
+                                      'decoder_delta_error': reconstruction_error,
+                                      'decoder_transitions': reconstruction_transitions,
+                                      'prediction_quality': prediction_quality.report(),
+                                      'reconstruction_quality': reconstruction_quality.report()}
         results[str(level)] = report
         emit('validation', level=level, **report)
     emit('validation_finished', seconds=round(time.monotonic() - start, 3))
@@ -223,7 +232,7 @@ def main(argv=None):
     random.seed(run['seed'])
     torch.manual_seed(run['seed'])
     rng = random.Random(run['seed'])
-    emit('initializing', device=str(device), compile=compiled, network=asdict(network), game=run['game'], levels=run['levels'])
+    emit('initializing', device=str(device), compile=compiled, network=asdict(network), training=asdict(training), game=run['game'], levels=run['levels'])
     model = WorldModel(network).to(device)
     engine = Engine(model, training, compiled)
     factory = Factory(run['game'], run['environments_dir'], run['mode'])

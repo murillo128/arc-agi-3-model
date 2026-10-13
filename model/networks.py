@@ -132,15 +132,19 @@ class VisualDecoder(nn.Module):
         self.norm = nn.LayerNorm(c.width, eps=1e-6)
         self.color = nn.Linear(c.width, c.patch * c.patch * 16)
 
-    def forward(self, z, height, width, checkpoint_blocks=False):
+    def forward(self, z, height, width, checkpoint_blocks=False, local=False):
         c, b = self.config, z.shape[0]
         p = c.patch
         r, col = (height + p - 1) // p, (width + p - 1) // p
         condition = self.latent_projection(z)
-        tokens = condition + positions(r, col, c.width, z.device, condition.dtype)
-        mask = torch.ones((b, r * col), dtype=torch.bool, device=z.device)
-        for block in self.blocks:
-            tokens = checkpoint(block, tokens, mask, use_reentrant=False) if checkpoint_blocks and self.training else block(tokens, mask)
+        tokens = condition
+        # Auxiliary real reconstruction must read each patch from its own z.
+        # Shared projection/norm/classifier; no new parameters or pixel bypass.
+        if not local:
+            tokens = tokens + positions(r, col, c.width, z.device, condition.dtype)
+            mask = torch.ones((b, r * col), dtype=torch.bool, device=z.device)
+            for block in self.blocks:
+                tokens = checkpoint(block, tokens, mask, use_reentrant=False) if checkpoint_blocks and self.training else block(tokens, mask)
         colors = self.color(self.norm(tokens)).reshape(b, r, col, p, p, 16)
         return colors.permute(0, 1, 3, 2, 4, 5).reshape(b, r * p, col * p, 16)[:, :height, :width]
 
