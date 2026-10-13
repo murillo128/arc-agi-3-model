@@ -36,7 +36,12 @@ The exploratory budget is `max(24, 5 * distance + 8)` (at most 128); for example
 6 optimal actions give 38 moves. A failed verification reports seed and level.
 Each level uses `square-cross-v1:{seed}:{level}` as its RNG namespace; geometry,
 canonical colour roles, stride, HUD and level-5 noise preserve the pre-split
-scene generation. A separate `square-cross-palette:{seed}` RNG permutes all
+scene generation, except that levels 1–2 now translate the square/cross pair
+uniformly within valid bounds using `square-cross-placement:{seed}:{level}`.
+The square no longer always starts near the centre. This preserves the sampled
+cardinal direction, distance, stride and move budget, with full-footprint
+clearance for the whole route. Levels 3–5 retain their random layout generation.
+A separate `square-cross-palette:{seed}` RNG permutes all
 16 palette IDs in the final render, including the background, HUD, obstacle
 and noise. No displayed color has a fixed role across seeds; distinct roles
 stay distinct. The palette is stable through actions, redraws, level changes

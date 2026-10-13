@@ -39,6 +39,16 @@ def generate_scene(seed, level):
                    and fits((player[0] + dx * stride * steps, player[1] + dy * stride * steps),
                             max(ps, ts), bounds)]
         target = rng.choice(targets)
+        # Keep the sampled cardinal route but remove the fixed central start.
+        # Independent RNG leaves route length, colors and later levels intact.
+        placement = random.Random(f"square-cross-placement:{seed}:{level}")
+        pr, tr = ps // 2, max(ps, ts) // 2
+        x0, x1 = min(player[0] - pr, target[0] - tr), max(player[0] + pr, target[0] + tr)
+        y0, y1 = min(player[1] - pr, target[1] - tr), max(player[1] + pr, target[1] + tr)
+        ox = placement.randint(left - x0, right - x1)
+        oy = placement.randint(top - y0, bottom - y1)
+        player = player[0] + ox, player[1] + oy
+        target = target[0] + ox, target[1] + oy
     else:
         r, tr = ps // 2, max(ps, ts) // 2
         if level == 3:
