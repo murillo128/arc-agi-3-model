@@ -62,6 +62,12 @@ en CPU. Una compilación fallida no se oculta como un cambio automático de modo
 El rendimiento depende del hardware y de las longitudes de las partidas.
 No se afirma que compile siempre sea más rápido; evita recompilar usando la misma
 configuración. La medición de rendimiento empieza al completar la primera acción.
+Los microbatches del encoder usan almacenamiento independiente para evitar que
+el compilador los especialice según el tamaño del prefijo del que proceden.
+Durante el entrenamiento, la memoria inicial cero tiene habilitado el cálculo
+de gradiente igual que los estados recurrentes posteriores; sigue siendo una
+constante efímera, fuera del optimizador. Esto elimina otra causa de
+recompilación sin alterar la actualización matemática del modelo.
 
 El modelo **base sin las opciones espaciales** tiene 214.143.104 parámetros:
 
@@ -240,7 +246,7 @@ rectangulares y padding interno; predecir cambios de tamaño de canvas queda fue
 de este primer decoder. Tales transiciones se omiten del loss y hacen fallar el
 criterio de validación, en lugar de contarlas como aciertos.
 
-## Diagnóstico de reconstrucción
+## Diagnósticos de ajuste
 
 El diagnóstico aislado del encoder/decoder usa pares reales del SDK y un conjunto
 pequeño fijo, sin predictor ni regularización latente. Permite distinguir un
@@ -251,11 +257,46 @@ problema de reconstrucción de uno de dinámica:
   --learning-rate .0003 --residual-scale .1 --position-scale .1 --pixel-latent
 ```
 
+Para aislar la dinámica después de obtener una buena reconstrucción, se pueden
+congelar encoder y decoder de un checkpoint y ajustar solo el predictor sobre
+primeras transiciones reales. Los latentes de este diagnóstico permanecen fijos:
+
+```sh
+.venv/bin/python -m model.experiment --task dynamics --checkpoint model/runs/entrenamiento/latest.pt \
+  --steps 160 --pairs 8 --learning-rate .0003
+```
+
+El decoder congelado sigue propagando gradientes al predictor. Se informa el
+desglose visual y el MSE latente, comparado también con predecir un delta cero.
+No modifica el checkpoint de origen ni el entrenamiento en ejecución. Esta prueba
+de primeras transiciones no evalúa la memoria de trayectorias largas.
+
 Ejecuta CUDA compilada, BF16 y AdamW de 8 bits. Informa error de delta y de píxel
 en los ejemplos usados para ajustar (`fit`) y en otras semillas (`unseen`). Un
 buen ajuste del conjunto fijo no prueba generalización ni habilita avanzar de
 nivel. No guarda observaciones ni checkpoints; el entrenamiento normal mantiene
 sus validaciones separadas y sus umbrales completos.
+
+El entrenamiento normal también admite una etapa explícita con representación
+congelada, cuando un checkpoint ya reconstruye bien:
+
+```sh
+.venv/bin/python -m model train --checkpoint model/runs/entrenamiento/latest.pt \
+  --freeze-representation --output model/runs/predictor --max-steps 20000
+```
+
+Esta etapa sigue recogiendo partidas reales y muestreando replay, reconstruyendo
+los prefijos con el encoder en cada actualización. No almacena latentes aprendidos.
+Solo cambia los parámetros del predictor; conserva los pesos y momentos del
+optimizador del encoder y decoder. El gradiente visual atraviesa el decoder
+congelado para enseñar al predictor. Omite las pérdidas de reconstrucción y la
+regularización del encoder, que no podrían actualizarlo; el panel las muestra
+como no disponibles, no como errores cero. La reconstrucción y todos los umbrales
+se siguen evaluando normalmente. El modo se conserva al reanudar y
+`--no-freeze-representation` restablece el aprendizaje conjunto. No se activa
+automáticamente al superar un nivel: otros juegos pueden requerir adaptar la
+representación. La CLI exige un checkpoint, pero no presupone que sea bueno;
+hay que comprobar su reconstrucción en validación.
 
 ## Currículo y juegos del SDK
 

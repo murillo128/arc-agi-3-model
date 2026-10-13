@@ -671,8 +671,13 @@
       ],
       "parameter_ids": [],
       "references": [],
-      "attributes": [],
-      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state.",
+      "attributes": [
+        {
+          "name": "freeze_representation_default",
+          "value": false
+        }
+      ],
+      "description": "Joint gradients through real targets, residual prediction and shared per-pixel visual reconstruction. Re-encode sampled independent causal histories after every update. SIGReg and a .1-weight variance hinge use matching spatial positions across real observations from diverse episodes. Terminal transitions are trained before resetting live state. TrainConfig.freeze_representation is an explicit resumable stage, default false. When true, retain encoder/decoder weights and optimizer moments, train dynamics only on normal real replay, and freshly encode each causal prefix under no_grad. Validation and curriculum gates are unchanged; other games may require explicitly resuming joint learning.",
       "children": [
         "world.target_encoder",
         "world.monitor",
@@ -2874,7 +2879,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries.",
+      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries. In the optional frozen-representation stage this invocation runs without encoder gradients; it still processes each sampled real prefix rather than caching learned states. Independent cloned spatial microbatches avoid torch.compile guards on the underlying full-prefix storage size.",
       "children": [
         "world.encoder.live.frames",
         "world.encoder.live.deltas",
@@ -34089,7 +34094,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Combine latent-objective gradients with both visual branch VJPs through the original encoder/dynamics graphs. Full-prefix temporal recurrence participates. Decoder parameter gradients are accumulated by the decoder learner; optimizer ownership stays disjoint.",
+      "description": "Combine latent-objective gradients with both visual branch VJPs through the original encoder/dynamics graphs. Full-prefix temporal recurrence participates. Decoder parameter gradients are accumulated by the decoder learner; optimizer ownership stays disjoint. With freeze_representation=true only dynamics receives gradients: real latents are constants, visual VJPs traverse the frozen decoder, and encoder SIGReg/variance terms are omitted. Initial zero recurrent memory has requires_grad=true like later recurrent states, but is never an optimized parameter.",
       "operation": "backward",
       "formula": "gradients = grad(loss, parameters) + latent_vjp(visual_gradients, parameters)"
     },
@@ -34182,7 +34187,7 @@
           "value": 8
         }
       ],
-      "description": "AdamW moment/update semantics with FP32 master weights. In the active CUDA run, large-tensor moments are stored as 8-bit block-quantized values plus scales and decoded during updates; small tensors retain FP32 moments. Moments persist across episodes. CPU uses FP32 states.",
+      "description": "AdamW moment/update semantics with FP32 master weights. In the active CUDA run, large-tensor moments are stored as 8-bit block-quantized values plus scales and decoded during updates; small tensors retain FP32 moments. Moments persist across episodes. CPU uses FP32 states. With freeze_representation=true encoder parameters have grad=None, so their weights, weight decay and optimizer moments remain unchanged; dynamics continues updating in the same optimizer layout. Explicit unfreezing restores joint updates.",
       "operation": "adamw",
       "formula": "update = adamw_step(parameters, gradients, lr, beta1, beta2, eps, weight_decay)"
     },
@@ -35803,7 +35808,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Joint real-delta supervision and auxiliary real-successor reconstruction, using the same decoder parameters. Each branch has weight 1. Chunk decoder backward, accumulate latent VJPs, then propagate them through encoder/predictor once before either optimizer steps. Own decoder parameters use a separate AdamW; visual gradients also train encoder/dynamics. A local real-successor auxiliary readout shares projection, final norm and classifier while bypassing positions and attention; default weight 1. It adds gradients to the real-successor branch.",
+      "description": "Joint real-delta supervision and auxiliary real-successor reconstruction, using the same decoder parameters. Each branch has weight 1. Chunk decoder backward, accumulate latent VJPs, then propagate them through encoder/predictor once before either optimizer steps. Own decoder parameters use a separate AdamW; visual gradients also train encoder/dynamics. A local real-successor auxiliary readout shares projection, final norm and classifier while bypassing positions and attention; default weight 1. It adds gradients to the real-successor branch. With freeze_representation=true omit real/local reconstruction training branches and report their training losses as unavailable. The decoder still differentiates predicted latents so visual error trains dynamics. Frozen validation still measures real reconstruction independently.",
       "children": [
         "world.decoder.learning.parameters",
         "world.decoder.learning.targets",
@@ -35992,7 +35997,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Joint real-delta NLL of predicted and reconstructed real successors. Changed/static groups have equal mass by default; pixels have equal weight within each group, without color-frequency weighting. Configurable false_change_weight scales only the static-pixel NLL of the causal prediction branch; reconstruction branches and real-change cost remain unchanged. Add the differentiable delta-union surrogate. Argmax validation is not differentiated.",
+      "description": "Joint real-delta NLL of predicted and reconstructed real successors. Changed/static groups have equal mass by default; pixels have equal weight within each group, without color-frequency weighting. Configurable false_change_weight scales only the static-pixel NLL of the causal prediction branch; reconstruction branches and real-change cost remain unchanged. Add the differentiable delta-union surrogate. Argmax validation is not differentiated. In the optional frozen-representation stage only the causal prediction branch contributes; real reconstruction remains a validation diagnostic.",
       "children": [
         "world.decoder.learning.loss.unpack",
         "world.decoder.learning.loss.log_softmax",
@@ -36113,7 +36118,7 @@
           "value": 1.0
         }
       ],
-      "description": "Disjoint decoder AdamW optimizer. Active CUDA training uses block-quantized 8-bit moments for large tensors and FP32 moments for small tensors; master weights remain FP32. Moments persist across games. CPU uses ordinary AdamW. Prediction, real reconstruction and local reconstruction gradients accumulate before either optimizer updates.",
+      "description": "Disjoint decoder AdamW optimizer. Active CUDA training uses block-quantized 8-bit moments for large tensors and FP32 moments for small tensors; master weights remain FP32. Moments persist across games. CPU uses ordinary AdamW. Prediction, real reconstruction and local reconstruction gradients accumulate before either optimizer updates. This entire optimizer is not stepped during freeze_representation=true; decoder parameters and moments are retained for a later explicit unfreeze.",
       "children": [
         "world.decoder.learning.optimizer.finite",
         "world.decoder.learning.optimizer.clip",

@@ -64,7 +64,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_incremental_partial_noise_and_validation_counters(self):
         self.append({'event': 'initializing', 'game': 'demo', 'levels': [1, 2],
-                     'training': {'delta_error': .01}},
+                     'training': {'delta_error': .01, 'false_change_weight': 2., 'freeze_representation': True}},
                     {'event': 'progress', 'actions': 512, 'updates': 60, 'episodes': 23,
                      'level': 2, 'loss': {'decoder_ce': 2.5}, 'actions_per_second': 3.5})
         with self.path.open('ab') as stream:
@@ -91,6 +91,8 @@ class DashboardTests(unittest.TestCase):
             'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')},
             {'extra_changes': 12, 'missed_changes': 0, 'wrong_replacement_colors': 3, 'correct_changes': 40})
         self.assertEqual(result['run']['training']['delta_error'], .01)
+        self.assertEqual(result['run']['training']['false_change_weight'], 2.)
+        self.assertIs(result['run']['training']['freeze_representation'], True)
 
     def test_restart_append_truncate_regrow_and_file_replacement(self):
         for method in ('initializing', 'truncate', 'regrow', 'replace'):

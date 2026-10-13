@@ -228,7 +228,10 @@ def parser():
     p.add_argument('--threads', type=int, default=4)
     p.add_argument('--stop-after-level', action='store_true', help='Stop after the current level passes all gates')
     for field in fields(TrainConfig):
-        p.add_argument('--' + field.name.replace('_', '-'), type=type(field.default), default=None)
+        if type(field.default) is bool:
+            p.add_argument('--' + field.name.replace('_', '-'), action=argparse.BooleanOptionalAction, default=None)
+        else:
+            p.add_argument('--' + field.name.replace('_', '-'), type=type(field.default), default=None)
     return p
 
 
@@ -283,6 +286,8 @@ def main(argv=None):
     training = TrainConfig(**payload['training']) if payload else TrainConfig()
     overrides = {f.name: getattr(args, f.name) for f in fields(TrainConfig) if getattr(args, f.name) is not None}
     training = replace(training, **overrides)
+    if training.freeze_representation and payload is None:
+        p.error('--freeze-representation requires a checkpoint with a trained representation')
     random.seed(run['seed'])
     torch.manual_seed(run['seed'])
     rng = random.Random(run['seed'])

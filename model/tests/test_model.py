@@ -2,10 +2,12 @@
 from contextlib import nullcontext, redirect_stdout
 from dataclasses import replace
 import io
+import copy
 from pathlib import Path
 import random
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 import weakref
 from unittest.mock import patch
@@ -17,6 +19,7 @@ from model import checkpoint
 from model.config import NetworkConfig, TrainConfig
 from model.data import Action, Episode, Observation, Replay, frame_features
 from model.environment import Factory
+from model.experiment import fit_dynamics
 from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss, soft_delta_error
 from model.metrics import Metrics, VisualQuality, delta_counts
 from model.networks import Block, SpatialDynamics, WorldModel, sigreg, variance_floor
@@ -333,6 +336,62 @@ class NumericalTests(unittest.TestCase):
         for component in (self.model.encoder, self.model.dynamics, self.model.decoder):
             magnitude = sum(float(p.grad.abs().sum()) for p in component.parameters() if p.grad is not None)
             self.assertGreater(magnitude, 1e-8)
+
+    def test_fixed_representation_diagnostic_updates_only_dynamics(self):
+        before = {name: p.detach().clone() for name, p in self.model.named_parameters()}
+        args = SimpleNamespace(pairs=2, steps=2, learning_rate=.001, false_change_weight=1.)
+        with redirect_stdout(io.StringIO()):
+            fit_dynamics(self.engine, args, Factory('sc01-v1', ROOT / 'games'), 1)
+        changed = []
+        for name, p in self.model.named_parameters():
+            if name.startswith('dynamics.'):
+                changed.append(not torch.equal(p, before[name]))
+            else:
+                torch.testing.assert_close(p, before[name], rtol=0, atol=0)
+                self.assertIsNone(p.grad)
+        self.assertTrue(any(changed))
+
+    def test_frozen_representation_resume_preserves_parameters_and_optimizer_moments(self):
+        joint = Learner(self.engine)
+        joint.update([episode()])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'latest.pt'
+            checkpoint.save(path, joint, {'actions': 4}, {'game': 'sc01-v1'}, random.Random(0))
+            frozen = Learner(Engine(WorldModel(NetworkConfig.small()), replace(self.config, freeze_representation=True)))
+            checkpoint.restore(checkpoint.load(path), frozen, random.Random(0))
+            original = {n: p.detach().clone() for n, p in frozen.model.named_parameters()}
+            frozen_states = [(opt, p, copy.deepcopy(opt.state[p])) for opt, module in (
+                (frozen.optimizers[0], frozen.model.encoder), (frozen.optimizers[1], frozen.model.decoder))
+                for p in module.parameters()]
+            result = frozen.update([episode()])
+            self.assertIsNone(result['reconstruction_ce'])
+            self.assertIsNone(result['local_reconstruction_ce'])
+            changed = []
+            for name, p in frozen.model.named_parameters():
+                if name.startswith('dynamics.'):
+                    changed.append(not torch.equal(p, original[name]))
+                else:
+                    torch.testing.assert_close(p, original[name], rtol=0, atol=0)
+                    self.assertIsNone(p.grad)
+            self.assertTrue(any(changed))
+            for opt, p, previous in frozen_states:
+                for key, value in previous.items():
+                    torch.testing.assert_close(opt.state[p][key], value, rtol=0, atol=0)
+            checkpoint.save(path, frozen, {'actions': 8}, {'game': 'sc01-v1'}, random.Random(0))
+            payload = checkpoint.load(path)
+            self.assertIs(payload['training']['freeze_representation'], True)
+            resumed = Learner(Engine(WorldModel(NetworkConfig.small()), TrainConfig(**payload['training'])))
+            checkpoint.restore(payload, resumed, random.Random(0))
+            resumed.update([episode()])
+            for name, p in resumed.model.named_parameters():
+                if not name.startswith('dynamics.'):
+                    torch.testing.assert_close(p, original[name], rtol=0, atol=0)
+            unfrozen = Learner(Engine(WorldModel(NetworkConfig.small()), self.config))
+            checkpoint.restore(payload, unfrozen, random.Random(0))
+            unfrozen.update([episode()])
+            for prefix in ('encoder.', 'decoder.'):
+                self.assertTrue(any(not torch.equal(p, original[name])
+                    for name, p in unfrozen.model.named_parameters() if name.startswith(prefix)))
 
     def test_delta_probability_labels_and_balanced_nll(self):
         # Each pixel has independently specified probabilities: color 0=.25,
@@ -696,6 +755,13 @@ class SDKTests(unittest.TestCase):
             self.assertEqual(saved['progress']['passes'], 2)
             self.assertEqual(saved['progress']['collapse_streak'], 1)
             self.assertIn('empty device input cache', output.getvalue())
+            main(['train', '--checkpoint', str(path), '--max-steps', '12', '--freeze-representation', *common])
+            frozen = checkpoint.load(path)
+            self.assertIs(frozen['training']['freeze_representation'], True)
+            self.assertEqual(frozen['progress']['actions'], 12)
+            for name, value in saved['weights'].items():
+                if name.startswith(('encoder.', 'decoder.')):
+                    torch.testing.assert_close(frozen['weights'][name], value, rtol=0, atol=0)
 
 
 if __name__ == '__main__':

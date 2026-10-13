@@ -81,6 +81,9 @@ class LogMonitor:
             self.run = {k: str(row[k])[:80] for k in ('game', 'device') if k in row}
             self.run['levels'] = [number(x) for x in row.get('levels', [])[:100]] if isinstance(row.get('levels'), list) else []
             self.run['training'] = numbers(row.get('training'), CONFIG_KEYS)
+            training = row.get('training')
+            if isinstance(training, dict) and type(training.get('freeze_representation')) is bool:
+                self.run['training']['freeze_representation'] = training['freeze_representation']
             self.run['compile'] = row.get('compile') is True
             if row.get('statistics_origin') == 'after_first_action':
                 self.run['statistics_origin'] = 'after_first_action'

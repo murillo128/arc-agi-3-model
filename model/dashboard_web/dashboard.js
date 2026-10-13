@@ -123,7 +123,12 @@ function render(data) {
   const latest = [...data.validations].reverse().find(v => v.level === currentLevel);
   $('run-info').textContent = [run.game || 'Juego pendiente', run.device?.toUpperCase(),
     finite(run.parameters) ? `${fmt(run.parameters / 1e6, 1)} M parámetros` : null,
-    run.compile === true ? 'torch.compile' : run.compile === false ? 'Eager' : null].filter(Boolean).join(' · ');
+    run.compile === true ? 'torch.compile' : run.compile === false ? 'Eager' : null,
+    config.freeze_representation === true ? 'Solo predictor · encoder y decoder congelados' :
+      config.freeze_representation === false ? 'Aprendizaje conjunto' : null].filter(Boolean).join(' · ');
+  $('loss-note').textContent = config.freeze_representation === true
+    ? 'Solo se entrena el predictor. La reconstrucción se sigue midiendo en validación; no tiene pérdida de entrenamiento activa.'
+    : 'Supervisión del predictor y las dos reconstrucciones. Son pérdidas de aprendizaje, no porcentajes de error.';
   $('level').textContent = currentLevel === undefined ? '—' : levelName(currentLevel);
   $('level-actions').textContent = `${fmt(p.level_actions)} acciones en este nivel`;
   $('actions').textContent = fmt(p.actions); $('episodes').textContent = `${fmt(p.episodes)} ${clean ? 'partidas nuevas desde el punto limpio' : 'partidas iniciadas'}`;
@@ -134,6 +139,7 @@ function render(data) {
   $('prediction-note').textContent = latest ? `Validado en acción ${fmt(latest.actions)}` : 'Todavía sin validación de este nivel';
   $('gpu').textContent = finite(p.gpu_peak_mb) ? `${fmt(p.gpu_peak_mb / 1024, 2)} GiB` : '—';
   $('learning-rate').textContent = scalar(config.learning_rate);
+  $('false-change-weight').textContent = finite(config.false_change_weight) ? `×${fmt(config.false_change_weight, 2)}` : '—';
   $('passes').textContent = `${fmt(p.passes)} / ${fmt(config.consecutive_passes)}`;
   const checkpoint = [...data.events].reverse().find(e => e.event === 'checkpoint' || e.event === 'stopped');
   $('checkpoint').textContent = checkpoint ? `Acción ${fmt(checkpoint.actions)}` : 'Sin evento reciente';

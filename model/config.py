@@ -50,6 +50,7 @@ class TrainConfig:
     local_reconstruction_weight: float = 1.
     delta_overlap_weight: float = 1.
     false_change_weight: float = 1.
+    freeze_representation: bool = False
     variance_weight: float = 10.
     train_every: int = 1
     updates_per_train: int = 1
@@ -78,6 +79,10 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
+            if k == 'freeze_representation':
+                if type(v) is not bool:
+                    raise ValueError('freeze_representation must be boolean')
+                continue
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
             if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight'}:

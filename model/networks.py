@@ -257,7 +257,9 @@ class WorldModel(nn.Module):
             owners.setdefault(key, []).append((index, len(x)))
         for key, chunks in features.items():
             x = torch.cat(chunks)
-            encoded = torch.cat([spatial(part, checkpoint_blocks) for part in x.split(chunk)])
+            # Independent storage keeps compile guards from specializing on the
+            # changing size of the full prefix behind each split view.
+            encoded = torch.cat([spatial(part.clone(), checkpoint_blocks) for part in x.split(chunk)])
             start, animations = 0, {}
             for index, count in owners[key]:
                 animations.setdefault(count, []).append((index, encoded[start:start + count]))

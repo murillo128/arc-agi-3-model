@@ -178,6 +178,8 @@ class Learner:
     def __init__(self, engine):
         self.engine = engine
         self.model = engine.model
+        self.model.encoder.requires_grad_(not engine.config.freeze_representation)
+        self.model.decoder.requires_grad_(not engine.config.freeze_representation)
         self.primary = list(itertools.chain(self.model.encoder.parameters(), self.model.dynamics.parameters()))
         self.visual = list(self.model.decoder.parameters())
         self.optimizers = [optimizer(p, engine.config.learning_rate, engine.device.type == 'cuda', engine.optimizer_bits)
@@ -196,12 +198,19 @@ class Learner:
                 # Keep episode outputs, not all encoder intermediates across
                 # every sampled prefix. Recompute one episode at a time during
                 # backward; all branches still receive the same joint gradients.
-                zs = activation_checkpoint(e.encode, episode.observations,
-                                           training=True, prepared=episode.prepared, use_reentrant=False)
+                if c.freeze_representation:
+                    with torch.no_grad():
+                        zs = e.encode(episode.observations, prepared=episode.prepared)
+                else:
+                    zs = activation_checkpoint(e.encode, episode.observations,
+                                               training=True, prepared=episode.prepared, use_reentrant=False)
                 for obs, z in zip(episode.observations, zs):
                     if z is not None:
                         real_z.setdefault(obs.final.shape, []).append(z)
-                h = torch.zeros(1, self.model.config.memory, device=e.device)
+                # Match recurrent states' autograd metadata from the first step.
+                # This constant leaf is never optimized; parameter gradients are
+                # unchanged, but compilation need not specialize on its flag.
+                h = torch.zeros(1, self.model.config.memory, device=e.device, requires_grad=True)
                 current = zs[0]
                 episode_actions = (torch.stack([item[2] for item in episode.prepared[1:]])
                                    if episode.prepared else e.actions(episode.actions))
@@ -242,8 +251,9 @@ class Learner:
             real_successors = torch.stack([successors[i] for i in indices])
             # Each decoder microbatch releases its graph; accumulated latent
             # gradients are explicitly propagated through BOTH source branches.
-            decoder_inputs = torch.cat((predicted_z, real_successors)).detach().requires_grad_(True)
-            for branch in (0, 1):
+            source_values = (predicted_z,) if c.freeze_representation else (predicted_z, real_successors)
+            decoder_inputs = torch.cat(source_values).detach().requires_grad_(True)
+            for branch in range(len(source_values)):
                 for start in range(0, len(indices), c.frame_chunk):
                     selected = indices[start:start + c.frame_chunk]
                     actual = torch.stack([boards[i] for i in selected])
@@ -268,11 +278,11 @@ class Learner:
                         (local_loss + local_overlap).backward()
                         visual_losses[2] += float(local_loss.detach())
                         overlap_losses[2] += float(local_overlap.detach())
-            backward_values.extend((predicted_z, real_successors))
-            backward_gradients.extend(decoder_inputs.grad.chunk(2))
+            backward_values.extend(source_values)
+            backward_gradients.extend(decoder_inputs.grad.chunk(len(source_values)))
         # Match positions only within the same native canvas geometry. A single
         # observation cannot establish diversity, regardless of patch count.
-        eligible = [zs for zs in real_z.values() if len(zs) >= c.min_observations]
+        eligible = [] if c.freeze_representation else [zs for zs in real_z.values() if len(zs) >= c.min_observations]
         count = sum(map(len, eligible))
         regularization = sum(len(zs) * sigreg(torch.stack(zs), self.model.config.sigreg_slices)
                              for zs in eligible) / count if count else prediction_loss * 0
@@ -282,14 +292,14 @@ class Learner:
         # Validate both gradient sets before either optimizer mutates weights.
         norms = [torch.nn.utils.clip_grad_norm_(p, 1., error_if_nonfinite=True)
                  for p in (self.primary, self.visual)]
-        for opt in self.optimizers:
+        for opt in self.optimizers[:1] if c.freeze_representation else self.optimizers:
             opt.step()
         return {'loss': float(loss.detach()) + sum(visual_losses) + sum(overlap_losses), 'latent_mse': float(prediction_loss.detach()),
                 'sigreg': float(regularization.detach()), 'decoder_ce': visual_losses[0],
                 'variance_floor': float(variance.detach()),
-                'reconstruction_ce': visual_losses[1],
-                'local_reconstruction_ce': visual_losses[2],
+                'reconstruction_ce': None if c.freeze_representation else visual_losses[1],
+                'local_reconstruction_ce': None if c.freeze_representation else visual_losses[2],
                 'decoder_overlap': overlap_losses[0],
-                'reconstruction_overlap': overlap_losses[1],
-                'local_reconstruction_overlap': overlap_losses[2],
+                'reconstruction_overlap': None if c.freeze_representation else overlap_losses[1],
+                'local_reconstruction_overlap': None if c.freeze_representation else overlap_losses[2],
                 'gradient_norm': float(norms[0]), 'samples': len(states)}
