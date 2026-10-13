@@ -122,9 +122,24 @@ class Replay:
                 raise MemoryError('Current episode exceeds replay byte budget; lower max_episode_steps')
             self.episodes.pop(0)
 
-    def sample(self, rng, count, minimum):
+    def prepare(self, episode, device, patch, dtype):
+        """Bound the combined immutable device cache, evicting old episodes first."""
+        self.add(episode)
+        while True:
+            other_bytes = sum(e.device_bytes for e in self.episodes if e is not episode)
+            try:
+                episode.prepare(device, patch, dtype, self.byte_limit - other_bytes)
+                return
+            except MemoryError:
+                if self.episodes[0] is episode:
+                    raise
+                self.episodes.pop(0)
+
+    def sample(self, rng, count, minimum, *, latest=None, random_prefix=False):
         eligible = [e for e in self.episodes if len(e.actions)]
         rng.shuffle(eligible)
+        if latest is not None and any(e is latest for e in eligible):
+            eligible = [latest] + [e for e in eligible if e is not latest]
         chosen, observations = [], 0
         for episode in eligible:
             chosen.append(episode)
@@ -134,7 +149,11 @@ class Replay:
         if observations < minimum:
             return []
         # No stale latent cache: every chosen prefix starts at episode initialization.
-        return [Episode(list(e.observations), list(e.actions)) for e in chosen]
+        result = []
+        for e in chosen:
+            end = rng.randint(1, len(e.actions)) if random_prefix and e is not latest else len(e.actions)
+            result.append(Episode(e.observations[:end + 1], e.actions[:end], e.prepared[:end + 1]))
+        return result
 
 
 def frame_features(observation: Observation, device, patch, *, pixels=None, dtype=torch.float32):

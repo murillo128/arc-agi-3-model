@@ -20,14 +20,15 @@ MAX_LINE = 64 * 1024
 ASSETS = Path(__file__).with_name('dashboard_web')
 PROGRESS_KEYS = ('actions', 'updates', 'episodes', 'level_index', 'level_actions',
                  'passes', 'collapse_streak', 'actions_per_second', 'replay_episodes', 'gpu_peak_mb',
-                 'episode_actions', 'episode_observations', 'device_cache_mb')
+                 'episode_actions', 'episode_observations', 'device_cache_mb', 'trained_transitions', 'trained_transitions_per_second')
 LOSS_KEYS = ('loss', 'latent_mse', 'sigreg', 'variance_floor', 'decoder_ce',
-             'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm')
+             'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm', 'samples', 'seconds')
 VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'latent_std',
                    'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs')
 CONFIG_KEYS = ('learning_rate', 'validate_every', 'consecutive_passes', 'delta_error',
                'latent_delta_mse', 'min_latent_std', 'collapse_std')
-STATISTICS_KEYS = ('actions', 'updates', 'episodes', 'level_actions', 'elapsed_seconds', 'actions_per_second')
+STATISTICS_KEYS = ('actions', 'updates', 'episodes', 'level_actions', 'elapsed_seconds', 'actions_per_second',
+                   'trained_transitions', 'trained_transitions_per_second')
 
 
 def number(value):

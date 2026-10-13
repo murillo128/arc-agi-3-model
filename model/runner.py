@@ -10,7 +10,7 @@ import torch
 
 from . import checkpoint
 from .config import NetworkConfig, TrainConfig
-from .data import Episode, random_action
+from .data import Episode, Replay, random_action
 from .environment import Factory
 from .learning import Engine, Learner
 from .metrics import Metrics, VisualQuality, delta_counts
@@ -92,6 +92,9 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
     start, baseline = None, None
     starting_actions = progress['actions']
     episode, env = None, None
+    replay = Replay(c.replay_episodes, c.replay_bytes)
+    sampling_rng = random.Random(run.get('seed', 0) ^ 0x5245504C)
+    progress.setdefault('trained_transitions', 0)
     latest_update = None
     reason = 'action_limit'
 
@@ -99,11 +102,12 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
         if baseline is None:
             return {}
         elapsed = max(0., time.monotonic() - start)
-        values = {key: progress[key] - baseline[key] for key in ('actions', 'updates', 'episodes')}
+        values = {key: progress[key] - baseline[key] for key in ('actions', 'updates', 'episodes', 'trained_transitions')}
         values['level_actions'] = progress['level_actions'] - (
             baseline['level_actions'] if progress['level_index'] == baseline['level_index'] else 0)
         values['elapsed_seconds'] = round(elapsed, 3)
         values['actions_per_second'] = round(values['actions'] / elapsed, 2) if elapsed and values['actions'] else None
+        values['trained_transitions_per_second'] = round(values['trained_transitions'] / elapsed, 2) if elapsed and values['trained_transitions'] else None
         return values
 
     try:
@@ -120,17 +124,22 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
             action = random_action(episode.observations[-1], rng)
             observation = env.step(action)
             episode.append(action, observation)
-            episode.prepare(engine.device, engine.model.config.patch,
-                            torch.bfloat16 if engine.amp else torch.float32, c.replay_bytes)
+            replay.prepare(episode, engine.device, engine.model.config.patch,
+                           torch.bfloat16 if engine.amp else torch.float32)
             progress['actions'] += 1
             progress['level_actions'] += 1
             ended = observation.terminal or len(episode.actions) >= c.max_episode_steps
-            if progress['actions'] % c.train_every == 0 or ended:
+            if baseline is None or progress['actions'] % c.train_every == 0 or ended:
                 for _ in range(c.updates_per_train):
-                    result = learner.update([episode])
+                    batch = replay.sample(sampling_rng, c.batch_episodes, 2, latest=episode, random_prefix=True)
+                    update_start = time.monotonic()
+                    result = learner.update(batch)
+                    del batch  # Evicted replay entries must release their device tensors.
                     if result is not None:
+                        result['seconds'] = round(time.monotonic() - update_start, 4)
                         latest_update = result
                         progress['updates'] += 1
+                        progress['trained_transitions'] += result['samples']
             if baseline is None:
                 # The first action and its learning step establish the origin,
                 # including on resume. Checkpoint/curriculum counters stay intact.
@@ -142,13 +151,13 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                 measured = statistics()
                 emit('progress', **progress, level=level, loss=latest_update,
                      statistics=measured, actions_per_second=measured['actions_per_second'],
-                     replay_episodes=1, episode_actions=len(episode.actions),
+                     replay_episodes=len(replay.episodes), episode_actions=len(episode.actions),
                      episode_observations=len(episode.observations),
-                     device_cache_mb=round(episode.device_bytes / 2 ** 20, 2),
+                     device_cache_mb=round(sum(e.device_bytes for e in replay.episodes) / 2 ** 20, 2),
                      gpu_peak_mb=round(torch.cuda.max_memory_allocated(engine.device) / 2 ** 20) if engine.device.type == 'cuda' else 0)
             if ended:
-                # The terminal transition has already trained. No reference to
-                # this episode's prepared tensors or recurrent graph survives.
+                # Live state resets. Real episodes may remain as independent
+                # training examples; no learned latent or recurrent graph survives.
                 episode = None
             if progress['actions'] % c.validate_every == 0:
                 reports = validation(engine, factory, levels[:progress['level_index'] + 1], run['seed'])
@@ -176,6 +185,7 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                                     healthy_latent_seen=False)
                     # A new level never inherits the previous episode's memory.
                     episode = None
+                    replay = Replay(c.replay_episodes, c.replay_bytes)
                     if stop_after_level:
                         reason = 'level_converged'
                         break
@@ -204,6 +214,11 @@ def parser():
     p.add_argument('--native', action='store_true', help='Use native SDK game progression without level isolation')
     p.add_argument('--seed', type=int, default=None)
     p.add_argument('--profile', choices=('base', 'small'), default=None)
+    p.add_argument('--residual-scale', type=float, default=None)
+    p.add_argument('--position-scale', type=float, default=None)
+    p.add_argument('--pixel-latent', action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument('--broadcast-conditioning', action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument('--local-dynamics', action=argparse.BooleanOptionalAction, default=None)
     p.add_argument('--device', default='auto')
     p.add_argument('--compile', action=argparse.BooleanOptionalAction, default=None)
     p.add_argument('--fp8', action=argparse.BooleanOptionalAction, default=None,
@@ -247,6 +262,8 @@ def main(argv=None):
     if args.levels and (len(set(args.levels)) != len(args.levels) or min(args.levels) < 1):
         p.error('--levels must be distinct positive levels in curriculum order')
     if payload:
+        if any(getattr(args, k) is not None for k in ('residual_scale', 'position_scale', 'pixel_latent', 'broadcast_conditioning', 'local_dynamics')):
+            p.error('A checkpoint restores the network; omit architecture overrides')
         for key in ('game', 'environments_dir', 'mode', 'seed'):
             value = getattr(args, key)
             if value is not None and (str(value) if key == 'environments_dir' else value) != run[key]:
@@ -260,8 +277,10 @@ def main(argv=None):
                 run['levels'][:min(len(run['levels']), payload['progress']['level_index'] + 1)])
     network = NetworkConfig(**payload['network']) if payload else (
         NetworkConfig.small() if args.profile == 'small' else NetworkConfig())
-    training = TrainConfig(**{k: v for k, v in payload['training'].items()
-                              if k not in {'replay_episodes', 'batch_episodes'}}) if payload else TrainConfig()
+    if not payload:
+        network = replace(network, **{k: getattr(args, k) for k in ('residual_scale', 'position_scale', 'pixel_latent', 'broadcast_conditioning', 'local_dynamics')
+                                      if getattr(args, k) is not None})
+    training = TrainConfig(**payload['training']) if payload else TrainConfig()
     overrides = {f.name: getattr(args, f.name) for f in fields(TrainConfig) if getattr(args, f.name) is not None}
     training = replace(training, **overrides)
     random.seed(run['seed'])
@@ -289,7 +308,9 @@ def main(argv=None):
         for opt in learner.optimizers:
             for group in opt.param_groups:
                 group['lr'] = training.learning_rate
-        if overrides:
+        # Extending runtime/save limits leaves the learning and validation
+        # contract unchanged; retain prior best/error and convergence evidence.
+        if set(overrides) - {'max_steps', 'max_level_steps', 'checkpoint_every'}:
             progress['passes'] = 0  # previous gates used the saved configuration
             progress['collapse_streak'] = 0
             progress['best_error'] = 1.

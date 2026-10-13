@@ -19,7 +19,7 @@ from model.data import Action, Episode, Observation, Replay, frame_features
 from model.environment import Factory
 from model.learning import Engine, Learner, delta_log_probabilities, visual_delta_loss, soft_delta_error
 from model.metrics import Metrics, VisualQuality, delta_counts
-from model.networks import WorldModel, sigreg, variance_floor
+from model.networks import Block, SpatialDynamics, WorldModel, sigreg, variance_floor
 from model.runner import main, train, validation
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +43,99 @@ class NumericalTests(unittest.TestCase):
         self.model = WorldModel(NetworkConfig.small())
         self.config = replace(TrainConfig(), min_observations=4, loss_steps=4, frame_chunk=2)
         self.engine = Engine(self.model, self.config)
+
+    def test_scaled_transformer_residual_preserves_identity_and_input_gradient(self):
+        block = Block(4, 1, scale=.1)
+        # Replace nonlinear branches with independent constant-output modules.
+        # The exact oracle is x + .1*2 + .1*3, with an identity input Jacobian.
+        class Constant(torch.nn.Module):
+            def __init__(self, value):
+                super().__init__()
+                self.value = value
+            def forward(self, x, mask=None):
+                return torch.full_like(x, self.value)
+        block.attention = Constant(2.)
+        block.down = Constant(3.)
+        block.up = torch.nn.Identity()
+        x = torch.randn(1, 2, 4, requires_grad=True)
+        result = block(x, torch.ones(1, 2, dtype=torch.bool))
+        torch.testing.assert_close(result, x + .5)
+        result.sum().backward()
+        torch.testing.assert_close(x.grad, torch.ones_like(x))
+
+    def test_batched_animation_recurrence_matches_independent_observations(self):
+        independent = WorldModel(NetworkConfig.small())
+        independent.load_state_dict(self.model.state_dict())
+        obs = [observation(1), observation(3), observation(4, (9, 11)),
+               replace(observation(5), frames=observation(5).frames[:1])]
+        batched = self.model.encode(obs, self.model.encoder.spatial, chunk=2)
+        reference = [independent.encoder.aggregate(independent.encoder.spatial(
+            frame_features(o, 'cpu', 4))) for o in obs]
+        for actual, expected in zip(batched, reference):
+            torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
+        for states in (batched, reference):
+            sum((z * torch.arange(z.numel()).reshape_as(z)).mean() for z in states).backward()
+        for actual, expected in zip(self.model.encoder.parameters(), independent.encoder.parameters()):
+            torch.testing.assert_close(actual.grad, expected.grad, atol=1e-5, rtol=1e-4)
+
+    def test_pixel_latent_readout_preserves_native_pixel_coordinates(self):
+        config = replace(NetworkConfig.small(), latent=64, patch=2, pixel_latent=True)
+        model = WorldModel(config)
+        class ReadColors(torch.nn.Module):
+            def forward(self, pixels):
+                return pixels[..., :16]
+        model.decoder.color = ReadColors()
+        # Independent space-to-depth oracle on a padded rectangular canvas.
+        board = torch.arange(24).reshape(4, 6) % 16
+        z = torch.nn.functional.one_hot(board, 16).float().reshape(2, 2, 3, 2, 16)
+        z = z.permute(0, 2, 1, 3, 4).reshape(1, 6, 64)
+        actual = model.decoder(z, 3, 5, local=True).argmax(-1)[0]
+        torch.testing.assert_close(actual, board[:3, :5])
+
+    def test_pixel_latent_joint_learning_and_checkpoint_restore(self):
+        config = replace(NetworkConfig.small(), latent=64, pixel_latent=True,
+                         broadcast_conditioning=True, local_dynamics=True, residual_scale=.1, position_scale=.1)
+        model = WorldModel(config)
+        learner = Learner(Engine(model, self.config))
+        result = learner.update([episode(2), episode(3)])
+        result = learner.update([episode(2), episode(3)])  # unlock zero-initialized local head
+        self.assertEqual(result['samples'], 5)
+        for name in ('encoder.pixel_embedding.weight', 'dynamics.action_token.weight',
+                     'decoder.context.weight', 'decoder.color.weight', 'dynamics.local.input.weight',
+                     'dynamics.local.condition.weight', 'dynamics.local.output.weight'):
+            self.assertGreater(float(dict(model.named_parameters())[name].grad.abs().sum()), 0.)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'model.pt'
+            checkpoint.save(path, learner, {}, {}, random.Random(1))
+            saved = checkpoint.load(path)
+            restored = WorldModel(NetworkConfig(**saved['network']))
+            restored.load_state_dict(saved['weights'])
+            self.assertEqual(restored.config, config)
+
+    def test_local_dynamics_moves_latents_across_patch_boundaries(self):
+        config = replace(NetworkConfig.small(), latent=64, pixel_latent=True, local_dynamics=True)
+        local = SpatialDynamics(config)
+        channels = 4
+        class NoCondition(torch.nn.Module):
+            def forward(self, x):
+                return x.new_zeros(x.shape[0], channels)
+        local.input = torch.nn.Identity()
+        local.condition = NoCondition()
+        local.blocks = torch.nn.ModuleList()
+        local.output = torch.nn.Conv2d(channels, channels, 3, padding=1, bias=False)
+        with torch.no_grad():
+            local.output.weight.zero_()
+            for channel in range(channels):
+                local.output.weight[channel, channel, 1, 0] = 1
+        board = torch.arange(8 * 8 * channels).reshape(8, 8, channels).float()
+        def pack(value):
+            return torch.stack([value[r:r+4, c:c+4].reshape(-1)
+                                for r in (0,4) for c in (0,4)])[None]
+        expected = torch.zeros_like(board)
+        expected[:, 1:] = board[:, :-1]
+        actual = local(pack(board), torch.zeros(1,config.memory),
+                       torch.zeros(1,config.action_embedding), 5, 7)
+        torch.testing.assert_close(actual, pack(expected), rtol=0, atol=0)
 
     def test_first_transition_trains_without_waiting_for_regularization(self):
         engine = Engine(self.model, replace(self.config, min_observations=64, loss_steps=1))
@@ -334,6 +427,46 @@ class NumericalTests(unittest.TestCase):
         self.assertTrue(all(len(e.observations) == 2 and len(e.actions) == 1 for e in sampled))
         self.assertIsNotNone(Learner(self.engine).update(sampled))
 
+    def test_replay_bounds_device_inputs_and_keeps_causal_episode_prefixes(self):
+        older, live = episode(4), episode(2)
+        older.prepare('cpu', 4)
+        live.prepare('cpu', 4)
+        replay = Replay(4, byte_limit=older.device_bytes + live.device_bytes)
+        replay.add(older)
+        replay.add(live)
+        # A sampled history starts at its own reset and never contains a later
+        # observation than its last action. The live terminal pair is retained.
+        live.observations[-1] = replace(live.observations[-1], state='GAME_OVER')
+        samples = replay.sample(random.Random(5), 2, 2, latest=live, random_prefix=True)
+        self.assertTrue(samples[0].observations[-1].terminal)
+        self.assertEqual(samples[0].actions, live.actions)
+        self.assertIs(samples[1].observations[0], older.observations[0])
+        self.assertEqual(len(samples[1].observations), len(samples[1].actions) + 1)
+        self.assertEqual(len(samples[1].prepared), len(samples[1].observations))
+        self.assertIs(samples[1].prepared[0][1], older.prepared[0][1])
+        # Reserve the next input before allocation by evicting an old episode.
+        del samples
+        live.append(Action(1), observation(7))
+        replay.prepare(live, 'cpu', 4, torch.float32)
+        self.assertEqual(len(replay.episodes), 1)
+        self.assertIs(replay.episodes[0], live)
+        self.assertLessEqual(sum(e.device_bytes for e in replay.episodes), replay.byte_limit)
+
+    def test_replay_prepared_batch_matches_independent_reencoding(self):
+        a, b = episode(2), episode(3)
+        for ep in (a, b):
+            ep.prepare('cpu', 4)
+        other = WorldModel(NetworkConfig.small())
+        other.load_state_dict(self.model.state_dict())
+        results = []
+        for model, batch in ((self.model, [a, b]), (other, [episode(2), episode(3)])):
+            torch.manual_seed(89)
+            results.append(Learner(Engine(model, self.config)).update(batch))
+        self.assertEqual(results[0]['samples'], 5)
+        self.assertAlmostEqual(results[0]['loss'], results[1]['loss'], places=5)
+        for parameter, reference in zip(self.model.parameters(), other.parameters()):
+            torch.testing.assert_close(parameter, reference)
+
     def test_real_memory_rebuild_matches_streaming_inference(self):
         ep = episode()
         state = self.engine.initial(ep.observations[0])
@@ -502,12 +635,18 @@ class SDKTests(unittest.TestCase):
             main(['train', '--profile', 'small', '--max-steps', '4',
                   '--min-observations', '4', *common])
             path = Path(directory) / 'latest.pt'
+            payload = checkpoint.load(path)
+            payload['progress'].update(best_error=.25, passes=2, collapse_streak=1)
+            torch.save(payload, path)
             main(['train', '--checkpoint', str(path), '--max-steps', '8', *common])
             saved = checkpoint.load(path)
             self.assertEqual(saved['progress']['actions'], 8)
             # One update per action, including after resume with an empty episode.
             self.assertEqual(saved['progress']['updates'], 8)
             self.assertEqual(saved['progress']['episodes'], 2)
+            self.assertEqual(saved['progress']['best_error'], .25)
+            self.assertEqual(saved['progress']['passes'], 2)
+            self.assertEqual(saved['progress']['collapse_streak'], 1)
             self.assertIn('empty device input cache', output.getvalue())
 
 

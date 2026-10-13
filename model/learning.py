@@ -16,6 +16,7 @@ from .metrics import visual_delta
 class State:
     z: torch.Tensor | None
     h: torch.Tensor
+    geometry: tuple[int, int] | None = None
 
 
 class Engine:
@@ -44,15 +45,16 @@ class Engine:
             with torch.cuda.device(self.device):
                 self.amp = torch.cuda.is_bf16_supported()
         self.spatial = model.encoder.spatial
+        self.aggregate = model.encoder.aggregate
         self.predict = model.dynamics.forward
         self.advance = model.dynamics.advance
         self.decode = model.decoder.forward
         if compile_model:
             # Keep original parameter names and checkpoint objects. Compilation
             # failure is an error, never an unreported eager fallback.
-            self.spatial, self.predict, self.advance, self.decode = [
+            self.spatial, self.aggregate, self.predict, self.advance, self.decode = [
                 torch.compile(f, fullgraph=True, dynamic=True) for f in
-                (self.spatial, self.predict, self.advance, self.decode)]
+                (self.spatial, self.aggregate, self.predict, self.advance, self.decode)]
 
     def autocast(self):
         return torch.autocast('cuda', dtype=torch.bfloat16) if self.amp else nullcontext()
@@ -62,14 +64,15 @@ class Engine:
 
     def encode(self, observations, training=False, prepared=None):
         return self.model.encode(observations, self.spatial, self.config.frame_chunk,
-                                 checkpoint_blocks=training, prepared=prepared)
+                                 checkpoint_blocks=training, prepared=prepared, aggregate=self.aggregate)
 
     @torch.no_grad()
     def initial(self, observation):
         self.model.eval()
         with self.autocast():
             z = self.encode([observation])[0]
-        return State(z, torch.zeros(1, self.model.config.memory, device=self.device))
+        return State(z, torch.zeros(1, self.model.config.memory, device=self.device),
+                     observation.final.shape if observation.final is not None else None)
 
     @torch.no_grad()
     def prediction(self, state, action, reference):
@@ -77,7 +80,8 @@ class Engine:
         if state.z is None or reference is None:
             return None
         with self.autocast():
-            z, _, delta = self.predict(state.z[None], state.h, self.actions([action]))
+            geometry = state.geometry or reference.shape
+            z, _, delta = self.predict(state.z[None], state.h, self.actions([action]), *geometry)
             image = self.decode(z, *reference.shape).argmax(-1)[0]
         image = image.cpu().numpy()
         return image, delta[0].cpu().numpy(), visual_delta(reference, image)
@@ -90,7 +94,8 @@ class Engine:
             if state.z is not None:
                 h, _ = self.advance(state.z[None], h, self.actions([action]))
             z = self.encode([observation])[0]
-        return State(z if z is not None else state.z, h.float())
+        return State(z if z is not None else state.z, h.float(),
+                     observation.final.shape if z is not None else state.geometry)
 
     @torch.no_grad()
     def rebuild(self, episode):
@@ -98,12 +103,14 @@ class Engine:
         self.model.eval()
         with self.autocast():
             latents = self.encode(episode.observations)
-            state = State(latents[0], torch.zeros(1, self.model.config.memory, device=self.device))
-            for action, z in zip(episode.actions, latents[1:]):
+            state = State(latents[0], torch.zeros(1, self.model.config.memory, device=self.device),
+                          episode.observations[0].final.shape if latents[0] is not None else None)
+            for action, z, obs in zip(episode.actions, latents[1:], episode.observations[1:]):
                 if state.z is not None:
                     state.h, _ = self.advance(state.z[None], state.h, self.actions([action]))
                 if z is not None:
                     state.z = z
+                    state.geometry = obs.final.shape
         return state
 
 
@@ -228,7 +235,7 @@ class Learner:
         for shape, indices in buckets.items():
             with e.autocast():
                 predicted_z, _, delta = e.predict(torch.stack([states[i] for i in indices]),
-                    torch.stack([memories[i] for i in indices]), torch.stack([actions[i] for i in indices]))
+                    torch.stack([memories[i] for i in indices]), torch.stack([actions[i] for i in indices]), *shape)
             prediction_loss = prediction_loss + len(indices) / len(states) * F.mse_loss(
                 delta.float(), torch.stack([targets[i] for i in indices]).float())
             real_successors = torch.stack([successors[i] for i in indices])

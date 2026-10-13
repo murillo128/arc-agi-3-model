@@ -10,6 +10,12 @@ El código y la arquitectura viven en este directorio. No modifica los comandos
 existentes `training.collect`, `evaluation.run`, el viewer ni la exportación de
 trazas. Los checkpoints y el replay no se suben a Git.
 
+El diagrama refleja la variante en experimentación con `--pixel-latent`,
+`--broadcast-conditioning`, `--local-dynamics`, y escalas residual/posicional .1.
+Sus operaciones enlazan los 491 tensores reales compartidos entre llamadas. La
+configuración del checkpoint identifica qué variante ejecuta cada entrenamiento;
+el diagrama no demuestra convergencia ni generalización entre juegos.
+
 ## Instalación y ejecución
 
 Desde la raíz del repositorio, con Python 3.12:
@@ -21,14 +27,17 @@ uv pip install --python .venv/bin/python -r model/requirements.txt --extra-index
 .venv/bin/python -m model train
 ```
 
-Para el entrenamiento acelerado en la RTX 4070 Ti (Ada):
+Dependencias opcionales para la RTX 4070 Ti (Ada):
 
 ```sh
 uv pip install --python .venv/bin/python -r model/requirements-cuda.txt
-.venv/bin/python -m model train --device cuda --compile --fp8 --optimizer-bits 8
+.venv/bin/python -m model train --device cuda --compile --no-fp8 --optimizer-bits 8
 ```
 
-FP8 usa escalado dinámico por tensor de torchao 0.8.0, compatible con PyTorch
+La comparación experimental usa BF16 y momentos AdamW de 8 bits. `--fp8` activa
+otra variante que debe evaluarse por velocidad **y** calidad; no es un requisito
+para usar Tensor Cores ni una mejora garantizada. FP8 usa escalado dinámico por
+tensor de torchao 0.8.0, compatible con PyTorch
 2.6: convierte las 156 proyecciones Q/K/V/salida y MLP de los bloques Transformer.
 Usa E4M3 para entradas/pesos y E5M2 para operandos de gradiente; conserva pesos
 maestros FP32. Las proyecciones de entrada/salida del modelo, las recurrencias y
@@ -54,7 +63,7 @@ El rendimiento depende del hardware y de las longitudes de las partidas.
 No se afirma que compile siempre sea más rápido; evita recompilar usando la misma
 configuración. La medición de rendimiento empieza al completar la primera acción.
 
-El modelo **base** tiene 214.143.104 parámetros:
+El modelo **base sin las opciones espaciales** tiene 214.143.104 parámetros:
 
 | Componente | Configuración | Parámetros |
 |---|---|---:|
@@ -62,11 +71,43 @@ El modelo **base** tiene 214.143.104 parámetros:
 | Dynamics | Memoria global 2048; predictor de 6 bloques, ancho 768; latente P×1024 | 64.929.152 |
 | Visual decoder | 8 bloques, ancho 768, 12 cabezas; 16 colores | 57.688.576 |
 
+`--residual-scale` multiplica las ramas de atención y MLP antes de cada suma
+residual Transformer; `--position-scale` multiplica los códigos sinusoidales.
+Son factores fijos, guardados en la configuración del checkpoint, que permiten
+moderar la mezcla global inicial sin quitar capas ni píxeles. No afectan al
+coeficiente de la suma predictiva: siempre se mantiene `z_hat = z + d_hat`.
+Los checkpoints restauran sus propios factores, sin permitir cambiarlos
+silenciosamente al reanudar o validar.
+
+`--pixel-latent` conserva 64 características aprendidas por píxel nativo. Un
+`Linear(35,64)` compartido codifica color, delta observado de animación y validez;
+los 16 píxeles de cada patch forman sus 1024 características latentes. Se suma
+el contexto recurrente de animación multiplicado por `residual_scale` y se
+aplica LayerNorm por patch. No hay pooling ni un atajo de píxeles al decoder.
+El decoder suma al latente una corrección contextual `Linear(768,1024)` escalada
+y utiliza un clasificador compartido `Linear(64,16)` por píxel. Esta variante
+tiene **214.737.040 parámetros**: encoder 91.527.680, dynamics 64.929.152 y
+decoder 58.280.208.
+
+`--broadcast-conditioning` añade las proyecciones de acción y memoria a todos
+los tokens espaciales del predictor, además de conservar sus dos tokens globales.
+`--local-dynamics` requiere `--pixel-latent` y añade una rama aprendida de
+convoluciones sobre la rejilla latente nativa: 64→128 canales con kernel 3×3,
+condicionamiento lineal de memoria/acción, tres bloques residuales
+GroupNorm(8)→SiLU→Conv3×3→GroupNorm(8)→SiLU→Conv3×3, y salida 1×1 de 128→64
+inicializada a cero. Añade posiciones 2D explícitas a la rama Transformer y
+combina `d_hat = local + residual_scale * global`. El estado sigue avanzando
+como `z_hat = z + d_hat`, con coeficiente uno. El total es **215.984.848 parámetros**.
+La atención global y la memoria permanecen activas para dependencias no locales;
+las convoluciones no codifican reglas, objetos, colores o movimientos de un juego.
+Mejorar Square Cross no establece generalización a otros juegos.
+
 `--profile small --device cpu --no-compile` usa la misma computación con
 74.872 parámetros para desarrollo. No es un sustituto de capacidad equivalente.
 `--frame-chunk` limita frames por llamada espacial (4 por defecto). Cada
-actualización usa únicamente el prefijo de la partida actual y supervisa su
-última transición. El perfil base no se reduce automáticamente al encontrar
+actualización reconstruye prefijos causales independientes. `--batch-episodes`
+controla cuántas partidas reúne y `--loss-steps` cuántas transiciones finales
+supervisa en cada prefijo. El perfil base no se reduce automáticamente al encontrar
 límites de memoria.
 La compilación puede aumentar el pico de memoria. Si no cabe en una GPU compartida,
 hay que ajustar el uso de memoria del cálculo compilado, conservando BF16, SDPA
@@ -83,9 +124,11 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
 2. El comportamiento aleatorio elige una acción de `available_actions`; ACTION6
    incluye coordenadas SDK uniformes en 0…63. Prepara el resultado real una sola
    vez en el dispositivo del modelo y lo añade al buffer de la partida actual.
-3. **Cada acción con una transición visual válida realiza una actualización**, desde
-   la primera y también en GAME_OVER/WIN. Vuelve a codificar el **prefijo completo
-   de la partida actual** con los pesos actuales. Conserva todos los frames de animación.
+3. Actualiza cada `--train-every` acciones, además de la primera y GAME_OVER/WIN.
+   El modo por acción sigue disponible con `--train-every 1`. El lote incluye el
+   prefijo actual y, si se configura replay, prefijos de otras partidas reales.
+   Vuelve a codificar cada **prefijo completo desde su propio inicio** con los pesos
+   actuales. Conserva todos los frames de animación.
    Los deltas entre frames de una animación forman parte de las entradas del
    encoder, junto con los colores y una máscara de píxeles válidos. El primer
    frame de cada respuesta usa un símbolo absoluto.
@@ -99,7 +142,7 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Para actualizar `h` se resume `z`, pero los P latentes completos llegan al
    predictor. Sus tokens son los P patches más uno de memoria y uno de acción.
 5. Entrena encoder y dynamics con `(1-w) * MSE(d_hat, z_(t+1)-z_t) + w * SIGReg
-   + 10 * variance_floor`, además de los gradientes visuales del siguiente paso.
+   + variance_weight * variance_floor`, además de los gradientes visuales del siguiente paso.
    `--sigreg-weight` controla `w` (por defecto .002); los pesos activos se imprimen al iniciar.
    Ambos latentes reales conservan gradiente. SIGReg usa al menos 2
    observaciones reales de igual geometría, proyecciones aleatorias y cálculo FP32.
@@ -141,6 +184,9 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    puede alterar esta lectura. `--local-reconstruction-weight` controla su peso
    (1 por defecto; 0 la desactiva). No añade parámetros ni forma parte de la
    predicción en inferencia; sus targets y gradientes son exclusivamente reales.
+   Con `--pixel-latent`, esta rama lee directamente los 64 canales de cada píxel
+   usando el clasificador compartido, sin proyección contextual ni normalización
+   adicional del decoder.
 
 El objetivo total suma los términos latentes y las tres pérdidas visuales
 (NLL más error de unión suave por rama). AdamW usa `lr=3e-5` por
@@ -162,22 +208,47 @@ Los estados recurrentes de validación avanzan con observaciones reales. El
 entrenamiento aleatorio no calcula inferencias en vivo que no va a consumir: las
 reconstruye en los batches. `Engine.rebuild` permite reconstruir un estado en vivo
 después de actualizar los pesos. No existe caché persistente de latentes obsoletos.
+La recurrencia de animación agrupa observaciones de igual geometría y número de
+frames para procesarlas en paralelo. Solo avanza por el eje temporal de cada
+animación: el eje de batch y los patches mantienen memorias independientes.
+Esta operación también se compila en CUDA.
 
-El buffer contiene **una única partida**. Sus observaciones SDK originales siguen
-en CPU y sus píxeles, features visuales y acciones preparados residen en GPU durante
-el entrenamiento CUDA. Se reutilizan únicamente entradas inmutables: no hay caché
-de latentes ni grafos. `--replay-bytes` limita los tensores preparados de la partida
-(128 MiB por defecto); excederlo produce un error explícito. CPU usa la misma ruta
-con tensores CPU. Por defecto se supervisa la última transición (`--loss-steps 1`)
-y los gradientes atraviesan el prefijo completo. Después de entrenar la transición
-terminal, se libera el buffer; el siguiente episodio empieza con memoria vacía.
-También se vacía al alcanzar el límite de pasos o cambiar de nivel. Los pesos y
-estados del optimizador se conservan. No se mezclan partidas anteriores.
+El buffer mantiene hasta `--replay-episodes` partidas reales. Sus observaciones SDK
+originales siguen en CPU y los píxeles, features visuales y acciones preparados
+residen en GPU durante el entrenamiento CUDA. Solo reutiliza entradas inmutables:
+no hay caché de latentes ni grafos. `--replay-bytes` limita conjuntamente los
+tensores preparados (128 MiB por defecto); antes de excederlo expulsa partidas
+antiguas. Una partida que no cabe por sí sola produce un error explícito. CPU usa
+la misma ruta con tensores CPU. La transición terminal se entrena antes del reset.
+Cada nueva partida empieza con memoria recurrente vacía; las partidas almacenadas
+se muestrean por separado, sin concatenar sus historias. Los prefijos antiguos se
+truncan al azar y el actual llega hasta su última acción. Los pesos se conservan,
+pero el replay se vacía al cambiar de nivel o reiniciar el proceso. No se persiste.
+Con `--replay-episodes 1 --batch-episodes 1 --loss-steps 1` se conserva el modo
+limitado a la última transición de la partida actual. Las semillas y acciones del
+entorno tienen un generador independiente del muestreo de replay.
 Una respuesta sin frames se conserva, avanza la memoria con la acción cuando
 hay estado y no inventa un objetivo visual. El encoder admite geometrías nativas
 rectangulares y padding interno; predecir cambios de tamaño de canvas queda fuera
 de este primer decoder. Tales transiciones se omiten del loss y hacen fallar el
 criterio de validación, en lugar de contarlas como aciertos.
+
+## Diagnóstico de reconstrucción
+
+El diagnóstico aislado del encoder/decoder usa pares reales del SDK y un conjunto
+pequeño fijo, sin predictor ni regularización latente. Permite distinguir un
+problema de reconstrucción de uno de dinámica:
+
+```sh
+.venv/bin/python -m model.experiment --steps 160 --pairs 8 \
+  --learning-rate .0003 --residual-scale .1 --position-scale .1 --pixel-latent
+```
+
+Ejecuta CUDA compilada, BF16 y AdamW de 8 bits. Informa error de delta y de píxel
+en los ejemplos usados para ajustar (`fit`) y en otras semillas (`unseen`). Un
+buen ajuste del conjunto fijo no prueba generalización ni habilita avanzar de
+nivel. No guarda observaciones ni checkpoints; el entrenamiento normal mantiene
+sus validaciones separadas y sus umbrales completos.
 
 ## Currículo y juegos del SDK
 

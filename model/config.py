@@ -15,10 +15,24 @@ class NetworkConfig:
     action_embedding: int = 128
     patch: int = 4
     sigreg_slices: int = 1024
+    residual_scale: float = 1.
+    position_scale: float = 1.
+    pixel_latent: bool = False
+    broadcast_conditioning: bool = False
+    local_dynamics: bool = False
 
     def __post_init__(self):
-        if any(type(v) is not int or v <= 0 for v in asdict(self).values()):
+        if any(type(v) is not int or v <= 0 for k, v in asdict(self).items()
+               if k not in {'residual_scale', 'position_scale', 'pixel_latent', 'broadcast_conditioning', 'local_dynamics'}):
             raise ValueError('Network sizes must be positive integers')
+        if any(not math.isfinite(v) or not 0 < v <= 1 for v in (self.residual_scale, self.position_scale)):
+            raise ValueError('Residual and position scales must lie in (0, 1]')
+        if any(type(v) is not bool for v in (self.pixel_latent, self.broadcast_conditioning, self.local_dynamics)):
+            raise ValueError('Network feature switches must be booleans')
+        if self.local_dynamics and not self.pixel_latent:
+            raise ValueError('Local dynamics requires pixel-structured latents')
+        if self.pixel_latent and (self.latent % self.patch ** 2 or self.latent // self.patch ** 2 < 2):
+            raise ValueError('Pixel latents require at least two channels per native pixel')
         if self.width % self.heads or self.width % 4:
             raise ValueError('Width must be divisible by heads and four')
 
@@ -40,6 +54,8 @@ class TrainConfig:
     updates_per_train: int = 1
     frame_chunk: int = 4
     loss_steps: int = 1
+    replay_episodes: int = 1
+    batch_episodes: int = 1
     replay_bytes: int = 128 * 1024 * 1024
     min_observations: int = 2  # Regularization only; never a predictive-loss gate.
     max_episode_steps: int = 256
@@ -63,7 +79,7 @@ class TrainConfig:
         for k, v in asdict(self).items():
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
-            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight'}:
+            if k in {'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:
