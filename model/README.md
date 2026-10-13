@@ -52,7 +52,7 @@ CUDA se mantiene siempre `torch.compile`; `--no-compile` se reserva al desarroll
 en CPU. Una compilación fallida no se oculta como un cambio automático de modo.
 El rendimiento depende del hardware y de las longitudes de las partidas.
 No se afirma que compile siempre sea más rápido; evita recompilar usando la misma
-configuración. Se registra el tiempo total, incluido el arranque, en el progreso.
+configuración. La medición de rendimiento empieza al completar la primera acción.
 
 El modelo **base** tiene 214.143.104 parámetros:
 
