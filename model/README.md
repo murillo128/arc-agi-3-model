@@ -290,6 +290,41 @@ explícitamente sustituyen los guardados y reinician las rachas de aprobación.
 Los checkpoints anteriores al estado espacial no son compatibles con esta
 arquitectura: se empieza un entrenamiento nuevo, sin adaptar pesos silenciosamente.
 
+## Sincronización con LLM Model Explorer
+
+LMEX admite pesos Safetensors y solo sigue enlaces que permanezcan dentro de su
+raíz de modelos. Un symlink directo al repo o a `latest.pt` no sirve: el checkpoint
+contiene pesos, optimizadores y RNG, en un formato distinto. Este comando publica
+solo los pesos guardados y la arquitectura actual:
+
+```sh
+.venv/bin/python -m model.lmex_sync \
+  --checkpoint model/runs/exploration/latest.pt \
+  --model-root /home/sergio/.cache/llm-model-explorer/models \
+  --watch
+```
+
+Comprueba cambios cada 5 segundos (`--interval`). Sin `--watch`, publica una vez.
+`--architecture` permite elegir otro JSON y `--model-id` otro nombre de entrada.
+La primera publicación exige una entrada libre: si ya existe una carpeta antigua
+con ese nombre, muévela fuera de la raíz de modelos antes de ejecutar el comando.
+El sincronizador nunca reemplaza una carpeta o enlace ajeno silenciosamente.
+
+Copia `architecture.json` byte por byte y exporta `weights` de `latest.pt` en CPU
+con los mismos nombres, formas, tipos y valores. No carga optimizadores en GPU ni
+ejecuta el modelo. Construye el paquete completo dentro de la raíz de LMEX y
+cambia atómicamente un enlace interno. Conserva solo el paquete activo; si cambia
+solo la arquitectura, reutiliza el archivo inmutable de pesos sin otra exportación.
+Un error o un checkpoint sustituido durante la conversión conserva el paquete
+anterior y se reintenta. El entrenamiento sigue independiente.
+
+Los pesos de LMEX son los del **último checkpoint guardado**, no los parámetros
+en RAM tras cada actualización. La configuración exportada incluye los contadores
+de ese checkpoint. El refresco normal de LMEX detecta el cambio sin reiniciar su
+backend. La arquitectura sigue declarando cobertura parcial: no se inventan
+bindings entre sus cajas y los tensores; los pesos reales se pueden inspeccionar
+en Tensor Explorer. Los paquetes exportados, pesos y logs quedan fuera de Git.
+
 ## Comprobaciones locales
 
 ```sh
@@ -300,8 +335,9 @@ Comprueban la aritmética/probabilidades del delta, el gradiente visual conjunto
 la equivalencia entre microbatches, la diversidad entre observaciones, la reanudación,
 la validación congelada y las fronteras reales del SDK. No ejecutan navegador.
 `architecture.json` conserva los IDs del diseño importado y describe el perfil
-base. Declara cobertura parcial para los componentes futuros y no vincula los
-pesos antiguos de LMEX a esta implementación.
+base. Declara cobertura parcial para los componentes futuros y para los bindings
+de parámetros aún pendientes. La sincronización de LMEX usa los pesos reales del
+checkpoint, no los pesos aleatorios de la antigua maqueta.
 
 Las pérdidas se inspiran en [SIGReg de LeJEPA](https://github.com/galilai-group/lejepa/blob/main/MINIMAL.md)
 y en la [restricción de varianza de VICReg](https://github.com/facebookresearch/vicreg).
