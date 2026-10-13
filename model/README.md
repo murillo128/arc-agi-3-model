@@ -119,7 +119,7 @@ SDPA. No hay fallback silencioso ni se reduce el tamaño de la red.
    predicción en inferencia; sus targets y gradientes son exclusivamente reales.
 
 El objetivo total suma los términos latentes y las tres pérdidas visuales
-(NLL más error de unión suave por rama). AdamW usa `lr=1e-4` por
+(NLL más error de unión suave por rama). AdamW usa `lr=3e-5` por
 defecto. Los dos optimizadores conservan conjuntos de parámetros disjuntos,
 pero todas las pérdidas se calculan con los mismos pesos previos a la actualización.
 Para limitar memoria, cada microbatch del decoder acumula gradientes en una hoja

@@ -31,7 +31,7 @@ class NetworkConfig:
 
 @dataclass(frozen=True)
 class TrainConfig:
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-5
     visual_balance: str = 'color'
     color_balance_power: float = .5
     sigreg_weight: float = .002

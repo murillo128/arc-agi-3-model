@@ -33174,7 +33174,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0001
+          "value": 3e-05
         },
         {
           "name": "beta1",
@@ -35097,7 +35097,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0001
+          "value": 3e-05
         },
         {
           "name": "beta1",
@@ -50653,7 +50653,7 @@
       "attributes": [
         {
           "name": "lr",
-          "value": 0.0001
+          "value": 3e-05
         }
       ],
       "description": "Apply additive update once to decoder parameters using the same pre-update weights that generated the logits. lr is constant for this online baseline; no unchosen warmup/scheduler is implied.",
