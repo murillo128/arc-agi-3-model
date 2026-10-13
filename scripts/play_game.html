@@ -200,8 +200,11 @@ function draw(data) {
   status.textContent = `${data.game} · Seed ${data.seed} · ${data.state}`;
   document.querySelector('#message').textContent = data.state === 'WIN' ? 'WIN · All levels complete. Restart to play again.' :
     data.state === 'GAME_OVER' ? 'GAME_OVER · Restart to try again.' : '';
-  document.querySelector('#game-help').textContent = data.source === 'synthetic' && data.game === 'sc01-v1' ?
-    'Move each square’s centre onto its cross. In levels 6 and 8, match colours: touching a different-colour cross ends the attempt. In levels 7–8, tap a square to select it (white marker); tap again or tap empty space to deselect. Level 8 requires delivering both squares. Clicks are free; every arrow spends one move, even when blocked or unselected. Restart retries the current level; after a win, it starts at level 1.' :
+  const syntheticHelp = {
+    'sc01-v1': 'Five levels: move the square’s centre onto the cross, regardless of colour. Infer the stride, avoid solid obstacles and ignore background speckles. Every arrow spends one move, even when blocked. Restart retries the current level; after a win, it starts at level 1.',
+    'si01-v1': 'Three interaction levels: move each square’s centre onto its cross. In levels 1 and 3, match colours: touching a different-colour cross ends the attempt. In levels 2–3, tap a square to select it (white marker); tap again or tap empty space to deselect. Level 3 requires delivering both squares. Clicks are free; every arrow spends one move, even when blocked or unselected. Restart retries the current level; after a win, it starts at level 1.'
+  };
+  document.querySelector('#game-help').textContent = (data.source === 'synthetic' && syntheticHelp[data.game]) ||
     'Explore the game and infer its rules from the screen and the available actions.';
   controls();
 }

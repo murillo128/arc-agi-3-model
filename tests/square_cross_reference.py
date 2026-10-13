@@ -61,15 +61,19 @@ def cross_pixels(point, size=5):
 
 
 def reference_actions(scene, level, order=(0, 1)):
-    """SDK actions with free selections; only tests may inspect seeded geometry.
+    """Interaction-game actions for local levels 1–3 with free selections.
+
+    Only tests may inspect seeded geometry.
 
     Search one piece at a time with the other solid at its current/locked
     position. The matrix also proves the lanes disjoint and the total length
     equal to the Manhattan lower bound, so a joint two-piece BFS is unnecessary.
     """
-    if level < 8:
-        clicks = [(6, dict(zip(('x', 'y'), scene.player)))] if level == 7 else []
-        return clicks + [(action, None) for action in reference_path(scene, color_rule=level == 6)]
+    if level not in (1, 2, 3):
+        raise ValueError("Expected a local interaction level 1–3")
+    if level < 3:
+        clicks = [(6, dict(zip(('x', 'y'), scene.player)))] if level == 2 else []
+        return clicks + [(action, None) for action in reference_path(scene, color_rule=level == 1)]
     positions = [point for point, _ in scene.players]
     targets = [point for point, _ in scene.targets]
     colors = [color for _, color in scene.players]

@@ -31,8 +31,14 @@ The repository retains its **Skillforge** issue/PR/review infrastructure (see [A
 The static [browser .arc3 loader](viewer/README.md) can inspect recorded attempts
 through local files or CORS-authorized URLs without running Python or the SDK.
 
-The original [Square Cross synthetic game](games/README.md) has eight curriculum
-levels, a local browser play UI and a bounded random SDK smoke launcher.
+The [synthetic game catalog](games/README.md) includes Square Cross (`sc01-v1`,
+five levels) and Square Cross Interactions (`si01-v1`, three levels), with a local
+browser game picker and a bounded random SDK smoke launcher:
+
+```sh
+python scripts/play_game.py --mode web --game si01-v1 --seed 42
+python scripts/play_game.py --mode sdk --game si01-v1 --seed 42 --max-actions 100
+```
 
 Use **Python 3.12**. The package pins the official SDK to `arc-agi==0.9.9`; the adapter checks that version at runtime. No GPU, PyTorch, Kaggle account or credentials are required for the smoke tests or notebook generator.
 

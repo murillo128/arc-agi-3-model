@@ -1,0 +1,6 @@
+{
+  "game_id": "si01-v1",
+  "title": "Square Cross Interactions",
+  "tags": ["synthetic", "perception", "control", "interaction"],
+  "default_fps": 10
+}
