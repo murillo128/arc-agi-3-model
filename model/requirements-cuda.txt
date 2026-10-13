@@ -1,0 +1,3 @@
+# Optional accelerated training, compatible with torch==2.6.0 / CUDA 12.4.
+torchao==0.8.0
+bitsandbytes==0.45.5

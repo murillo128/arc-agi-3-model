@@ -10,6 +10,7 @@ def save(path, learner, progress, run, rng):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {'network': asdict(learner.model.config), 'training': asdict(learner.engine.config),
+               'runtime': {'fp8': bool(learner.engine.fp8_layers), 'optimizer_bits': learner.engine.optimizer_bits},
                'weights': learner.model.state_dict(),
                'optimizers': [opt.state_dict() for opt in learner.optimizers],
                'progress': dict(progress), 'run': dict(run), 'rng': rng.getstate(),
@@ -30,10 +31,13 @@ def load(path):
     return torch.load(path, map_location='cpu', weights_only=True)
 
 
-def restore(payload, learner, rng):
+def restore(payload, learner, rng, *, reset_optimizer=False):
+    if not reset_optimizer and payload.get('runtime', {}).get('optimizer_bits', 32) != learner.engine.optimizer_bits:
+        raise ValueError('Optimizer precision changed; explicit reset_optimizer is required')
     learner.model.load_state_dict(payload['weights'])
-    for opt, saved in zip(learner.optimizers, payload['optimizers'], strict=True):
-        opt.load_state_dict(saved)
+    if not reset_optimizer:
+        for opt, saved in zip(learner.optimizers, payload['optimizers'], strict=True):
+            opt.load_state_dict(saved)
     rng.setstate(payload['rng'])
     random.setstate(payload['python_rng'])
     torch.set_rng_state(payload['torch_rng'])

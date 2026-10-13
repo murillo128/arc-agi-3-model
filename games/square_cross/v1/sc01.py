@@ -11,6 +11,12 @@ from games.pixel_grid import (BOUNDS, DIRECTIONS, Scene, draw_scene, fits,
 SIZES = (3, 5, 7)
 
 
+def palette_for_seed(seed):
+    """Independent of geometry: every visual role may use any ARC color."""
+    rng = random.Random(f"square-cross-palette:{seed}")
+    return np.asarray(rng.sample(range(16), 16), dtype=np.int8)
+
+
 def generate_scene(seed, level):
     # A fresh level-specific stream also makes level resets independent of history.
     if level not in range(1, 6):
@@ -33,6 +39,16 @@ def generate_scene(seed, level):
                    and fits((player[0] + dx * stride * steps, player[1] + dy * stride * steps),
                             max(ps, ts), bounds)]
         target = rng.choice(targets)
+        # Keep the sampled cardinal route but remove the fixed central start.
+        # Independent RNG leaves route length, colors and later levels intact.
+        placement = random.Random(f"square-cross-placement:{seed}:{level}")
+        pr, tr = ps // 2, max(ps, ts) // 2
+        x0, x1 = min(player[0] - pr, target[0] - tr), max(player[0] + pr, target[0] + tr)
+        y0, y1 = min(player[1] - pr, target[1] - tr), max(player[1] + pr, target[1] + tr)
+        ox = placement.randint(left - x0, right - x1)
+        oy = placement.randint(top - y0, bottom - y1)
+        player = player[0] + ox, player[1] + oy
+        target = target[0] + ox, target[1] + oy
     else:
         r, tr = ps // 2, max(ps, ts) // 2
         if level == 3:
@@ -88,6 +104,7 @@ def generate_scene(seed, level):
 class Sc01(ARCBaseGame):
     def __init__(self, seed=0):
         self.instance_seed = seed  # Base constructor calls on_set_level before setting _seed.
+        self.palette = palette_for_seed(seed)
         super().__init__(
             game_id="sc01", seed=seed, available_actions=[1, 2, 3, 4],
             levels=[Level(grid_size=(64, 64), data={"number": n}) for n in range(1, 6)],
@@ -103,12 +120,14 @@ class Sc01(ARCBaseGame):
             rng = random.Random(f"square-cross-noise:{self.instance_seed}")
             pixels = np.full((64, 64), -1, dtype=np.int8)
             for x, y in rng.sample([(x, y) for y in range(64) for x in range(64)], 100):
-                pixels[y, x] = 4  # Low-contrast, static and non-colliding.
+                pixels[y, x] = 4  # Static and non-colliding; final palette sets its color.
             level.add_sprite(Sprite(pixels=pixels, name="noise", layer=0, collidable=False))
         self.player = draw_scene(level, scene)[0]
 
     def render_interface(self, frame):
-        return render_hud(frame, self.scene, self.remaining)
+        # Relabel the finished render so background, HUD and sprites all share
+        # one bijection. Never permute per action or change collision/rule data.
+        return self.palette[render_hud(frame, self.scene, self.remaining)]
 
     def step(self):
         direction = DIRECTIONS.get(self.action.id.value)

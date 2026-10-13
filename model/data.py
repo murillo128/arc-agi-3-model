@@ -1,5 +1,5 @@
 """Only public observation data and executed actions enter neural code."""
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import random
 
 import numpy as np
@@ -55,6 +55,14 @@ class Observation:
     def terminal(self):
         return self.state in {'WIN', 'GAME_OVER'}
 
+    def starts_new_level(self, previous):
+        """A nonterminal SDK count change separates recurrent histories."""
+        return not self.terminal and self.levels_completed != previous.levels_completed
+
+    def level_initial(self):
+        """Earlier frames may show the old level's winning animation."""
+        return replace(self, frames=self.frames[-1:], action_input=None)
+
 
 def random_action(observation: Observation, rng: random.Random) -> Action:
     legal = [i for i in observation.available_actions if 1 <= i <= 7]
@@ -69,6 +77,7 @@ def random_action(observation: Observation, rng: random.Random) -> Action:
 class Episode:
     observations: list[Observation]
     actions: list[Action] = field(default_factory=list)
+    prepared: list = field(default_factory=list, repr=False)
 
     def append(self, action, observation):
         self.actions.append(action)
@@ -77,6 +86,31 @@ class Episode:
     @property
     def nbytes(self):
         return sum(o.frames.nbytes for o in self.observations)
+
+    @property
+    def device_bytes(self):
+        return sum(t.numel() * t.element_size() for item in self.prepared
+                   for t in item if t is not None)
+
+    def prepare(self, device, patch, dtype=torch.float32, byte_limit=128 * 1024 * 1024):
+        """Cache immutable inputs only, owned and released by this episode.
+
+        Nothing here depends on learned weights. Learned states and autograd
+        graphs must be rebuilt after each optimizer update.
+        """
+        for index in range(len(self.prepared), len(self.observations)):
+            obs = self.observations[index]
+            f, h, w = obs.frames.shape
+            padded_h, padded_w = h + (-h) % patch, w + (-w) % patch
+            itemsize = torch.empty((), dtype=dtype).element_size()
+            estimated = f * h * w * 8 + f * padded_h * padded_w * 35 * itemsize
+            estimated += 48 if index else 0
+            if self.device_bytes + estimated > byte_limit:
+                raise MemoryError('Current episode exceeds device-input budget; lower max_episode_steps')
+            pixels = torch.tensor(np.array(obs.frames, copy=True), device=device, dtype=torch.long)
+            features = frame_features(obs, device, patch, pixels=pixels, dtype=dtype) if f else None
+            action = torch.tensor(self.actions[index - 1].features(), device=device) if index else None
+            self.prepared.append((pixels, features, action))
 
 
 class Replay:
@@ -96,9 +130,24 @@ class Replay:
                 raise MemoryError('Current episode exceeds replay byte budget; lower max_episode_steps')
             self.episodes.pop(0)
 
-    def sample(self, rng, count, minimum):
+    def prepare(self, episode, device, patch, dtype):
+        """Bound the combined immutable device cache, evicting old episodes first."""
+        self.add(episode)
+        while True:
+            other_bytes = sum(e.device_bytes for e in self.episodes if e is not episode)
+            try:
+                episode.prepare(device, patch, dtype, self.byte_limit - other_bytes)
+                return
+            except MemoryError:
+                if self.episodes[0] is episode:
+                    raise
+                self.episodes.pop(0)
+
+    def sample(self, rng, count, minimum, *, latest=None, random_prefix=False):
         eligible = [e for e in self.episodes if len(e.actions)]
         rng.shuffle(eligible)
+        if latest is not None and any(e is latest for e in eligible):
+            eligible = [latest] + [e for e in eligible if e is not latest]
         chosen, observations = [], 0
         for episode in eligible:
             chosen.append(episode)
@@ -108,17 +157,22 @@ class Replay:
         if observations < minimum:
             return []
         # No stale latent cache: every chosen prefix starts at episode initialization.
-        return [Episode(list(e.observations), list(e.actions)) for e in chosen]
+        result = []
+        for e in chosen:
+            end = rng.randint(1, len(e.actions)) if random_prefix and e is not latest else len(e.actions)
+            result.append(Episode(e.observations[:end + 1], e.actions[:end], e.prepared[:end + 1]))
+        return result
 
 
-def frame_features(observation: Observation, device, patch):
+def frame_features(observation: Observation, device, patch, *, pixels=None, dtype=torch.float32):
     """16 colors + 18 animation-delta symbols + one native-pixel validity channel."""
-    pixels = torch.tensor(np.array(observation.frames, copy=True), device=device, dtype=torch.long)
+    if pixels is None:
+        pixels = torch.tensor(np.array(observation.frames, copy=True), device=device, dtype=torch.long)
     delta = torch.full_like(pixels, 17)  # first frame is absolute, not a predicted transition
     if len(pixels) > 1:
         delta[1:] = torch.where(pixels[1:] == pixels[:-1], 16, pixels[1:])
     color = F.one_hot(pixels, 16)
     changes = F.one_hot(delta, 18)
-    x = torch.cat((color, changes, torch.ones_like(pixels[..., None])), -1).float().permute(0, 3, 1, 2)
+    x = torch.cat((color, changes, torch.ones_like(pixels[..., None])), -1).to(dtype).permute(0, 3, 1, 2)
     h, w = pixels.shape[-2:]
     return F.pad(x, (0, (-w) % patch, 0, (-h) % patch))

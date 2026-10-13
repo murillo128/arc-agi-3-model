@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class EngineTests(unittest.TestCase):
+    def setUp(self):
+        # Literal geometry/HUD oracles use canonical colors. Actual randomized
+        # SDK output and its mapping are owned by test_square_cross_palette.
+        self.enterContext(patch.object(sc01, 'palette_for_seed',
+                                       return_value=np.arange(16, dtype=np.int8)))
+
     def game(self, **changes):
         self.enterContext(patch.object(sc01, "generate_scene", return_value=fixture(**changes)))
         game = sc01.Sc01(seed=42)
@@ -188,13 +194,15 @@ class GenerationTests(unittest.TestCase):
         edges, pairs, colors, directions, placements, distances = set(), set(), set(), set(), set(), set()
         strides = {level: set() for level in range(3, 6)}
         independent_sizes = {level: set() for level in range(3, 6)}
+        starts = {1: set(), 2: set()}
         for seed in range(64):
             game = sc01.Sc01(seed)
             for level in range(1, 6):
                 with self.subTest(seed=seed, level=level):
                     game.set_level(level - 1)
                     scene = game.scene
-                    image = frame(game).copy()
+                    displayed = frame(game).copy()
+                    image = np.argsort(game.palette)[displayed]
                     self.assertEqual(game.current_level.grid_size, (64, 64))
                     self.assertEqual((game.camera.width, game.camera.height), (64, 64))
                     self.assertEqual(image.shape, (64, 64))
@@ -221,8 +229,7 @@ class GenerationTests(unittest.TestCase):
                         independent_sizes[level].add((scene.player_size, scene.stride))
                     if level <= 2:
                         self.assertNotEqual(dx == 0, dy == 0)
-                        self.assertLessEqual(abs(scene.player[0] - 32), 3)
-                        self.assertLessEqual(abs(scene.player[1] - 32), 3)
+                        starts[level].add(scene.player)
                         directions.add((int(np.sign(dx)), int(np.sign(dy))))
                         distances.add(len(path))
                     if level == 1:
@@ -244,12 +251,18 @@ class GenerationTests(unittest.TestCase):
                     act(game, 2 if dy < 0 else 1)  # Move away: some levels now solve in one stride.
                     reset = act(game)
                     self.assertEqual(game.scene, scene)
-                    np.testing.assert_array_equal(reset.frame[-1], image)
+                    np.testing.assert_array_equal(reset.frame[-1], displayed)
         self.assertEqual(edges, {"top", "bottom", "left", "right"})
         self.assertEqual(pairs, {(a, b) for a in (3, 5, 7) for b in (3, 5, 7)})
         self.assertEqual(len(directions), 4)
         self.assertGreater(len(distances), 5)
         self.assertGreater(len(colors), 10)
+        for level, points in starts.items():
+            with self.subTest(level=level):
+                self.assertGreater(len(points), 32)
+                for axis in (0, 1):
+                    coordinates = [point[axis] for point in points]
+                    self.assertGreater(max(coordinates) - min(coordinates), 32)
         self.assertGreater(sum(non_cardinal for non_cardinal, _ in placements), 20)
         self.assertGreater(len({position for _, position in placements}), 20)
         for level in range(3, 6):
@@ -257,8 +270,11 @@ class GenerationTests(unittest.TestCase):
             self.assertTrue(any(size != stride for size, stride in independent_sizes[level]))
             self.assertEqual({size for size, _ in independent_sizes[level]}, {3, 5, 7})
 
-    def test_original_seed_scenes_and_pixels_unchanged(self):
-        assert_seed_baseline(self, sc01.Sc01, range(1, 6))
+    def test_later_level_geometry_and_canonical_pixels_unchanged(self):
+        # Levels 1–2 now translate their layouts (covered by the seed matrix).
+        # Keep the old fingerprints for 3–5 before final color relabeling.
+        with patch.object(sc01, 'palette_for_seed', return_value=np.arange(16, dtype=np.int8)):
+            assert_seed_baseline(self, sc01.Sc01, range(3, 6), local_levels=range(3, 6))
 
     def test_only_five_directional_levels(self):
         game = sc01.Sc01(42)
