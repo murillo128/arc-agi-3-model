@@ -61,7 +61,7 @@ def cross_pixels(point, size=5):
 
 
 def reference_actions(scene, level, order=(0, 1)):
-    """Interaction-game actions for local levels 1–3 with free selections.
+    """Interaction-game actions for local levels 1–5 with free selections.
 
     Only tests may inspect seeded geometry.
 
@@ -69,8 +69,11 @@ def reference_actions(scene, level, order=(0, 1)):
     position. The matrix also proves the lanes disjoint and the total length
     equal to the Manhattan lower bound, so a joint two-piece BFS is unnecessary.
     """
-    if level not in (1, 2, 3):
-        raise ValueError("Expected a local interaction level 1–3")
+    if level not in range(1, 6):
+        raise ValueError("Expected a local interaction level 1–5")
+    if level <= 2:
+        return [(6, dict(zip(('x', 'y'), scene.players[i][0]))) for i in order[:level]]
+    level -= 2
     if level < 3:
         clicks = [(6, dict(zip(('x', 'y'), scene.player)))] if level == 2 else []
         return clicks + [(action, None) for action in reference_path(scene, color_rule=level == 1)]

@@ -340,23 +340,24 @@ def check_switching(page, url, name):
     assert_native_pixels(page, moved)
 
     # Both real synthetic entries switch within the existing server, with their
-    # own counters, native frames, help and directional-only initial controls.
+    # own counters, native frames, help and initial controls.
     picker.select_option(selected('synthetic', 'si01-v1'))
     page.evaluate('() => queue')
     interactions = page.request.get(url + '/play/state').json()
-    assert interactions['game'] == 'si01-v1' and interactions['win_levels'] == 3
-    assert interactions['levels_completed'] == 0 and interactions['available_actions'] == [1, 2, 3, 4]
+    assert interactions['game'] == 'si01-v1' and interactions['win_levels'] == 5
+    assert interactions['levels_completed'] == 0 and interactions['available_actions'] == [6]
     assert interactions['epoch'] != moved['epoch'] and interactions['frame'] != moved['frame']
     expect(picker.locator('option:checked')).to_have_text('si01-v1 · Square Cross Interactions')
-    expect(page.locator('#level')).to_have_text('LEVEL 1 / 3')
-    expect(page.locator('#up')).to_be_enabled()
-    expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'true')
-    expect(page.locator('#game-help')).to_contain_text('In levels 2–3')
+    expect(page.locator('#level')).to_have_text('LEVEL 1 / 5')
+    expect(page.locator('#up')).to_be_disabled()
+    expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'false')
+    expect(page.locator('#game-help')).to_contain_text('select both squares simultaneously')
     assert_native_pixels(page, interactions)
     assert_display_pixels(page, interactions)
-    # A canvas tap on level 1 cannot send an unavailable click action.
+    # Arrow keys on the click-only starter cannot send unavailable movements.
     count = len(writes)
-    page.locator('#game').tap()
+    for key in ('ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'):
+        page.keyboard.press(key)
     page.evaluate('() => queue')
     assert len(writes) == count
     picker.select_option(selected('synthetic', 'sc01-v1'))
@@ -554,15 +555,15 @@ def check_original(page, url, name):
 
 @contextmanager
 def running_selection_server():
-    """One real interaction SDK seed, advanced through local level 1 before the UI."""
+    """One real interaction SDK seed, advanced through levels 1–3 before the UI."""
     arcade = open_arcade('offline', str(ROOT / 'games'))
     server = thread = None
     try:
         session = PlaySession({'synthetic': (arcade, arcade.open_scorecard())}, 'si01-v1', 42)
-        for level in (1,):
+        for level in (1, 2, 3):
             for action, data in reference_actions(session.env._game.scene, level):
                 session.frame = session.env.step(GameAction.from_id(action), data=data)
-        assert session.frame.levels_completed == 1
+        assert session.frame.levels_completed == 3
         app = Flask('square-cross-selection-test')
         web_routes(session)(arcade, app)
         server = make_server('127.0.0.1', 0, app)
@@ -578,6 +579,113 @@ def running_selection_server():
         arcade.close_scorecard()
 
 
+def check_intro_clicks(page, url, name):
+    errors, writes = [], []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('request', lambda request: writes.append(request.post_data_json)
+            if request.url == url + '/play/action' else None)
+    # Hold only browser presentation time to inspect the actual SDK transition.
+    page.clock.install(time='2024-01-01T08:00:00')
+    page.goto(url)
+    page.evaluate('() => queue')
+    data = page.request.get(url + '/play/state').json()
+    assert data['game'] == 'si01-v1' and data['levels_completed'] == 0 and data['win_levels'] == 5
+    assert_native_pixels(page, data)
+    assert_display_pixels(page, data)
+
+    def click_only(level):
+        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 5')
+        expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'false')
+        for control in ('#up', '#down', '#left', '#right'):
+            expect(page.locator(control)).to_be_disabled()
+        count = len(writes)
+        for key in ('ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'):
+            page.keyboard.press(key)
+        page.evaluate('() => queue')
+        assert len(writes) == count
+        assert data['available_actions'] == [6]
+
+    def squares(observation):
+        # Choose visible solid squares from public palette pixels, without an oracle.
+        points = []
+        for color in range(6, 16):
+            pixels = [(x, y) for y, row in enumerate(observation['frame'])
+                      for x, value in enumerate(row) if value == color]
+            if len(pixels) == 25:
+                x, y = min(xx for xx, _ in pixels) + 2, min(yy for _, yy in pixels) + 2
+                assert set(pixels) == {(xx, yy) for xx in range(x-2, x+3) for yy in range(y-2, y+3)}
+                points.append((x, y))
+        return points
+
+    def tap(point):
+        x, y = point
+        box = page.locator('#game').bounding_box()
+        px, py = box['x'] + (x+.5)*box['width']/64, box['y'] + (y+.5)*box['height']/64
+        count = len(writes)
+        with page.expect_response(url + '/play/action') as response:
+            if name == 'mobile':
+                page.touchscreen.tap(px, py)
+            else:
+                page.mouse.click(px, py)
+        assert response.value.status == 200
+        result = response.value.json()
+        assert len(writes) == count + 1
+        assert writes[-1]['action'] == 'ACTION6' and writes[-1]['data'] == {'x': x, 'y': y}
+        return result
+
+    click_only(1)
+    points = squares(data)
+    assert len(points) == 1
+    data = tap(points[0])
+    page.evaluate('() => queue')
+    assert data['levels_completed'] == 1 and data['state'] == 'NOT_FINISHED'
+    click_only(2)
+    assert_native_pixels(page, data)
+    points = squares(data)
+    assert len(points) == 2
+    before = data
+    data = tap(points[0])
+    page.evaluate('() => queue')
+    assert data['levels_completed'] == 1 and data['available_actions'] == [6]
+    changed = {(x, y) for y in range(64) for x in range(64)
+               if before['frame'][y][x] != data['frame'][y][x]}
+    x, y = points[0]
+    assert changed == {(x-1, y-1), (x, y-1), (x-1, y), (x, y)}
+    assert sum(row.count(0) for row in data['frame']) == 184
+    assert_native_pixels(page, data)
+    assert_display_pixels(page, data)
+    capture(page, f'click-level-2-one-marker-{name}')
+    page.clock.pause_at('2024-01-01T10:00:00')
+    data = tap(points[1])
+    assert len(data['frames']) == 2
+    assert sum(row.count(0) for row in data['frames'][0]) == 188
+    # Wait for the real UI to paint its native completion frame, before its timer advances.
+    page.wait_for_function("""() => current.levels_completed === 2 &&
+        Array.from(ctx.getImageData(0,0,64,64).data).filter((v,i,a) =>
+            i%4 === 0 && v === 255 && a[i+1] === 255 && a[i+2] === 255).length === 188""")
+    transition = dict(data, frame=data['frames'][0])
+    for x, y in points:
+        assert all(transition['frame'][yy][xx] == 0 for xx, yy in
+                   ((x-1, y-1), (x, y-1), (x-1, y), (x, y)))
+    assert_native_pixels(page, transition)
+    assert_display_pixels(page, transition)
+    capture(page, f'click-level-2-two-markers-{name}')
+    native = page.locator('#game').evaluate('canvas => canvas.toDataURL()')
+    (ROOT / 'artifacts/square-cross' / f'click-level-2-two-markers-{name}-native.png').write_bytes(
+        base64.b64decode(native.split(',', 1)[1]))
+    page.clock.run_for(100)
+    page.evaluate('() => queue')
+    assert data['levels_completed'] == 2 and data['state'] == 'NOT_FINISHED'
+    assert data['available_actions'] == [1, 2, 3, 4]
+    assert sum(row.count(0) for row in data['frame']) == 180
+    assert_native_pixels(page, data)
+    expect(page.locator('#level')).to_have_text('LEVEL 3 / 5')
+    expect(page.locator('#up')).to_be_enabled()
+    expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'true')
+    assert not errors, errors
+    print(f'PASS {name}: real si01-v1 levels 1–2, click-only controls, one tap/one ACTION6, one/two native markers and transition to level 3/5')
+
+
 def check_selection(page, url, name, session):
     errors, writes = [], []
     page.on('pageerror', lambda error: errors.append(str(error)))
@@ -587,8 +695,8 @@ def check_selection(page, url, name, session):
     page.goto(url)
     page.evaluate('() => queue')
     directions = {1: 'Up', 2: 'Down', 3: 'Left', 4: 'Right'}
-    for level in (2, 3):
-        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 3')
+    for level in (4, 5):
+        expect(page.locator('#level')).to_have_text(f'LEVEL {level} / 5')
         expect(page.locator('#click-control')).to_have_attribute('aria-disabled', 'false')
         scene = session.env._game.scene
         for action, coordinates in reference_actions(scene, level):
@@ -624,10 +732,10 @@ def check_selection(page, url, name, session):
                 native = page.locator('#game').evaluate('canvas => canvas.toDataURL()')
                 output = ROOT / 'artifacts/square-cross' / f'selection-level-{level}-{name}-native.png'
                 output.write_bytes(base64.b64decode(native.split(',', 1)[1]))
-    assert data['state'] == 'WIN' and data['levels_completed'] == data['win_levels'] == 3
+    assert data['state'] == 'WIN' and data['levels_completed'] == data['win_levels'] == 5
     expect(page.locator('#message')).to_contain_text('WIN')
     assert not errors, errors
-    print(f'PASS {name}: real si01-v1 levels 2–3, scaled selection, four white pixels, exact native/display frames, D-pad delivery and WIN')
+    print(f'PASS {name}: real si01-v1 levels 4–5, scaled selection, four white pixels, exact native/display frames, D-pad delivery and WIN')
 
 
 @contextmanager
@@ -684,6 +792,10 @@ def main():
                             page.close()
                 for name, viewport in (("mobile", {"width": 390, "height": 844}),
                                        ("desktop", {"width": 1280, "height": 900})):
+                    with running_server('--originals-dir', empty, '--game', 'si01-v1') as url:
+                        page = browser.new_page(viewport=viewport, has_touch=True)
+                        check_intro_clicks(page, url, name)
+                        page.close()
                     with running_selection_server() as (url, session):
                         page = browser.new_page(viewport=viewport, has_touch=True)
                         check_selection(page, url, name, session)

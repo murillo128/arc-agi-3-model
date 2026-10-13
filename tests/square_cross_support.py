@@ -30,9 +30,9 @@ def fixture(**changes):
     return Scene(**values)
 
 
-def assert_seed_baseline(test, game_class, historical_levels):
+def assert_seed_baseline(test, game_class, historical_levels, *, local_start=1):
     baseline = json.loads((ROOT / 'tests/fixtures/square_cross_seed_baseline.json').read_text())
-    for level, historical in enumerate(historical_levels, 1):
+    for level, historical in enumerate(historical_levels, local_start):
         digest = hashlib.sha256()
         for seed in range(baseline['seeds']):
             game = game_class(seed)

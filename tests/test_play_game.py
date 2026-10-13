@@ -26,7 +26,7 @@ class LauncherTests(unittest.TestCase):
                                   cwd=cwd, env=env, capture_output=True, text=True, timeout=20)
 
     def test_sdk_finite_and_cwd_independent(self):
-        for game, total, limit in ((None, 5, 0), (None, 5, 100), ('si01-v1', 3, 0), ('si01-v1', 3, 100)):
+        for game, total, limit in ((None, 5, 0), (None, 5, 100), ('si01-v1', 5, 0), ('si01-v1', 5, 100)):
             with self.subTest(game=game, limit=limit):
                 result = self.command('--mode', 'sdk', '--seed', '42', '--max-actions', str(limit),
                                       *(['--game', game] if game else []))
@@ -57,14 +57,14 @@ try:
     ids = [info.game_id for info in arcade.get_environments()]
     assert len(ids) == len(set(ids)), ids
     assert sorted(ids) == ['sc01-v1', 'si01-v1'], ids
-    for game, total in (('sc01-v1', 5), ('si01-v1', 3)):
+    for game, total in (('sc01-v1', 5), ('si01-v1', 5)):
         env = arcade.make(game, seed=42)
         assert env is not None, game
         frame = env.observation_space
         assert frame.game_id == game, frame.game_id
         assert frame.win_levels == total, frame.win_levels
         assert frame.levels_completed == 0, frame.levels_completed
-        assert frame.available_actions == [1, 2, 3, 4], frame.available_actions
+        assert frame.available_actions == ([6] if game == "si01-v1" else [1, 2, 3, 4]), frame.available_actions
         assert frame.frame[-1].shape == (64, 64), frame.frame[-1].shape
 finally:
     arcade.close_scorecard()
@@ -242,16 +242,62 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(self.state(), before)
         self.assertEqual(self.action('ACTION2').status_code, 200)
 
+    def test_click_curriculum_validation_markers_native_frames_and_reset(self):
+        initial = self.select('si01-v1', 'synthetic').get_json()
+        self.assertEqual((initial['available_actions'], initial['win_levels']), ([6], 5))
+        self.assertEqual(initial['frame'], self.session.env.observation_space.frame[-1].tolist())
+        for bad in ({}, {'x': 0}, {'y': 0}, {'x': 0, 'y': 0, 'extra': 1}, [], None):
+            self.assertEqual(self.action('ACTION6', data=bad).status_code, 400)
+        for key in ('x', 'y'):
+            for invalid in (-1, 64, 1.0, True, '1', None):
+                self.assertEqual(self.action('ACTION6', data={'x': 0, 'y': 0, key: invalid}).status_code, 400)
+        for arrow in range(1, 5):
+            self.assertEqual(self.action(f'ACTION{arrow}').status_code, 400)
+        self.assertEqual(self.state(), initial)
+        x, y = self.session.env._game.scene.players[0][0]  # Test-only geometry.
+        level_two = self.action('ACTION6', data={'x': x, 'y': y}).get_json()
+        self.assertEqual((level_two['levels_completed'], level_two['state'], level_two['available_actions']),
+                         (1, 'NOT_FINISHED', [6]))
+        self.assertEqual(level_two['frames'][-1], level_two['frame'])
+        a, b = [p for p, _ in self.session.env._game.scene.players]
+        first = self.action('ACTION6', data=dict(zip(('x', 'y'), a))).get_json()
+        changed = {(x, y) for y in range(64) for x in range(64)
+                   if first['frame'][y][x] != level_two['frame'][y][x]}
+        x, y = a
+        self.assertEqual(changed, {(x-1, y-1), (x, y-1), (x-1, y), (x, y)})
+        self.assertEqual((first['levels_completed'], first['available_actions']), (1, [6]))
+        self.assertEqual(self.session.env._game.remaining, 24)
+        reset = self.action('RESET').get_json()
+        self.assertEqual(reset['frame'], level_two['frame'])
+        self.assertEqual(reset['available_actions'], [6])
+        self.assertNotEqual(reset['epoch'], first['epoch'])
+        self.assertEqual(self.client.post('/play/action', json={
+            'action': 'ACTION6', 'data': dict(zip(('x', 'y'), b)), 'epoch': first['epoch']}).status_code, 409)
+        self.assertEqual(self.state(), reset)
+        self.action('ACTION6', data=dict(zip(('x', 'y'), a)))
+        result = self.action('ACTION6', data=dict(zip(('x', 'y'), b))).get_json()
+        self.assertEqual((result['levels_completed'], result['state'], result['available_actions']),
+                         (2, 'NOT_FINISHED', [1, 2, 3, 4]))
+        self.assertEqual(sum(row.count(0) for row in result['frames'][0]), 188)
+        self.assertEqual(sum(row.count(0) for row in result['frame']), 180)
+        self.assertEqual(result['frame'], self.session.env.observation_space.frame[-1].tolist())
+
     def test_real_both_games_through_public_actions(self):
-        for game, total in (('sc01-v1', 5), ('si01-v1', 3)):
+        for game, total in (('sc01-v1', 5), ('si01-v1', 5)):
             with self.subTest(game=game):
                 initial = self.select(game, 'synthetic').get_json()
                 self.assertEqual(initial['win_levels'], total)
                 for level in range(1, total + 1):
                     state = self.state()
                     self.assertEqual(state['levels_completed'], level - 1)
-                    clickable = game == 'si01-v1' and level >= 2
-                    self.assertEqual(state['available_actions'], [1, 2, 3, 4] + ([6] if clickable else []))
+                    clickable = game == 'si01-v1' and level != 3
+                    expected = ([6] if game == 'si01-v1' and level <= 2 else
+                                [1, 2, 3, 4] + ([6] if clickable else []))
+                    self.assertEqual(state['available_actions'], expected)
+                    if expected == [6]:
+                        for arrow in range(1, 5):
+                            self.assertEqual(self.action(f'ACTION{arrow}').status_code, 400)
+                            self.assertEqual(self.state(), state)
                     self.assertEqual(set(state), set(initial))  # No geometry/selection identity in JSON.
                     if not clickable:
                         self.assertEqual(self.action('ACTION6', data={'x': 0, 'y': 0}).status_code, 400)
@@ -267,14 +313,14 @@ class ProtocolTests(unittest.TestCase):
                                 self.assertEqual(self.state(), before)
                         response = self.action(f'ACTION{action}', **({'data': data} if data is not None else {}))
                         self.assertEqual(response.status_code, 200)
-                        if action == 6:
+                        if action == 6 and level >= 4:
                             after = response.get_json()['frame']
                             changed = {(x, y) for y in range(64) for x in range(64)
                                        if before['frame'][y][x] != after[y][x]}
                             x, y = data['x'], data['y']
                             self.assertEqual(changed, {(x-1, y-1), (x, y-1), (x-1, y), (x, y)})
                             self.assertTrue(all(after[y][x] == 0 for x, y in changed))
-                    if game == 'si01-v1' and level < 3:
+                    if game == 'si01-v1' and level in (3, 4):
                         # Unselected arrows spend budget. RESET restores the new
                         # local level, marker-free frame and advertised ACTION6.
                         before = self.state()
@@ -288,22 +334,22 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(self.action('ACTION1').status_code, 409)
                 reset = self.action('RESET').get_json()
                 self.assertEqual(reset['frame'], initial['frame'])
-                self.assertEqual(reset['available_actions'], [1, 2, 3, 4])
+                self.assertEqual(reset['available_actions'], initial['available_actions'])
 
     def test_synthetic_switch_discards_progress_and_rejects_stale_actions(self):
         basic = self.state()
         self.action('ACTION4')
         advanced = self.select('si01-v1', 'synthetic').get_json()
         self.assertNotEqual(advanced['epoch'], basic['epoch'])
-        self.assertEqual(advanced['win_levels'], 3)
+        self.assertEqual(advanced['win_levels'], 5)
         self.assertEqual(advanced['levels_completed'], 0)
-        self.assertEqual(advanced['available_actions'], [1, 2, 3, 4])
+        self.assertEqual(advanced['available_actions'], [6])
         self.assertNotEqual(advanced['frame'], basic['frame'])
         self.assertEqual(advanced['frame'], self.session.env.observation_space.frame[-1].tolist())
         self.assertEqual(self.client.post('/play/action', json={
             'action': 'ACTION4', 'epoch': basic['epoch']}).status_code, 409)
         self.assertEqual(self.state(), advanced)
-        self.action('ACTION1')
+        self.action('ACTION6', data={'x': 0, 'y': 0})
         reset = self.action('RESET').get_json()
         self.assertEqual(reset['frame'], advanced['frame'])
         returned = self.select('sc01-v1', 'synthetic').get_json()

@@ -202,7 +202,7 @@ function draw(data) {
     data.state === 'GAME_OVER' ? 'GAME_OVER · Restart to try again.' : '';
   const syntheticHelp = {
     'sc01-v1': 'Five levels: move the square’s centre onto the cross, regardless of colour. Infer the stride, avoid solid obstacles and ignore background speckles. Every arrow spends one move, even when blocked. Restart retries the current level; after a win, it starts at level 1.',
-    'si01-v1': 'Three interaction levels: move each square’s centre onto its cross. In levels 1 and 3, match colours: touching a different-colour cross ends the attempt. In levels 2–3, tap a square to select it (white marker); tap again or tap empty space to deselect. Level 3 requires delivering both squares. Clicks are free; every arrow spends one move, even when blocked or unselected. Restart retries the current level; after a win, it starts at level 1.'
+    'si01-v1': 'Five interaction levels: level 1, tap the solid square; level 2, select both squares simultaneously. Each tap toggles that square; empty space clears selection. No arrows or crosses in these two levels. In levels 3–5, move each square’s centre onto its cross. In levels 3 and 5, match colours: touching a different-colour cross ends the attempt. In levels 4–5, tap a square to select it exclusively (white marker); tap again or tap empty space to deselect. Level 5 requires delivering both squares. Clicks are free; every arrow spends one move, even when blocked or unselected. Restart retries the current level; after a win, it starts at level 1.'
   };
   document.querySelector('#game-help').textContent = (data.source === 'synthetic' && syntheticHelp[data.game]) ||
     'Explore the game and infer its rules from the screen and the available actions.';

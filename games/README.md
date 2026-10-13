@@ -6,7 +6,9 @@ are discovered by the SDK:
 
 - [Square Cross](square_cross/README.md), `sc01-v1`: five perception/navigation levels.
 - [Square Cross Interactions](square_cross_interactions/README.md), `si01-v1`:
-  three colour/selection levels, transferred from former Square Cross levels 6–8.
+  five levels: click one square, select two simultaneously, then three
+  colour/navigation tasks transferred from former Square Cross levels 6–8.
+  Selection in the later tasks remains exclusive.
 
 These games are not held-out evaluation games and do not change the repository's
 training/evaluation splits. No learning or training is performed by the launcher.
@@ -157,7 +159,9 @@ python -m unittest discover -s tests -p 'test_play_game.py' -v
 ```
 
 The engine tests cover literal boundary fixtures and 64 seeds across five basic
-and three interaction levels. Compact pre-split scene/frame fingerprints also
+and five interaction levels. The new click-only scenes have no targets and keep
+a full bar; 64-seed checks verify solid squares, separated hitboxes, palette, HUD
+and reset. Compact pre-split scene/frame fingerprints also
 verify exact seed compatibility against revision `7411e2f`.
 An independent test-only pixel-footprint BFS checks every pixel along each stride;
 bar fixtures check every decrement through a 128-action budget on all four edges.
@@ -190,11 +194,14 @@ checks native dropdown opening, grouped labels, real cross-source selection,
 scaled edge clicks, one tap/one action, per-observation control changes, actual
 SDK animation ordering/cancellation and shared-tab conflict recovery. Level/WIN
 response fixtures test presentation only; the engine tests own completion proof.
-An additional real synthetic lane starts `si01-v1`, completes level 1 through
-the SDK, then taps squares and uses the D-pad to deliver both pairs. It checks the exact four white
+A real introductory lane starts `si01-v1` at level 1, taps the square and selects
+both squares on level 2, checking the two-marker native transition and disabled
+arrows. An isolated advanced lane enters level 4 through real SDK actions,
+then taps squares and uses the D-pad to deliver both pairs. It checks the exact
+four white
 selection pixels against both native canvas data and displayed pixels, and saves
-native 64×64 marker images plus mobile/desktop screenshots for levels 2–3,
-ending at WIN 3/3. The picker lane checks both synthetic titles, native frames,
+native 64×64 marker images plus mobile/desktop screenshots for levels 4–5,
+ending at WIN 5/5. The picker lane checks both synthetic titles, native frames,
 level counters, help and controls when switching between them.
 
 To add genuine **offline ls20** browser smoke on a provisioned public cache:
