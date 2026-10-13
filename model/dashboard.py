@@ -227,7 +227,7 @@ class BehaviorMonitor(LogMonitor):
         point = numbers(row, ('round', 'epoch', 'epochs', 'updates', 'records', 'loss', 'event_ce',
                               'value_bce', 'q_bce', 'episodes', 'wins', 'actions', 'seconds', 'horizon',
                               'win_rate', 'actions_per_success', 'actions_per_second', 'decision_ms'))
-        for key in ('policy', 'split'):
+        for key in ('policy', 'split', 'role'):
             if key in row:
                 point[key] = str(row[key])[:40]
         if event == 'behavior_collection':

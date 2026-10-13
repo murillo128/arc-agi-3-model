@@ -215,12 +215,13 @@ class DashboardTests(unittest.TestCase):
                     {'event': 'behavior_collection', 'round': 1, 'actions': 20, 'episodes': 3},
                     {'event': 'behavior_fit', 'round': 1, 'epoch': 1, 'loss': 2., 'event_ce': .8, 'value_bce': .6, 'q_bce': .6},
                     {'event': 'behavior_evaluation', 'split': 'development', 'policy': 'random', 'episodes': 10, 'wins': 2, 'actions': 90},
-                    {'event': 'behavior_evaluation', 'split': 'final', 'policy': 'mpc', 'episodes': 20, 'wins': 7, 'wilson95': [.18, .57]},
+                    {'event': 'behavior_evaluation', 'split': 'final', 'policy': 'mpc', 'role': 'initial', 'episodes': 20, 'wins': 7, 'wilson95': [.18, .57]},
                     {'event': 'behavior_finished', 'world_unchanged': True})
         data = monitor.snapshot()
         self.assertEqual(data['progress']['collection']['actions'], 20)
         self.assertEqual([r['split'] for r in data['evaluations']], ['development', 'final'])
         self.assertEqual(data['evaluations'][1]['wilson95'], [.18, .57])
+        self.assertEqual(data['evaluations'][1]['role'], 'initial')
         self.assertNotIn('decision_ms', data['evaluations'][1])
         self.assertEqual(data['phase'], 'behavior_finished')
         self.assertTrue(data['run']['world_unchanged'])

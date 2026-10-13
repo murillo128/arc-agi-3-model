@@ -7,7 +7,7 @@ const pct = value => finite(value) ? `${fmt(value * 100, 2)} %` : '—';
 const percentValue = value => finite(value) ? value * 100 : null;
 const scalar = value => !finite(value) ? '—' : value !== 0 && Math.abs(value) < .001 ? value.toExponential(2) : fmt(value, 4);
 const levelName = value => value === null ? 'Nativo' : fmt(value);
-const colors = ['#77dabb', '#f4b979', '#a9a6ef', '#94a7aa'];
+const colors = ['#77dabb', '#f4b979', '#a9a6ef', '#94a7aa', '#ed94bb', '#72c8ec'];
 const phases = {waiting: 'Esperando métricas', initializing: 'Inicializando', ready: 'Modelo preparado',
   progress: 'Entrenando · según el log', resumed: 'Entrenamiento reanudado', validation: 'Validación recibida',
   validation_finished: 'Validación terminada', stopped: 'Entrenamiento detenido'};
@@ -37,6 +37,7 @@ class Chart {
     this.suffix = suffix;
     this.legend.replaceChildren(...series.map((s, i) => {
       const span = document.createElement('span'); span.className = `series-${i}`;
+      span.style.color = colors[i % colors.length];
       span.textContent = s.name; return span;
     }));
     if (finite(threshold)) {
@@ -79,7 +80,7 @@ class Chart {
       ctx.moveTo(left, y(this.threshold)); ctx.lineTo(right, y(this.threshold)); ctx.stroke(); ctx.setLineDash([]);
     }
     this.series.forEach((s, i) => {
-      ctx.strokeStyle = colors[i]; ctx.fillStyle = colors[i]; ctx.lineWidth = 1.8; ctx.beginPath();
+      ctx.strokeStyle = colors[i % colors.length]; ctx.fillStyle = colors[i % colors.length]; ctx.lineWidth = 1.8; ctx.beginPath();
       let connected = false;
       for (const p of s.points) {
         if (!finite(p.x) || !finite(p.y)) { connected = false; continue; }
@@ -221,13 +222,16 @@ const splitNames = {final: 'Final', development: 'Desarrollo', evaluation_only: 
 const behaviorPhases = {behavior_started: 'Preparando', behavior_collection: 'Recogiendo experiencia real',
   behavior_fit: 'Entrenando goal / valor', behavior_evaluation_progress: 'Evaluando',
   behavior_evaluation: 'Evaluación recibida', behavior_finished: 'Experimento terminado', waiting: 'Esperando datos'};
-function policyName(row) { return row.policy === 'random' ? 'Azar' : row.policy === 'q' ? 'Q' : `MPC · ${fmt(row.horizon)} pasos`; }
+function policyName(row) {
+  const name = row.policy === 'random' ? 'Azar' : row.policy === 'q' ? 'Q' : `MPC · ${fmt(row.horizon)} pasos`;
+  return row.role === 'initial' ? `Inicial · ${name}` : name;
+}
 let behaviorFilterManual = false;
 function renderBehavior(b) {
   if (!behaviorFilterManual && b?.evaluations.length) $('behavior-split').value = b.evaluations.at(-1).split;
   const split = $('behavior-split').value;
   const rows = (b?.evaluations || []).filter(r => r.split === split);
-  const learned = rows.findLast(r => r.policy !== 'random'), baseline = rows.findLast(r => r.policy === 'random');
+  const learned = rows.findLast(r => r.policy !== 'random' && r.role !== 'initial'), baseline = rows.findLast(r => r.policy === 'random');
   const collection = b?.progress.collection, fit = b?.progress.fit;
   const evaluation = b?.progress.evaluation;
   const complete = b?.phase === 'behavior_finished';
@@ -255,7 +259,7 @@ function renderBehavior(b) {
   const fits = b?.fits || [];
   behaviorCharts.loss.set([['Total', 'loss'], ['Eventos', 'event_ce'], ['Valor V', 'value_bce'], ['Acción Q', 'q_bce']].map(([name, key]) =>
     ({name, points: fits.map((r, i) => ({x: i + 1, y: r[key]}))})), undefined, '', 'época registrada');
-  behaviorCharts.wins.set([...new Set(rows.map(policyName))].slice(0, 4).map(name =>
+  behaviorCharts.wins.set([...new Set(rows.map(policyName))].map(name =>
     ({name, points: rows.flatMap((r, i) => policyName(r) === name ? [{x: i + 1, y: percentValue(r.win_rate)}] : [])})), undefined, ' %', 'evaluación');
   const body = $('behavior-table'); body.replaceChildren();
   for (const r of rows.slice(-100)) {

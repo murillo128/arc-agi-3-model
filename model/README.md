@@ -75,13 +75,14 @@ CUDA exige `torch.compile` y usa BF16 cuando está disponible; `--device cpu`
 ejercita el mismo contrato sin compilación. Las primeras compilaciones entran
 en los tiempos medidos. Cada ronda conserva el mejor candidato aprendido de desarrollo,
 recoge experiencia real nueva con exploración epsilon=.25 y vuelve a ajustar
-los readouts. La primera ronda recoge al azar. Desarrollo y evaluación final
+los readouts. Sin inicialización, la primera ronda recoge al azar. Desarrollo y evaluación final
 usan semillas distintas del entrenamiento. La evaluación final se hace una
 vez tras seleccionar el candidato; no entrena ni guarda replay.
 
 `report.json` contiene recuentos, semillas, acciones, tiempos e intervalos de
 Wilson; `heads.pt` solo añade pesos de comportamiento, la huella del mundo y
-configuración. El replay de latentes reales es FIFO en RAM, máximo 8192
+configuración. Al completar cada ronda guarda el mejor candidato de desarrollo;
+al terminar añade su evaluación final. El replay de latentes reales es FIFO en RAM, máximo 8192
 transiciones por defecto (aproximadamente 4 GiB para este modelo), y desaparece
 al salir. La memoria recurrente `h` se reinicia por partida. Se imprimen eventos
 JSON de recogida, ajuste y evaluación. No escribe al dashboard del trainer del
@@ -97,6 +98,33 @@ Para evaluar esos readouts sin entrenamiento adicional:
   --output model/runs/goal-planner/evaluation \
   --game sc01-v1 --level 2 --device cuda --seed-offset 20000
 ```
+
+Para continuar aprendiendo desde sus pesos, usar **`--init-heads`**, incompatible
+con `--heads` (que sigue siendo solo evaluación):
+
+```sh
+.venv/bin/python -u -m model.behavior_experiment \
+  --checkpoint model/runs/active-training/latest.pt \
+  --init-heads model/runs/goal-planner/more-experience/heads.pt \
+  --output model/runs/goal-planner/continuation \
+  --game sc01-v1 --level 2 --device cuda --seed-offset 30000 \
+  --train-episodes 512 --rounds 4 --epochs 12 --max-records 16384 \
+  --dev-episodes 64 --final-episodes 256 --horizons 1 2
+```
+
+Se exige la misma huella del mundo, juego y nivel. El optimizador y la memoria de
+experiencia empiezan vacíos: es una continuación desde pesos, no la restauración
+exacta de una ejecución interrumpida. La política inicial conserva su configuración
+y participa como candidata (iteración 0); las nuevas usan el beam solicitado y el
+descuento/muestreo de clics inicial. El entrenamiento usa ese mismo descuento.
+Desde la primera ronda se recogen acciones con la mejor política y exploración.
+Si los candidatos nuevos empeoran en desarrollo, conserva los pesos iniciales.
+
+La comparación final usa las mismas semillas nuevas para azar, política inicial
+y política elegida, sin actualizaciones. La fila/serie **Inicial** del panel es
+una referencia separada; no sustituye el resultado del candidato nuevo.
+`initial_head_fingerprint` y `head_fingerprint` identifican los pesos comparados.
+El mundo, encoder y decoder siguen completamente congelados.
 
 Se rechaza una huella de mundo distinta y un output que ya contenga resultados.
 Para nuevas iteraciones, elegir semillas nuevas con `--seed-offset`; no tratar
@@ -132,6 +160,56 @@ Los errores visuales del predictor no son estas tasas de victoria. Ambos
 experimentos verificaron la huella del mundo sin cambios; los pesos nuevos y
 reportes detallados quedan solo en `model/runs/goal-planner/`. No se deja un
 entrenamiento indefinido en marcha ni se reanuda el currículo del mundo.
+
+### Continuación desde las cabezas guardadas
+
+Con el mismo mundo congelado, se continuó desde `more-experience/heads.pt`:
+cuatro rondas × 512 partidas, 12 épocas por ronda, FIFO de 16384 transiciones,
+64 partidas de desarrollo y 256 finales, `--seed-offset 30000`. Se recogieron
+**50485 acciones reales** (2048 partidas, 450 avances de nivel). El optimizador
+se inicializó de nuevo y no se recuperó replay anterior.
+
+| Desarrollo (victorias / 64) | Q | MPC-1 | MPC-2 |
+| --- | --- | --- | --- |
+| Ronda 1 | 10 | 17 | 12 |
+| Ronda 2 | 6 | 9 | 12 |
+| Ronda 3 | **26** | 17 | 19 |
+| Ronda 4 | 18 | 20 | 21 |
+
+En ese desarrollo, la inicial MPC-1 ganó 13 y azar 19. Se seleccionó Q de la
+tercera ronda antes de abrir el conjunto final. La cuarta no sobrescribió esos
+pesos. Las 256 semillas finales fueron las mismas para las tres políticas:
+
+| Política | Victorias | Acciones totales | Acciones por victoria, incluidos fallos | ms/decisión |
+| --- | --- | --- | --- | --- |
+| Azar | 63/256 (24,61%) | 6967 | 110,59 | 0,002 |
+| MPC-1 inicial | 53/256 (20,70%) | 6572 | 124,00 | 6,08 |
+| Q seleccionado | 73/256 (28,52%) | 6223 | 85,25 | 1,09 |
+
+Q ganó 47 pares que perdió la inicial y perdió 27 que esta ganó. Frente al azar,
+los pares exclusivos fueron 50 a favor de Q y 40 del azar: **todavía no demuestra
+una ventaja clara sobre el azar**. La selección directa fue mejor en desarrollo
+que la imaginación de uno/dos pasos; esto no demuestra que aumentar el horizonte
+vaya a resolver la diferencia. No hay evaluación de generalización a otros juegos.
+
+La evaluación final se hizo con la RTX 4070 Ti limitada a **150 W**: Q tardó
+33,08 s (188,14 acciones/s) e inicial MPC 68,84 s (95,47 acciones/s). Son velocidades
+de evaluación, no de backpropagation. El límite se redujo desde 250 W durante la
+recogida de la cuarta ronda; los costes entre rondas no son una comparación
+controlada de velocidad. Posteriormente se bajó a 100 W por petición del usuario;
+estas cifras no son un benchmark a 100 W.
+
+La huella del mundo anterior se verificó idéntica y ningún parámetro del mundo
+recibió gradiente. La cabeza pasó de
+`e88ba13d86eb7b3321209c6fa63546d05ad91f71207d2b8be3649394642d69e4` a
+`9bacb378189a700fea416b173577909b3f0902aad77bc0cb766d9a753a921b3f`.
+Los resultados y pesos están en el directorio local ignorado
+`model/runs/goal-planner/continuation/`. No cambia la arquitectura de inferencia
+de `architecture.json`; cambia la inicialización y selección del experimento.
+La partida de inspección independiente con seed **9357821** terminó en WIN tras
+12 acciones. Se exportó con predicción visual y diagnóstico Q anteriores a cada
+acción; Q registra una elección, no una trayectoria imaginada de varios pasos.
+La muestra no se usó para seleccionar pesos ni para calcular las tasas anteriores.
 
 ### Referencias para las siguientes iteraciones
 

@@ -1,12 +1,13 @@
 """Public outcome, frozen-weight and independent planning-oracle contracts."""
 from contextlib import nullcontext, redirect_stderr
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 import random
 import io
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -20,6 +21,7 @@ from model.learning import Engine, State
 from model.networks import WorldModel
 from model.planning import GoalValue, PlanConfig, Planner, candidates, fingerprint, freeze, outcome, returns
 from model.behavior_trace import record_episode
+from model import checkpoint
 from arc3.traces import encode_attempt, decode_attempt
 
 
@@ -28,6 +30,84 @@ def obs(state='NOT_FINISHED', completed=0):
 
 
 class Contracts(unittest.TestCase):
+    def test_initialization_and_evaluation_only_are_mutually_exclusive(self):
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            main(['--checkpoint', '/not-read.pt', '--output', '/not-created',
+                  '--heads', '/eval.pt', '--init-heads', '/train.pt'])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_continuation_retains_initial_candidate_and_keeps_source_immutable(self):
+        torch.set_num_threads(2)
+        net = WorldModel(NetworkConfig.small())
+        source = fingerprint(net)
+        heads = GoalValue(16, 32)
+        original = fingerprint(heads)
+        config = PlanConfig(horizon=1, beam=2, clicks=3, discount=.8)
+        evaluations, collections, fits = [], [], []
+
+        def fake_evaluate(engine, planner, factory, level, seeds, steps, mode, **kwargs):
+            # Independent selection oracle: the loaded head wins; every newly
+            # fitted candidate loses. Also captures correct matched final seeds.
+            intact = fingerprint(planner.heads) == original
+            evaluations.append((kwargs, list(seeds), intact, planner.config))
+            return {'policy': mode, 'horizon': planner.config.horizon,
+                    'wins': int(intact), 'actions': 2, 'decision_ms': 1.}
+
+        def fake_collect(engine, factory, level, seeds, steps, discount, records, policy=None, **kwargs):
+            collections.append((discount, policy.config, fingerprint(policy.heads)))
+            return {'episodes': 1, 'wins': 1, 'actions': 1}
+
+        def fake_fit(engine, trained, *args, **kwargs):
+            self.assertEqual(fingerprint(engine.model), source)
+            self.assertTrue(all(not p.requires_grad and p.grad is None for p in engine.model.parameters()))
+            if fits:
+                # A completed round is recoverable before the next fit or final
+                # evaluation. No source replay or optimizer is needed to load it.
+                recovery = checkpoint.load(root / 'continued/heads.pt')
+                self.assertEqual(len(recovery['report']['collection']), 1)
+                self.assertEqual(recovery['report']['head_fingerprint'], original)
+                self.assertNotIn('final_learned', recovery['report'])
+            fits.append(True)
+            with torch.no_grad():
+                trained.value.weight.add_(1.)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            world, initial = root / 'world.pt', root / 'initial.pt'
+            checkpoint.write(world, {'network': asdict(net.config), 'training': asdict(TrainConfig()),
+                                    'weights': net.state_dict(), 'progress': {'actions': 17}})
+            save_heads(initial, heads, source, config,
+                       {'config': {'game': 'sc01-v1', 'level': 2}, 'selected': {'policy': 'mpc'}})
+            initial_bytes, world_bytes = initial.read_bytes(), world.read_bytes()
+            argv = ['--checkpoint', str(world), '--output', str(root / 'continued'),
+                    '--init-heads', str(initial), '--device', 'cpu', '--rounds', '2',
+                    '--train-episodes', '1', '--dev-episodes', '1', '--final-episodes', '1', '--seed-offset', '30000']
+            with patch('model.behavior_experiment.evaluate', side_effect=fake_evaluate), \
+                 patch('model.behavior_experiment.collect', side_effect=fake_collect), \
+                 patch('model.behavior_experiment.fit', side_effect=fake_fit):
+                main(argv)
+            saved = load_heads(root / 'continued/heads.pt', heads, source, game='sc01-v1', level=2)
+            self.assertEqual(fingerprint(heads), original)
+            self.assertEqual(saved['planner'], asdict(config))
+            self.assertEqual(saved['report']['selected'], {'iteration': 0, 'policy': 'mpc', 'horizon': 1})
+            self.assertEqual(saved['report']['head_fingerprint'], original)
+            self.assertTrue(saved['report']['world_unchanged'])
+            self.assertEqual(collections, [(.8, config, original)] * 2)
+            finals = [row for row in evaluations if row[0].get('split') == 'final']
+            self.assertEqual([row[1] for row in finals], [[8060001]] * 3)
+            self.assertTrue(all(row[2] for row in finals))
+            self.assertEqual(finals[1][0]['role'], 'initial')
+            self.assertEqual(initial.read_bytes(), initial_bytes)
+            self.assertEqual(world.read_bytes(), world_bytes)
+            for game, level in [('si01-v1', 2), ('sc01-v1', 1)]:
+                with self.assertRaisesRegex(ValueError, 'same game and level'):
+                    load_heads(initial, heads, source, game=game, level=level)
+            with patch('model.behavior_experiment.evaluate', side_effect=fake_evaluate), \
+                 patch('model.behavior_experiment.collect', side_effect=AssertionError('evaluation must not collect')), \
+                 patch('model.behavior_experiment.fit', side_effect=AssertionError('evaluation must not fit')):
+                main(['--checkpoint', str(world), '--output', str(root / 'eval'), '--heads', str(initial),
+                      '--device', 'cpu', '--final-episodes', '1'])
+
     def test_public_games_fail_closed_before_loading_any_checkpoint(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             main(['--checkpoint', '/not-read.pt', '--output', '/not-created', '--game', 'ls20-9607627b'])
