@@ -778,6 +778,86 @@ imagen objetivo. `Q` muestra una sola elección sin trayectoria imaginada; el
 horizonte MPC se lee del checkpoint de comportamiento. `--device cpu` permite
 inspección sin CUDA. La CLI sigue limitada a los dos juegos sintéticos admitidos.
 
+La ruta opt-in `--goal-planning` sí propone una **hipótesis de objetivo visual**:
+
+```sh
+.venv/bin/python -m model.behavior_trace \
+  --checkpoint /usr/local/src/arc-agi-3-model/model/runs/active-training/latest.pt \
+  --heads /usr/local/src/arc-agi-3-model/model/runs/goal-planner/multilevel/heads.pt \
+  --goal-planning --goal-horizon 8 --goal-beam 4 --goal-lifetime 8 \
+  --plan-horizon 4 --plan-beam 4 --seed 9426301 --level 3 --steps 128 \
+  --output model/runs/issue52/goal-level3.arc3
+```
+
+`goal_planning.py` primero busca desde el estado real causal con el readout SDK
+congelado y guarda el mejor sucesor entre profundidades 1..8. Después, una búsqueda
+independiente de horizonte 4 elige la rama final por `exp(-MSE(z, goal_z))`, con
+MSE en FP32 sobre todas las entradas; V no se mezcla en ese ranking. Conserva el
+mismo tensor objetivo durante 8 acciones reales, observa y replantea. `reset()`
+limpia el objetivo al comenzar otra partida; `after_real_action()` avanza su edad
+y limpia en RESET, frontera SDK o terminación. También se renueva al cambiar la
+geometría. La proximidad nunca declara victoria.
+
+El decoder recibe el objetivo exacto y los sucesores retenidos de la rama elegida,
+antes de la acción. Las imágenes son diagnósticos sin influencia en el ranking:
+objetivo y último frame del plan siguen separados. No hay red nueva, entrenamiento,
+optimizador ni replay. La CLI compara ambos fingerprints antes/después. CUDA usa
+Engine con compile/BF16; `--device cpu` permite redes pequeñas. Horizontes, beams
+y clicks admiten 1..64; vida 1..1024. Los defaults y pesos de q/mpc siguen vigentes
+sin el flag. Esto es un diseño experimental adoptado, no una reproducción de un
+paper ni una solución garantizada al descubrimiento de objetivos desconocidos.
+
+Pruebas funcionales y fixture de red pequeña en CPU (sin suite visual):
+
+```sh
+PYTHONPATH=src:tests .venv/bin/python -m unittest model.tests.test_planning model.tests.test_goal_planning tests/test_arc3_codec.py
+.venv/bin/python viewer/tests/generate_fixtures.py --goal-network
+cd viewer
+npm test
+npm run build
+```
+
+Inspección congelada del 2026-10-14: una partida por nivel, seeds fijados antes
+de exportar, presupuesto 128, propuesta 8/4, plan 4/4 y vida 8. Sin selección de
+victorias ni reentrenamiento. El viewer publicado conserva los ejemplos previos.
+
+| Nivel / viewer | Seed | Acciones | Terminación SDK | Wall s | Mediana decisión ms |
+| --- | --- | --- | --- | --- | --- |
+| [3](https://murillo128.hopto.org:8443/arc3-viewer/?file=https%3A%2F%2Fmurillo128.hopto.org%3A8443%2Farc3-viewer%2Fexamples%2Fgoal-level3.arc3) | 9426301 | 43 | GAME_OVER | 52.641 | 91.409 |
+| [4](https://murillo128.hopto.org:8443/arc3-viewer/?file=https%3A%2F%2Fmurillo128.hopto.org%3A8443%2Farc3-viewer%2Fexamples%2Fgoal-level4.arc3) | 9426401 | 108 | GAME_OVER | 54.992 | 89.551 |
+| [5](https://murillo128.hopto.org:8443/arc3-viewer/?file=https%3A%2F%2Fmurillo128.hopto.org%3A8443%2Farc3-viewer%2Fexamples%2Fgoal-level5.arc3) | 9426501 | 33 | GAME_OVER | 45.635 | 93.095 |
+
+Las tres exportaciones sumaron 153.268 s de tiempo de partida registrado,
+incluyendo inicialización/compile; no son un benchmark de latencia. Las máximas
+decisiones fueron 28.795, 23.630 y 23.157 s. GPU mantuvo el límite de 100 W y
+no se alteraron otros procesos. Ambos fingerprints fueron idénticos antes/después:
+
+- Mundo: `72b2f1dbbf74bc0c4faf02ae16a7dcb50fb04696523bfa7f3c04d3f1138248ad`.
+- Readout: `3061a1f100893f4587881df35554751d90cbaf0778bb22d6ac5c3f41c945611a`.
+
+Archivos ignorados en `model/runs/issue52/`; tamaños 13.185, 29.002 y 14.620 bytes.
+SHA-256 (nivel 3/4/5):
+
+```text
+82b4ebbb08cf7e1738244345ed8a2769c5a95f12591f3eb13e7c0338c3af23b6
+c75c128e80c70b57260fafd6d5f1bed0875e68578c31221e47d20bc60983efda
+09377228053e09dcb96f01ed043b99716194e0f63af082715ad97864a1f5aee4
+```
+
+Codec verificó modo/objetivo, acciones y geometría; la creación del objetivo
+se renovó en posiciones 0,8,16… y sus bytes se mantuvieron durante cada vida.
+Objetivo y endpoint difirieron visualmente en 43/43, 107/108 y 33/33 decisiones.
+Descargas HTTPS de los tres archivos y assets (HTML, JS/CSS, worker/WASM) coincidieron
+byte por byte con la compilación y los archivos locales. La inferencia y las
+imágenes siguen siendo hipótesis: las tres partidas fallaron y no establecen una
+mejora de éxito ni generalización.
+
+Validación: 42 pruebas de planning/goal/codec, 27 pruebas de codec/fixtures,
+223 pruebas Vitest y build/type-check. Fixture CPU de red real conserva imágenes,
+acciones y distancias al pasar por Python y TypeScript. El validador existente
+de LMEX acepta el grafo con 1.739 nodos / 2.968 edges y cobertura parcial previa.
+No se ejecutaron pruebas visuales/browser.
+
 El primer sample de esta extensión, seed 9200517, tuvo 24 acciones y GAME_OVER
 con el MPC de horizonte 1 guardado; se verificaron intactos pesos del mundo y
 del evaluador. Es una muestra de inspección, no una evaluación de rendimiento.

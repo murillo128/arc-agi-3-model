@@ -5,8 +5,24 @@ the learned SDK-progress goal proxy, pre-action state value/selected score,
 progress/continue/GAME_OVER estimates, and the selected action sequence. Only
 the first action was executed from that snapshot; remaining actions are imagined.
 The real SDK result is displayed separately. Q mode has one choice and no
-imagined successor; MPC shows successor values. These are uncalibrated estimates,
-not a supplied goal image or inferred symbolic game rule.
+imagined successor; MPC shows successor values. These are uncalibrated estimates.
+
+The opt-in exporter `--goal-planning` writes `latent_goal` / `goal_mpc`: a fixed
+imagined goal hypothesis, its creation position/age and current latent distance,
+plus ordered decoded plan successors with their actions and goal distances. The
+viewer shows the real pre-action reference, goal hypothesis and plan endpoint
+separately; the later SDK result stays distinct. Selected score is
+`exp(-terminal goal distance)`, while V/event estimates retain their SDK meanings.
+Only the first action executes, and each real action records a fresh plan.
+Missing legacy images display “Not recorded”; switching decisions/files clears
+old canvases. Images are inspection of the exact tensors used for planning,
+not a symbolic rule or guaranteed winning target.
+
+Generate a small actual-network CPU conformance sample with
+`../.venv/bin/python tests/generate_fixtures.py --goal-network` from `viewer/`,
+then run `npm test` and `npm run build`. The generated sample is also decoded by
+TypeScript and compared with the complete Python roundtrip, including ordered
+frames/actions/distances. Ordinary fixture generation remains model-independent.
 
 Generate a real sample with `python -m model.behavior_trace` (see
 [model documentation](../model/README.md#exportar-el-goal-y-el-plan-al-viewer)).

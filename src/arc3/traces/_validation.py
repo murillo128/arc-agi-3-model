@@ -154,10 +154,34 @@ def representation(value: object, path: str, cap: int) -> None:
         state_tensor(value[key], path + "." + key, cap)
 
 
-def planning(value: object, path: str, executed: dict) -> None:
+def palette_board(value: object, path: str, cap: int) -> None:
+    tensor(value, path, cap, rank=2)
+    if value['dtype'] != 'u8' or any(v > 15 for v in value['data']):
+        fail(path, 'expected absolute u8 palette board (0..15)')
+
+
+def planning(value: object, path: str, executed: dict, cap: int, position: int, previous: dict) -> None:
     mapping(value, path, ('objective', 'mode', 'horizon', 'beam', 'discount', 'state_value', 'selected_score', 'steps'))
-    enum(value['objective'], path + '.objective', ('sdk_level_progress',))
-    enum(value['mode'], path + '.mode', ('q', 'mpc'))
+    enum(value['objective'], path + '.objective', ('sdk_level_progress', 'latent_goal'))
+    enum(value['mode'], path + '.mode', ('q', 'mpc', 'goal_mpc'))
+    goal_mode = value['mode'] == 'goal_mpc'
+    if goal_mode != (value['objective'] == 'latent_goal'):
+        fail(path, 'incompatible objective/mode')
+    if goal_mode:
+        goal = value.get('goal')
+        mapping(goal, path + '.goal', ('source', 'created_position', 'proposal_score', 'distance', 'frame'))
+        enum(goal['source'], path + '.goal.source', ('imagined_proposal',))
+        integer(goal['created_position'], path + '.goal.created_position', 0, position)
+        number(goal['proposal_score'], path + '.goal.proposal_score', 0)
+        if goal['proposal_score'] > 1:
+            fail(path + '.goal.proposal_score', 'value outside [0, 1]')
+        number(goal['distance'], path + '.goal.distance', 0)
+        palette_board(goal['frame'], path + '.goal.frame', cap)
+        observed = previous['frames']['shape']
+        if not observed[0] or observed[1:] != goal['frame']['shape']:
+            fail(path + '.goal.frame', 'goal geometry must match causal real board')
+    elif 'goal' in value:
+        fail(path + '.goal', 'legacy planning modes have no goal')
     integer(value['horizon'], path + '.horizon', 1, 64)
     integer(value['beam'], path + '.beam', 1)
     for key in ('discount', 'state_value', 'selected_score'):
@@ -178,8 +202,16 @@ def planning(value: object, path: str, executed: dict) -> None:
                     fail(dest + '.' + key, 'probability/value outside [0, 1]')
         if abs(sum(item[k] for k in ('continue', 'progress', 'game_over')) - 1) > 1e-5:
             fail(dest, 'event probabilities must sum to one')
-        if (value['mode'] == 'mpc') != ('successor_value' in item):
+        if (value['mode'] != 'q') != ('successor_value' in item):
             fail(dest, 'only MPC records the imagined successor value')
+        if goal_mode:
+            mapping(item, dest, ('frame', 'goal_distance'))
+            palette_board(item['frame'], dest + '.frame', cap)
+            if item['frame']['shape'] != goal['frame']['shape']:
+                fail(dest + '.frame', 'goal/plan geometry must match')
+            number(item['goal_distance'], dest + '.goal_distance', 0)
+    if goal_mode and abs(value['selected_score'] - math.exp(-value['steps'][-1]['goal_distance'])) > 1e-5:
+        fail(path + '.selected_score', 'score contradicts terminal goal distance')
     first = value['steps'][0]['action']
     if first['id'] != executed['id'] or first['data'] != executed['data']:
         fail(path + '.steps[0].action', 'first planned action differs from executed action')
@@ -194,7 +226,7 @@ def extension_diagnostics(step: dict, path: str, cap: int, observations: list[di
     if "policy_mode" in step:
         enum(step["policy_mode"], path + ".policy_mode", ("random", "learned"))
     if 'planning' in step:
-        planning(step['planning'], path + '.planning', step['action'])
+        planning(step['planning'], path + '.planning', step['action'], cap, step['index'], observations[-1])
     prediction = step.get("prediction", {})
     dest = path + ".prediction"
     if "dynamics" in prediction:

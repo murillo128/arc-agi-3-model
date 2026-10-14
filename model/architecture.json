@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-frozen-world-goal-planner",
+  "architecture_revision": "arc3-explicit-visual-goal-planner",
   "name": "ARC3 agent architecture",
   "scope": "high_level_world_model_and_behavior_components",
   "coverage": "partial",
@@ -118446,12 +118446,17 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Implemented experimental policy. Uniform legal exploration collects real episodes. Goal/value heads learn public outcome labels and discounted returns; all world weights stay frozen. A greedy Q readout is the cheap diagnostic; latent beam MPC evaluates one/two steps, executes one action and corrects memory from reality. Current legality is reused within the short rollout: future legality is unknown. No decoder, imagined replay targets, or game-specific rules. CLI currently admits bundled synthetic training games only.",
+      "description": "Implemented experimental policy. Uniform legal exploration collects real episodes. Goal/value heads learn public outcome labels and discounted returns; all world weights stay frozen. A greedy Q readout is the cheap diagnostic; latent beam MPC evaluates one/two steps, executes one action and corrects memory from reality. Current legality is reused within the short rollout: future legality is unknown. No decoder, imagined replay targets, or game-specific rules. CLI currently admits bundled synthetic training games only. Opt-in model/goal_planning.py adds proposal -> held goal z -> separate distance-only reaching with diagnostic decoding. Existing q/mpc training/selection remains unchanged; no training or replay during export.",
       "children": [
         "behavior.planner.records",
         "behavior.planner.learner",
         "behavior.planner.search",
-        "behavior.planner.readout"
+        "behavior.planner.readout",
+        "behavior.planner.proposal",
+        "behavior.planner.goal_cache",
+        "behavior.planner.goal_search",
+        "behavior.planner.goal_decode",
+        "behavior.planner.goal_trace"
       ]
     },
     {
@@ -120184,6 +120189,273 @@
       "attributes": [],
       "operation": "scores",
       "formula": "scores = pack(value, events, q)"
+    },
+    {
+      "id": "behavior.planner.proposal",
+      "label": "Goal Proposal",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "valid_actions",
+          "label": "valid_actions",
+          "direction": "input",
+          "value_type": "ActionId[V]",
+          "shape": null
+        },
+        {
+          "id": "predicted_state",
+          "label": "predicted_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "scores",
+          "label": "scores",
+          "direction": "input",
+          "value_type": "Value[B], event probabilities[B,3], action value[B]",
+          "shape": null
+        },
+        {
+          "id": "readout_query",
+          "label": "readout_query",
+          "direction": "output",
+          "value_type": "Batched latent states, candidate action features float32[B,12], native geometry",
+          "shape": null
+        },
+        {
+          "id": "query_state",
+          "label": "query_state",
+          "direction": "output",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "query_action",
+          "label": "query_action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "proposed_goal",
+          "label": "proposed_goal",
+          "direction": "output",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Opt-in GoalPlanner: frozen beam search from causal real z/h. Horizon 8, beam 4 by default. Rank accumulated discounted progress plus surviving bootstrap V; retain best successor across depths 1..H with stable ties. Propose before the separate reaching search; no real future, semantic rule or guaranteed success."
+    },
+    {
+      "id": "behavior.planner.goal_cache",
+      "label": "Held goal z",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "proposed_goal",
+          "label": "proposed_goal",
+          "direction": "input",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        },
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "experience",
+          "label": "experience",
+          "direction": "input",
+          "value_type": "Real SDK experience",
+          "shape": null
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "output",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Copy exact proposal tensor. Fixed for 8 executed real actions by default. Explicit reset at episode start/RESET; clear at observed SDK level/termination, geometry change or TTL. Proximity/expiry never means SDK success."
+    },
+    {
+      "id": "behavior.planner.goal_search",
+      "label": "Goal-conditioned Planner",
+      "kind": "operation",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "valid_actions",
+          "label": "valid_actions",
+          "direction": "input",
+          "value_type": "ActionId[V]",
+          "shape": null
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "input",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        },
+        {
+          "id": "predicted_state",
+          "label": "predicted_state",
+          "direction": "input",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "scores",
+          "label": "scores",
+          "direction": "input",
+          "value_type": "Value[B], event probabilities[B,3], action value[B]",
+          "shape": null
+        },
+        {
+          "id": "readout_query",
+          "label": "readout_query",
+          "direction": "output",
+          "value_type": "Batched latent states, candidate action features float32[B,12], native geometry",
+          "shape": null
+        },
+        {
+          "id": "query_state",
+          "label": "query_state",
+          "direction": "output",
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], geometry}",
+          "shape": null
+        },
+        {
+          "id": "query_action",
+          "label": "query_action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "value_type": "Action",
+          "shape": null
+        },
+        {
+          "id": "selected_latents",
+          "label": "selected_latents",
+          "direction": "output",
+          "value_type": "Exact selected branch z[H,P,1024], geometry",
+          "shape": null
+        },
+        {
+          "id": "plan",
+          "label": "plan",
+          "direction": "output",
+          "value_type": "Selected actions, distances, SDK V/event diagnostic estimates",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Opt-in reaching search: default horizon 4, beam 4. Final-depth exp(-FP32 latent MSE to held goal) alone ranks branches; SDK V/events are separate diagnostics. Independent recurrent h per branch. Retain exact selected successors, execute first action then replan from reality. Decoder does not rank.",
+      "operation": "goal_search",
+      "formula": "score = exp(-mean((z_successor.float32 - goal_z.float32)^2))"
+    },
+    {
+      "id": "behavior.planner.goal_decode",
+      "label": "Frozen Diagnostic Decoding",
+      "kind": "operation",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "input",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        },
+        {
+          "id": "selected_latents",
+          "label": "selected_latents",
+          "direction": "input",
+          "value_type": "Exact selected branch z[H,P,1024], geometry",
+          "shape": null
+        },
+        {
+          "id": "frames",
+          "label": "frames",
+          "direction": "output",
+          "value_type": "Absolute u8[H+1,height,width] palette boards",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "After choice, inspection-only Engine.decode calls the existing frozen world decoder on exact held goal and retained selected branch tensors, before real execution. No recomputation and no ranking feedback.",
+      "operation": "goal_decode",
+      "formula": "frames = argmax(frozen_decoder(concat(goal_z, selected_z), geometry), color)"
+    },
+    {
+      "id": "behavior.planner.goal_trace",
+      "label": "Goal / Plan Snapshot",
+      "kind": "state",
+      "parent_id": "behavior.planner",
+      "ports": [
+        {
+          "id": "frames",
+          "label": "frames",
+          "direction": "input",
+          "value_type": "Absolute u8[H+1,height,width] palette boards",
+          "shape": null
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "input",
+          "value_type": "Exact detached goal z[P,1024], geometry, proposal_score, created_position",
+          "shape": null
+        },
+        {
+          "id": "plan",
+          "label": "plan",
+          "direction": "input",
+          "value_type": "Selected actions, distances, SDK V/event diagnostic estimates",
+          "shape": null
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "behavior_trace records the goal hypothesis separately from ordered imagined plan images/actions/distances. Real observations and SDK outcomes remain separate. Optional minor-1 planning objective latent_goal / mode goal_mpc; no latent arrays persisted."
     }
   ],
   "edges": [
@@ -155512,6 +155784,294 @@
       "target": {
         "node_id": "behavior.planner.readout",
         "port_id": "scores"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2944",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2945",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "valid_actions"
+      },
+      "target": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "valid_actions"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2946",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "predicted_state"
+      },
+      "target": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "predicted_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2947",
+      "source": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "query_state"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2948",
+      "source": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "query_action"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2949",
+      "source": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "readout_query"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "readout_query"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2950",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "scores"
+      },
+      "target": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "scores"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2951",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2952",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "valid_actions"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "valid_actions"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2953",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "predicted_state"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "predicted_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2954",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "query_state"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2955",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "query_action"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "query_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2956",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "readout_query"
+      },
+      "target": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "readout_query"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2957",
+      "source": {
+        "node_id": "behavior.planner.readout",
+        "port_id": "scores"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "scores"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2958",
+      "source": {
+        "node_id": "behavior.planner.proposal",
+        "port_id": "proposed_goal"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "proposed_goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2959",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2960",
+      "source": {
+        "node_id": "behavior.planner",
+        "port_id": "experience"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "experience"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2961",
+      "source": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2962",
+      "source": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_decode",
+        "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2963",
+      "source": {
+        "node_id": "behavior.planner.goal_cache",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_trace",
+        "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2964",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "behavior.planner",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2965",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "selected_latents"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_decode",
+        "port_id": "selected_latents"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.2966",
+      "source": {
+        "node_id": "behavior.planner.goal_decode",
+        "port_id": "frames"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_trace",
+        "port_id": "frames"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "visual_goal.plan_snapshot",
+      "source": {
+        "node_id": "behavior.planner.goal_search",
+        "port_id": "plan"
+      },
+      "target": {
+        "node_id": "behavior.planner.goal_trace",
+        "port_id": "plan"
       },
       "kind": "data"
     }

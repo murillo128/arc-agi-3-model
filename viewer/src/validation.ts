@@ -102,10 +102,28 @@ function representation(value: Input, path: string, cap: number): WireMap {
   for (const key of ['z', 'h']) stateTensor(r[key], `${path}.${key}`, cap);
   return r;
 }
-function planning(value: Input, path: string, executed: WireMap): void {
+function paletteBoard(value: Input, path: string, cap: number): WireMap {
+  const t = tensor(value, path, cap, 2);
+  if (t.dtype !== 'u8' || (t.data as Uint8Array).some(v => v > 15)) fail(path, 'expected absolute u8 palette board (0..15)');
+  return t;
+}
+function planning(value: Input, path: string, executed: WireMap, cap: number, position: number, previous: WireMap): void {
   const p = map(value, path, ['objective', 'mode', 'horizon', 'beam', 'discount', 'state_value', 'selected_score', 'steps']);
-  choice(p.objective, `${path}.objective`, ['sdk_level_progress']);
-  choice(p.mode, `${path}.mode`, ['q', 'mpc']);
+  choice(p.objective, `${path}.objective`, ['sdk_level_progress', 'latent_goal']);
+  choice(p.mode, `${path}.mode`, ['q', 'mpc', 'goal_mpc']);
+  const goalMode = p.mode === 'goal_mpc';
+  if (goalMode !== (p.objective === 'latent_goal')) fail(path, 'incompatible objective/mode');
+  let goal: WireMap | undefined;
+  if (goalMode) {
+    goal = map(p.goal, `${path}.goal`, ['source', 'created_position', 'proposal_score', 'distance', 'frame']);
+    choice(goal.source, `${path}.goal.source`, ['imagined_proposal']);
+    integer(goal.created_position, `${path}.goal.created_position`, 0, position);
+    if (number(goal.proposal_score, `${path}.goal.proposal_score`, 0) > 1) fail(`${path}.goal.proposal_score`, 'value outside [0, 1]');
+    number(goal.distance, `${path}.goal.distance`, 0);
+    const frame = paletteBoard(goal.frame, `${path}.goal.frame`, cap);
+    const observed = (previous.frames as WireMap).shape as number[], shape = frame.shape as number[];
+    if (!observed[0] || observed[1] !== shape[0] || observed[2] !== shape[1]) fail(`${path}.goal.frame`, 'goal geometry must match causal real board');
+  } else if (Object.hasOwn(p, 'goal')) fail(`${path}.goal`, 'legacy planning modes have no goal');
   integer(p.horizon, `${path}.horizon`, 1, 64); integer(p.beam, `${path}.beam`, 1);
   for (const key of ['discount', 'state_value', 'selected_score']) {
     const v = number(p[key], `${path}.${key}`, 0);
@@ -122,8 +140,16 @@ function planning(value: Input, path: string, executed: WireMap): void {
     }
     const sum = ['continue', 'progress', 'game_over'].reduce((s, k) => s + number(item[k], `${dest}.${k}`), 0);
     if (Math.abs(sum - 1) > 1e-5) fail(dest, 'event probabilities must sum to one');
-    if ((p.mode === 'mpc') !== Object.hasOwn(item, 'successor_value')) fail(dest, 'only MPC records the imagined successor value');
+    if ((p.mode !== 'q') !== Object.hasOwn(item, 'successor_value')) fail(dest, 'only MPC records the imagined successor value');
+    if (goalMode) {
+      map(item, dest, ['frame', 'goal_distance']);
+      const frame = paletteBoard(item.frame, `${dest}.frame`, cap);
+      if (!sameShape(frame, goal!.frame as WireMap)) fail(`${dest}.frame`, 'goal/plan geometry must match');
+      number(item.goal_distance, `${dest}.goal_distance`, 0);
+    }
   });
+  if (goalMode && Math.abs(number(p.selected_score, `${path}.selected_score`) - Math.exp(-number((steps.at(-1) as WireMap).goal_distance, `${path}.steps.goal_distance`))) > 1e-5)
+    fail(`${path}.selected_score`, 'score contradicts terminal goal distance');
   const first = (steps[0] as WireMap).action as WireMap;
   const a = first.data as WireMap, b = executed.data as WireMap;
   if (first.id !== executed.id || Object.keys(a).length !== Object.keys(b).length || Object.keys(a).some(k => a[k] !== b[k]))
@@ -135,7 +161,7 @@ function extensionDiagnostics(step: WireMap, path: string, cap: number, observat
     if (!(((step.observation as WireMap).frames as WireMap).shape as number[])[0]) fail(`${path}.representation`, 'real representation requires a visual result');
   }
   if (Object.hasOwn(step, 'policy_mode')) choice(step.policy_mode, `${path}.policy_mode`, ['random', 'learned']);
-  if (Object.hasOwn(step, 'planning')) planning(step.planning, `${path}.planning`, step.action as WireMap);
+  if (Object.hasOwn(step, 'planning')) planning(step.planning, `${path}.planning`, step.action as WireMap, cap, step.index as number, observations.at(-1)!);
   const p = (step.prediction ?? {}) as WireMap, dest = `${path}.prediction`;
   if (Object.hasOwn(p, 'dynamics')) {
     const d = map(p.dynamics, `${dest}.dynamics`, ['z', 'h', 'delta_z', 'h_next']);
