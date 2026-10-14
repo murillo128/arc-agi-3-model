@@ -259,7 +259,8 @@ function renderBehavior(b) {
   if (!behaviorFilterManual) {
     const latest = levelRows.findLast(r => r.policy !== 'random' && r.role !== 'initial');
     const availableSplit = latest?.split
-      || (b?.phase === 'behavior_evaluation_progress' ? evaluation?.split : null) || levelRows.at(-1)?.split;
+      || evaluation?.split || levelRows.at(-1)?.split
+      || ({training: 'development', evaluation_only: 'evaluation_only'})[b?.run.mode];
     if (availableSplit) $('behavior-split').value = availableSplit;
   }
   const split = $('behavior-split').value;
@@ -283,10 +284,14 @@ function renderBehavior(b) {
   $('behavior-episodes').textContent = `Ronda ${fmt(collection?.round)} · ${fmt(collection?.episodes)} partidas · ${fmt(collection?.wins)} victorias · ${fmt(collection?.records)} transiciones en memoria${perLevel ? ' · ' + perLevel : ''}`;
   $('behavior-loss').textContent = scalar(fit?.loss);
   $('behavior-epoch').textContent = `Ronda ${fmt(fit?.round)} · época ${fmt(fit?.epoch)}/${fmt(fit?.epochs)} · ${fmt(fit?.updates)} actualizaciones de la ronda`;
-  const pending = !learned && b?.phase === 'behavior_evaluation_progress' && evaluation?.split === split;
-  $('behavior-win').textContent = pending ? 'En curso' : pct(learned?.win_rate);
+  const evaluating = !learned && b?.source.available && b.phase === 'behavior_evaluation_progress' && evaluation?.split === split;
+  const awaiting = !learned && b?.source.available && ['behavior_started', 'behavior_collection', 'behavior_fit',
+    'behavior_world_verified', 'behavior_evaluation'].includes(b.phase);
+  $('behavior-win').textContent = evaluating ? 'En curso' : awaiting ? 'Pendiente' : pct(learned?.win_rate);
   $('behavior-wins').textContent = learned ? `${policyName(learned)} · ${fmt(learned.wins)}/${fmt(learned.episodes)} · ${splitNames[split]}`
-    : pending ? `Esperando el resultado completo de ${splitNames[split]}; progreso de la evaluación indicado arriba` : 'Sin evaluación aprendida en esta fase';
+    : evaluating ? `Esperando el resultado completo de ${splitNames[split]}; progreso de la evaluación indicado arriba`
+    : awaiting ? `Evaluación aprendida pendiente de ${splitNames[split]}; aún no se ha registrado un resultado completo para este nivel y fase`
+    : 'Sin evaluación aprendida en esta fase';
   $('behavior-random').textContent = pct(baseline?.win_rate);
   $('behavior-random-wins').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitNames[split]}` : 'Sin evaluación al azar en esta fase';
   $('behavior-ms').textContent = fmt(learned?.decision_ms, 2);

@@ -48,6 +48,78 @@ const behavior = {phase: 'behavior_evaluation_progress', source: {available: tru
 const data = {phase: 'stopped', reason: 'interrupted', source: {available: true, age_seconds: 1000},
   run: {game: 'old-world-run'}, progress: {}, progress_points: [], validations: [], events: [], behavior};
 (async () => {
+  // A completed random baseline precedes the first collection/fitting cycle.
+  const firstCycle = {phase: 'stopped', reason: 'interrupted', source: {available: true, age_seconds: 1000},
+    run: {}, progress: {}, progress_points: [], validations: [], events: [],
+    behavior: {phase: 'behavior_evaluation', source: {available: true, age_seconds: 2},
+      run: {game: 'sc01-v1', levels: [3, 4, 5], mode: 'training', world_trainable: 0},
+      progress: {collection: {round: 1, episodes: 16, actions: 500},
+        evaluation: {split: 'development', policy: 'random', level: null, episodes: 96, wins: 6, win_rate: .0625}},
+      evaluations: [{split: 'development', policy: 'random', level: null, episodes: 96, wins: 6, win_rate: .0625}], fits: []}};
+  const first = await dashboard(firstCycle);
+  for (const [phase, status] of [
+    ['behavior_evaluation', 'Evaluación recibida'],
+    ['behavior_collection', 'Recogiendo experiencia real'], ['behavior_fit', 'Entrenando goal / valor'],
+    ['behavior_world_verified', 'Pesos del mundo verificados']
+  ]) {
+    firstCycle.behavior.phase = phase;
+    await vm.runInContext('poll()', first.context);
+    assert.equal(first.nodes.get('behavior-split').value, 'development');
+    assert.equal(first.text('connection'), status);
+    assert.equal(first.text('behavior-win'), 'Pendiente', 'first candidate remains pending through collection and fitting');
+    assert.match(first.text('behavior-wins'), /Evaluación aprendida pendiente.*Desarrollo/);
+    assert.doesNotMatch(first.text('behavior-wins'), /progreso de la evaluación indicado arriba/);
+    assert.equal(first.text('behavior-actions'), '500');
+    assert.match(first.text('behavior-random-wins'), /6\/96.*Desarrollo/);
+    assert.equal(first.text('behavior-ms'), '—');
+    assert.equal(vm.runInContext('behaviorCharts.wins.series.length', first.context), 1);
+    assert.equal(vm.runInContext('behaviorCharts.wins.series[0].points[0].y', first.context), 6.25);
+  }
+  const manual = await dashboard(firstCycle);
+  manual.change('behavior-split', 'final');
+  firstCycle.behavior.phase = 'behavior_evaluation_progress';
+  firstCycle.behavior.progress.evaluation = {split: 'development', policy: 'q', episodes: 16, wins: 4};
+  await vm.runInContext('poll()', first.context);
+  await vm.runInContext('poll()', manual.context);
+  assert.equal(first.text('behavior-win'), 'En curso', 'candidate evaluation has actually started');
+  assert.match(first.text('behavior-wins'), /Esperando el resultado completo de Desarrollo/);
+  assert.equal(manual.nodes.get('behavior-split').value, 'final');
+  assert.equal(manual.text('behavior-win'), '—', 'development progress is not a final result');
+  assert.equal(manual.text('behavior-random'), '—');
+  firstCycle.behavior.phase = 'behavior_evaluation';
+  const candidate = {split: 'development', policy: 'q', role: 'candidate', level: null,
+    episodes: 96, wins: 24, win_rate: .25, decision_ms: 2};
+  firstCycle.behavior.progress.evaluation = candidate;
+  firstCycle.behavior.evaluations.push(candidate);
+  await vm.runInContext('poll()', first.context);
+  assert.equal(first.text('behavior-win'), '25 %');
+  assert.match(first.text('behavior-wins'), /Q.*24\/96.*Desarrollo/);
+  assert.equal(vm.runInContext('behaviorCharts.wins.series.find(s => s.name === "Q").points[0].y', first.context), 25);
+  await vm.runInContext('poll()', manual.context);
+  assert.equal(manual.nodes.get('behavior-split').value, 'final');
+  assert.equal(manual.text('behavior-win'), 'Pendiente');
+  assert.match(manual.text('behavior-wins'), /Evaluación aprendida pendiente.*Final/);
+  assert.equal(vm.runInContext('behaviorCharts.wins.series.length', manual.context), 0);
+  first.change('behavior-level', '3');
+  assert.equal(first.text('behavior-win'), 'Pendiente', 'aggregate candidate is not a result for level 3');
+  assert.equal(first.text('behavior-random'), '—');
+  assert.equal(vm.runInContext('behaviorCharts.wins.series.length', first.context), 0);
+  firstCycle.behavior.phase = 'behavior_finished';
+  await vm.runInContext('poll()', first.context);
+  assert.equal(first.text('behavior-win'), '—', 'finished run cannot claim a missing result is still pending');
+
+  for (const [mode, split] of [['training', 'development'], ['evaluation_only', 'evaluation_only']]) {
+    const preparation = {...firstCycle, behavior: {phase: 'behavior_started', source: {available: true, age_seconds: 2},
+      run: {game: 'sc01-v1', levels: [3, 4, 5], mode}, progress: {}, evaluations: [], fits: []}};
+    const preparing = await dashboard(preparation);
+    assert.equal(preparing.nodes.get('behavior-split').value, split);
+    assert.equal(preparing.text('connection'), 'Preparando');
+    assert.equal(preparing.text('behavior-win'), 'Pendiente');
+    assert.equal(preparing.text('behavior-random'), '—');
+    preparation.behavior.source.available = false;
+    await vm.runInContext('poll()', preparing.context);
+    assert.equal(preparing.text('behavior-win'), '—', 'missing log cannot imply a pending evaluation');
+  }
   for (const [evaluation, phaseName] of [
     [{split: 'development', policy: 'random', episodes: 16, wins: 2}, 'Desarrollo'],
     [{split: 'evaluation_only', policy: 'random', episodes: 16, wins: 1}, 'Aislada']
