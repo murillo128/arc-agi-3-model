@@ -413,8 +413,16 @@ class Learner:
                                 rollout_pairs.append((zs[t - 1], history_h[t - 1][0],
                                     episode_actions[t - 1], episode_actions[t], next_z, before.shape))
                     if current is not None:
-                        with torch.no_grad() if t < burn_in else nullcontext():
-                            h, _ = e.advance(current[None], h, episode_actions[t:t + 1])
+                        if t < burn_in:
+                            with torch.no_grad():
+                                h, _ = e.advance(current[None], h, episode_actions[t:t + 1])
+                        else:
+                            # Compiled BF16 recurrence otherwise saves a fresh
+                            # cast of its large matrices for every history step.
+                            # Recompute those intermediates during backward;
+                            # preserve the complete recurrent gradient chain.
+                            h, _ = activation_checkpoint(e.advance, current[None], h,
+                                episode_actions[t:t + 1], use_reentrant=False)
                         if t + 1 == burn_in:
                             h = h.detach().requires_grad_(True)
                     if next_z is not None:

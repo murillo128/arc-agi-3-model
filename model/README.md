@@ -134,6 +134,11 @@ numéricas. Una prueba piloto no demuestra generalización a otros juegos.
 Las entradas compiladas de dinámica separan entrenamiento diferenciable e
 inferencia, compartiendo los mismos parámetros y conservando el límite normal
 de caché. No se sustituye silenciosamente la compilación por ejecución eager.
+El historial recurrente recalcula sus activaciones durante backward mediante
+checkpointing, incluido el camino compilado. Así evita conservar una copia BF16
+de las matrices recurrentes por cada paso de una partida larga, manteniendo la
+cadena completa de gradientes; no introduce truncado de memoria ni cambia el
+objetivo de aprendizaje.
 
 El dashboard admite `--campaign-log model/runs/architecture-evolution/campaign.log`
 además de sus logs existentes. Muestra el progreso por variante/semilla, presupuesto,

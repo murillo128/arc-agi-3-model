@@ -11,6 +11,7 @@ from model.config import NetworkConfig, TrainConfig
 from model.data import Action, Episode, Observation, Replay
 from model.learning import Engine, Learner, evaluate_rollouts
 from model.networks import WorldModel
+from torch.utils.checkpoint import checkpoint
 
 
 torch.set_num_threads(2)
@@ -26,6 +27,31 @@ def episode():
 
 
 class RolloutTests(unittest.TestCase):
+    def test_recomputed_history_preserves_joint_frozen_and_burn_in_gradients(self):
+        data = Episode([observation(i % 12 + 1) for i in range(9)], [Action(1)] * 8)
+        for frozen in (False, True):
+            for burn_in in (0, 2):
+                with self.subTest(frozen=frozen, burn_in=burn_in):
+                    config = TrainConfig(freeze_representation=frozen, burn_in_steps=burn_in,
+                                         rollout_weight=.5, loss_steps=2)
+                    models = [WorldModel(NetworkConfig.small()) for _ in range(2)]
+                    models[1].load_state_dict(models[0].state_dict())
+                    results = []
+                    for model, recompute in zip(models, (False, True)):
+                        engine = Engine(model, config)
+                        def checkpoint_or_reference(function, *args, **kwargs):
+                            if function == engine.advance and not recompute:
+                                return function(*args)
+                            return checkpoint(function, *args, **kwargs)
+                        torch.manual_seed(91)
+                        with patch('model.learning.activation_checkpoint', side_effect=checkpoint_or_reference):
+                            results.append(Learner(engine).update([data]))
+                    self.assertAlmostEqual(results[0]['loss'], results[1]['loss'], places=5)
+                    for (name, expected), actual in zip(models[0].named_parameters(), models[1].parameters()):
+                        self.assertEqual(expected.grad is None, actual.grad is None, name)
+                        if expected.grad is not None:
+                            torch.testing.assert_close(actual.grad, expected.grad, atol=2e-6, rtol=2e-4, msg=name)
+
     def test_endpoint_loss_uses_predicted_state_and_memory_with_unbroken_gradient(self):
         model = WorldModel(NetworkConfig.small())
         config = TrainConfig(rollout_weight=.5, loss_steps=1, freeze_representation=True,
