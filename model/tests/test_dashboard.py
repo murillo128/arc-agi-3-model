@@ -237,6 +237,16 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot['progress']['evaluation']['wins'], 7)
         self.assertEqual(snapshot['executions'][0]['evaluation']['episodes'], 16)
         self.assertEqual(snapshot['evaluations'], [], 'partial evaluation is not a completed campaign result')
+        self.append(dict(progress, episodes=0, wins=0, actions=3, current_episode=1,
+                         total_episodes=32, episode_actions=3, episode_budget=128,
+                         seconds=2.25, episode_seconds=2.25, game='si01-v1', pair_index=6, pair_count=10))
+        live = monitor.snapshot()['progress']
+        self.assertEqual(live['actions'], 16384)
+        self.assertEqual(live['evaluation']['actions'], 3)
+        self.assertEqual(live['evaluation']['current_episode'], 1)
+        self.assertEqual(live['evaluation']['pair_count'], 10)
+        self.assertEqual(live['evaluation']['game'], 'si01-v1')
+        self.assertEqual(live['evaluation']['seconds'], 2.25)
         self.append(dict(progress, event='behavior_evaluation', episodes=32, wins=14,
                          actions=3000, decision_ms=120, actions_per_second=8))
         self.assertEqual(monitor.snapshot()['progress']['evaluation']['decision_ms'], 120)

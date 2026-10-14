@@ -32,6 +32,39 @@ def obs(state='NOT_FINISHED', completed=0):
 
 
 class Contracts(unittest.TestCase):
+    def test_evaluation_reports_actions_without_counting_unfinished_episodes(self):
+        clock, events, executed = [0.], [], []
+
+        class TelemetryFactory:
+            def make(self, seed, level):
+                count = 0
+
+                def step(action):
+                    nonlocal count
+                    count += 1
+                    clock[0] += .75
+                    executed.append((seed, action))
+                    return obs(('WIN' if seed == 1 else 'GAME_OVER') if count == 5 else 'NOT_FINISHED')
+
+                return SimpleNamespace(observation=obs(), step=step)
+
+        with patch('model.behavior_experiment.time.monotonic', side_effect=lambda: clock[0]), \
+                patch('model.behavior_experiment.emit', side_effect=lambda event, **data: events.append((event, data))):
+            report = evaluate(None, SimpleNamespace(config=SimpleNamespace(horizon=2)),
+                              TelemetryFactory(), 1, [1, 2], 10, 'random', split='dev', role='campaign')
+        progress = [row for event, row in events if event == 'behavior_evaluation_progress']
+        self.assertEqual([(r['episodes'], r['actions']) for r in progress],
+                         [(0, 0), (0, 3), (1, 5), (1, 5), (1, 8), (2, 10)])
+        self.assertEqual([r['wins'] for r in progress], [0, 0, 1, 1, 1, 1])
+        self.assertEqual(progress[1]['current_episode'], 1)
+        self.assertEqual(progress[1]['episode_actions'], 3)
+        self.assertEqual(progress[1]['total_episodes'], 2)
+        self.assertEqual(progress[1]['seconds'], 2.25)
+        self.assertFalse(progress[1]['episode_complete'])
+        self.assertTrue(progress[-1]['episode_complete'])
+        self.assertEqual((report['episodes'], report['wins'], report['actions']), (2, 1, 10))
+        self.assertEqual(len(executed), 10, 'telemetry must not advance the environment')
+
     def test_multilevel_cli_rejects_ambiguous_or_unbounded_scope(self):
         for extra in (['--levels', '3', '3'], ['--levels', '3', '6'],
                       ['--levels', '3', '4', '5', '--max-records', '2'],

@@ -202,8 +202,10 @@ function statusFor(view, archived) {
   if (view.phase === 'stopped') return 'Entrenamiento detenido';
   const status = view.kind === 'campaign' ? stages[view.progress.stage] || 'Ejecución en curso según el log'
     : behaviorPhases[view.phase] || phases[view.phase] || 'Esperando datos';
-  if (view.kind === 'campaign' && view.progress.stage?.endsWith('_evaluation'))
-    return `${status} · progreso por bloques de partidas`;
+  if (view.kind === 'campaign' && view.progress.stage?.endsWith('_evaluation')) {
+    const granular = finite(view.progress.evaluation?.current_episode);
+    return `${status} · ${granular && view.source.age_seconds > 60 ? 'sin datos recientes' : granular ? 'progreso por acciones' : 'progreso por bloques de partidas'}`;
+  }
   return view.source.age_seconds > 60 ? `${status} · sin datos recientes` : status;
 }
 function setTable(id, rows, columns) {
@@ -272,7 +274,7 @@ function render(data) {
   $('run-info').textContent = view?.label || 'Registro no disponible';
   $('connection').textContent = statusFor(view, archived);
   $('connection').className = !view || !view.source.available || view.phase === 'campaign_error'
-    || (!archived && view.source.age_seconds > (campaignEvaluation ? 900 : 60) && !['stopped', 'behavior_finished', 'campaign_finished'].includes(view.phase)) ? 'warn' : '';
+    || (!archived && view.source.age_seconds > (campaignEvaluation && !finite(p.evaluation?.current_episode) ? 900 : 60) && !['stopped', 'behavior_finished', 'campaign_finished'].includes(view.phase)) ? 'warn' : '';
   $('freshness').textContent = archived ? 'Datos de la ejecución seleccionada'
     : `Última escritura hace ${fmt(view?.source.age_seconds)} s · consulta cada 2 s`;
   $('selection-note').textContent = selectedExecution === 'current'
@@ -298,7 +300,7 @@ function render(data) {
   if (campaignEvaluation) {
     $('speed-note').textContent = 'Evaluando con pesos congelados · no hay TPS de aprendizaje';
     $('level').textContent = finite(p.evaluation?.level) ? `Nivel ${fmt(p.evaluation.level)}` : 'Evaluando';
-    $('game').textContent = 'Juego no identificado en el log de evaluación';
+    $('game').textContent = p.evaluation?.game || 'Juego no identificado en el log de evaluación';
   }
   const aggregates = validations.filter(r => r.aggregate);
   const visualRows = aggregates.length ? aggregates : validations;
@@ -354,6 +356,15 @@ function render(data) {
   const ongoing = view?.source.available && !completed && ['behavior', 'campaign'].includes(view?.kind);
   const evaluating = ongoing && (view.phase === 'behavior_evaluation_progress'
     || (view.kind === 'campaign' && p.stage === 'behavior_evaluation'));
+  const liveProgress = evaluating && finite(pending?.current_episode);
+  $('evaluation-progress').hidden = !liveProgress;
+  $('evaluation-progress').textContent = liveProgress
+    ? `${pending.game || 'Evaluación'} · Nivel ${fmt(pending.level)}`
+      + (finite(pending.pair_count) ? ` · bloque ${fmt(pending.pair_index)}/${fmt(pending.pair_count)}` : '')
+      + ` · Partida ${fmt(pending.current_episode)}/${fmt(pending.total_episodes)}`
+      + ` · ${fmt(pending.episode_actions)}/${fmt(pending.episode_budget)} acciones${pending.episode_complete ? ' · terminada' : ''}`
+      + ` · ${fmt(pending.episodes)} partidas completadas · ${fmt(pending.wins)} victorias`
+      + ` · ${fmt(pending.seconds)} s en este bloque (último registro)` : '';
   const partial = evaluating && view.kind === 'campaign' && pending?.episodes > 0 && finite(pending.wins);
   const baseline = evaluations.findLast(r => r.policy === 'random' && r.split === (latest?.split || pending?.split)
     && (r.level ?? null) === (latest?.level ?? null) && (r.game ?? null) === (latest?.game ?? raw.run?.game ?? null));
@@ -369,7 +380,9 @@ function render(data) {
   $('behavior-ms').textContent = fmt(measured?.decision_ms, 2);
   $('behavior-tps').textContent = fmt(measured?.actions_per_second, 2);
   $('behavior-status').textContent = evaluating && view.kind === 'campaign'
-    ? 'Evaluación en curso con pesos congelados. El log publica progreso cada 16 partidas y al terminar cada juego/nivel. El resultado completo aparecerá al finalizar todos; durante esta fase no hay pérdidas de entrenamiento.'
+    ? liveProgress
+      ? 'Evaluación con pesos congelados. Progreso aproximadamente cada 2 s al completar acciones y al terminar cada partida. Una decisión lenta puede tardar más; la antigüedad indica cuándo llegó el último registro.'
+      : 'Evaluación con pesos congelados. Este registro sólo ofrece progreso por bloques de partidas. El resultado completo aparecerá al finalizar todos los juegos y niveles.'
     : fits.length ? `Aprendizaje de comportamiento de esta ejecución. Eje de pérdidas: ${view.fitAxis}.`
     : evaluations.length ? 'Resultados de evaluación; sin aprendizaje de comportamiento registrado en el tramo disponible.'
     : 'Sin métricas de comportamiento registradas en esta ejecución. El panel se completará si esta ejecución las produce.';

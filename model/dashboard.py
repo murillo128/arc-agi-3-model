@@ -360,9 +360,14 @@ class CampaignMonitor(LogMonitor):
                     row.get('role') != 'campaign' or row.get('split') != 'dev'):
                 return
             evaluation = numbers(row, ('level', 'episodes', 'wins', 'horizon', 'win_rate',
-                                       'actions', 'decision_ms', 'actions_per_second'))
+                                       'actions', 'decision_ms', 'actions_per_second',
+                                       'total_episodes', 'current_episode', 'episode_actions',
+                                       'episode_budget', 'seconds', 'episode_seconds', 'pair_index', 'pair_count'))
             evaluation.update(split='dev', policy=str(row.get('policy', ''))[:80],
                               level_complete=event == 'behavior_evaluation')
+            if row.get('game'):
+                evaluation['game'] = str(row['game'])[:80]
+            evaluation['episode_complete'] = row.get('episode_complete') is True
             self.progress['evaluation'] = evaluation
             key = (self.progress['variant'], self.progress['seed'])
             self.executions.setdefault(key, {}).update(self.progress)

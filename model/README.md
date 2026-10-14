@@ -144,6 +144,12 @@ El dashboard admite `--campaign-log model/runs/architecture-evolution/campaign.l
 además de sus logs existentes. Muestra el progreso por variante/semilla, presupuesto,
 velocidad, errores a uno/dos/cuatro pasos, comparación identidad y éxito real,
 separados de las pérdidas de actor/crítico. No hay inspecciones visuales automáticas.
+La evaluación de comportamiento publica progreso al empezar y terminar cada partida
+y aproximadamente cada dos segundos al completar acciones. La web muestra el bloque
+juego/nivel, la partida actual, su presupuesto de acciones, partidas completadas,
+victorias y tiempo registrado. Estos contadores no se suman al aprendizaje ni tratan
+una partida en curso como derrota. Una decisión individual lenta puede retrasar el
+siguiente aviso: la antigüedad del log sigue visible y no simula actividad.
 
 La página `campaign.html`, enlazada desde el entrenamiento, compara toda la campaña
 sin cambiar el selector de la ejecución individual. Añadir

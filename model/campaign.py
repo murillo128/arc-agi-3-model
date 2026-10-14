@@ -351,10 +351,11 @@ def train_world(engine, factories, pairs, total_actions, seed, variant, callback
 
 def evaluate_behavior(engine, planner, factories, pairs, seed, episodes, split):
     results, started = [], time.monotonic()
-    for game, level in pairs:
+    for pair_index, (game, level) in enumerate(pairs, 1):
         seeds = episode_seeds(split, episodes, offset=seed * 10000)
         report = evaluate(engine, planner, factories[game], level, seeds, 128,
-                          'value_mpc', split=split, role='campaign')
+                          'value_mpc', split=split, role='campaign', game=game,
+                          pair_index=pair_index, pair_count=len(pairs))
         results.extend(dict(r, game=game, training_seed=seed) for r in report['results'])
     return evaluation_summary(results, time.monotonic()-started)
 

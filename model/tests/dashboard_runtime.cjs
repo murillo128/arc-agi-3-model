@@ -106,13 +106,26 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('actions'), '10', 'evaluation does not increment training actions');
   assert.equal(text('behavior-win'), '43,75 %');
   assert.match(text('behavior-wins'), /7\/16.*parcial/);
-  assert.match(text('behavior-status'), /cada 16 partidas/);
+  assert.match(text('behavior-status'), /progreso por bloques de partidas/);
   assert.doesNotMatch(text('connection'), /sin datos recientes/);
   assert.equal(nodes.get('connection').className, '');
   assert.equal(nodes.get('behavior-loss-card').hidden, true);
   assert.equal(nodes.get('behavior-actor-card').hidden, true);
   assert.equal(nodes.get('behavior-wins-card').hidden, true);
   assert.match(text('speed-note'), /no hay TPS de aprendizaje/);
+  Object.assign(data.campaign.progress.evaluation, {current_episode: 17, total_episodes: 32,
+    episode_actions: 24, episode_budget: 128, seconds: 194, game: 'si01-v1', pair_index: 6, pair_count: 10});
+  data.campaign.source.age_seconds = 1;
+  await vm.runInContext('poll()', context);
+  assert.equal(nodes.get('evaluation-progress').hidden, false);
+  assert.match(text('evaluation-progress'), /si01-v1.*bloque 6\/10.*Partida 17\/32.*24\/128.*194 s/);
+  assert.match(text('connection'), /progreso por acciones/);
+  assert.match(text('behavior-status'), /cada 2 s/);
+  assert.equal(text('game'), 'si01-v1');
+  data.campaign.source.age_seconds = 70;
+  await vm.runInContext('poll()', context);
+  assert.match(text('connection'), /sin datos recientes/);
+  assert.equal(nodes.get('connection').className, 'warn');
   const old = nodes.get('execution-select').options.find(o => o.textContent.includes('world_reference'));
   ui.change('execution-select', old.value);
   assert.equal(text('actions'), '100', 'global selection changes counters as well as curves');
@@ -120,6 +133,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('prediction'), '50 %');
   assert.equal(text('behavior-win'), '25 %');
   assert.match(text('connection'), /Registro anterior/);
+  assert.equal(nodes.get('evaluation-progress').hidden, true);
   assert.equal(vm.runInContext('charts.latent.series[0].points[0].y', context), .7);
   assert.equal(nodes.get('world-table').children.length, 1);
   assert.equal(nodes.get('behavior-table').children.length, 1);
