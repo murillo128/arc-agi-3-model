@@ -157,17 +157,7 @@ function render(data) {
   $('checkpoint').textContent = checkpoint ? `Acción ${fmt(checkpoint.actions)}` : 'Sin evento reciente';
   const event = data.events.at(-1);
   $('event').textContent = event ? (events[event.event] || event.event) : '—';
-  const stale = data.source.age_seconds > 60;
-  $('connection').textContent = !data.source.available ? 'Log no disponible' : data.source.catching_up ? 'Leyendo métricas…' :
-    data.phase === 'stopped' ? phases.stopped : stale ? 'Sin datos recientes' : (phases[data.phase] || 'Recibiendo datos');
-  $('connection').className = !data.source.available || stale || data.phase === 'stopped' ? 'warn' : '';
-  $('freshness').textContent = data.source.available ? `Última escritura del log hace ${fmt(data.source.age_seconds)} s · consulta cada 2 s` : 'Reintentando automáticamente cada 2 s';
-  const messages = [];
-  if (!data.source.available) messages.push('No se puede leer el log. Los valores visibles son los últimos recibidos.');
-  if (data.phase === 'stopped') messages.push(`Entrenamiento detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}.`);
-  else if (stale) messages.push('El log no recibe datos recientes. Puede estar validando, guardando pesos o detenido; el panel no confirma que el proceso siga activo.');
-  if (data.source.tail_limited) messages.push('Se muestra el tramo reciente del log; los datos anteriores quedan fuera de la ventana de lectura.');
-  $('notice').hidden = messages.length === 0; $('notice').textContent = messages.join(' ');
+  renderStatus(data);
   $('gate-info').textContent = `Validación cada ${fmt(config.validate_every)} acciones. Umbrales: errores visuales ≤ ${pct(config.delta_error)}, MSE latente ≤ ${scalar(config.latent_delta_mse)}, diversidad ≥ ${scalar(config.min_latent_std)}; también se exige cobertura suficiente.`;
   $('retention').textContent = `Lee el log existente · hasta ${fmt(data.max_points)} puntos por tipo en memoria · no guarda un historial adicional.`;
 
@@ -190,6 +180,32 @@ function render(data) {
   else { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 6; td.textContent = 'Todavía no hay validaciones.'; tr.append(td); $('validation-table').replaceChildren(tr); }
   const revision = `${data.generation}:${data.revision}:${levelSelect.value}:${$('window').value}`;
   if (revision !== chartRevision) { chartRevision = revision; drawCharts(currentLevel); }
+}
+
+function renderStatus(data) {
+  $('world-status').textContent = !data.source.available ? 'Log del mundo no disponible.' : data.phase === 'stopped'
+    ? `Entrenamiento del mundo detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}. Las métricas de esta sección corresponden a esa ejecución.`
+    : `Mundo: ${phases[data.phase] || 'Recibiendo métricas'}.`;
+  const behavior = data.behavior?.source.available ? data.behavior : null;
+  const current = behavior || data, source = current.source;
+  const finished = behavior ? current.phase === 'behavior_finished' : current.phase === 'stopped';
+  const stale = source.age_seconds > 60 && !finished;
+  $('connection').textContent = !source.available ? 'Log no disponible' : source.catching_up ? 'Leyendo métricas…' :
+    stale ? 'Sin datos recientes' : ((behavior ? behaviorPhases : phases)[current.phase] || 'Recibiendo datos');
+  $('connection').className = !source.available || stale || (!behavior && finished) ? 'warn' : '';
+  $('freshness').textContent = source.available ? `Última escritura del log hace ${fmt(source.age_seconds)} s · consulta cada 2 s` : 'Reintentando automáticamente cada 2 s';
+  const messages = [];
+  if (!source.available) messages.push('No se puede leer el log. Los valores visibles son los últimos recibidos.');
+  if (!behavior && finished) messages.push(`Entrenamiento detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}.`);
+  else if (stale) messages.push('El log no recibe datos recientes. Puede estar validando, guardando pesos o detenido; el panel no confirma que el proceso siga activo.');
+  if (source.tail_limited) messages.push('Se muestra el tramo reciente del log; los datos anteriores quedan fuera de la ventana de lectura.');
+  $('notice').hidden = messages.length === 0; $('notice').textContent = messages.join(' ');
+  if (behavior) {
+    const levels = behavior.run.levels || (finite(behavior.run.level) ? [behavior.run.level] : []);
+    $('run-info').textContent = ['Goal y planner', behavior.run.game, levels.length ? `Niveles ${levels.join(', ')}` : null,
+      behavior.run.device?.toUpperCase(), behavior.run.compile ? 'torch.compile' : null].filter(Boolean).join(' · ');
+    $('statistics-origin').textContent = 'Recogida y ajuste por rondas · las evaluaciones se cuentan por separado';
+  }
 }
 
 function drawCharts(currentLevel) {
@@ -229,8 +245,6 @@ function policyName(row) {
 }
 let behaviorFilterManual = false;
 function renderBehavior(b) {
-  if (!behaviorFilterManual && b?.evaluations.length) $('behavior-split').value = b.evaluations.at(-1).split;
-  const split = $('behavior-split').value;
   const levels = b?.run.levels || (finite(b?.run.level) ? [b.run.level] : []);
   const levelSelect = $('behavior-level');
   const options = ['all', ...levels.map(String)];
@@ -239,11 +253,20 @@ function renderBehavior(b) {
     levelSelect.replaceChildren(...options.map(v => new Option(v === 'all' ? 'Conjunto' : `Nivel ${v}`, v)));
     levelSelect.value = options.includes(previous) ? previous : 'all';
   }
-  const rows = (b?.evaluations || []).filter(r => r.split === split &&
-    (levelSelect.value === 'all' ? levels.length < 2 || !finite(r.level) : r.level === Number(levelSelect.value)));
+  const levelRows = (b?.evaluations || []).filter(r =>
+    levelSelect.value === 'all' ? levels.length < 2 || !finite(r.level) : r.level === Number(levelSelect.value));
+  const evaluation = b?.progress.evaluation;
+  if (!behaviorFilterManual) {
+    const latest = levelRows.findLast(r => r.policy !== 'random' && r.role !== 'initial');
+    const availableSplit = latest?.split
+      || evaluation?.split || levelRows.at(-1)?.split
+      || ({training: 'development', evaluation_only: 'evaluation_only'})[b?.run.mode];
+    if (availableSplit) $('behavior-split').value = availableSplit;
+  }
+  const split = $('behavior-split').value;
+  const rows = levelRows.filter(r => r.split === split);
   const learned = rows.findLast(r => r.policy !== 'random' && r.role !== 'initial'), baseline = rows.findLast(r => r.policy === 'random');
   const collection = b?.progress.collection, fit = b?.progress.fit;
-  const evaluation = b?.progress.evaluation;
   const complete = b?.phase === 'behavior_finished';
   const stale = b?.source.age_seconds > 60;
   $('behavior-status').textContent = !b ? 'No se ha configurado un log de comportamiento.' : !b.source.available
@@ -261,8 +284,14 @@ function renderBehavior(b) {
   $('behavior-episodes').textContent = `Ronda ${fmt(collection?.round)} · ${fmt(collection?.episodes)} partidas · ${fmt(collection?.wins)} victorias · ${fmt(collection?.records)} transiciones en memoria${perLevel ? ' · ' + perLevel : ''}`;
   $('behavior-loss').textContent = scalar(fit?.loss);
   $('behavior-epoch').textContent = `Ronda ${fmt(fit?.round)} · época ${fmt(fit?.epoch)}/${fmt(fit?.epochs)} · ${fmt(fit?.updates)} actualizaciones de la ronda`;
-  $('behavior-win').textContent = pct(learned?.win_rate);
-  $('behavior-wins').textContent = learned ? `${policyName(learned)} · ${fmt(learned.wins)}/${fmt(learned.episodes)} · ${splitNames[split]}` : 'Sin evaluación aprendida en esta fase';
+  const evaluating = !learned && b?.source.available && b.phase === 'behavior_evaluation_progress' && evaluation?.split === split;
+  const awaiting = !learned && b?.source.available && ['behavior_started', 'behavior_collection', 'behavior_fit',
+    'behavior_world_verified', 'behavior_evaluation'].includes(b.phase);
+  $('behavior-win').textContent = evaluating ? 'En curso' : awaiting ? 'Pendiente' : pct(learned?.win_rate);
+  $('behavior-wins').textContent = learned ? `${policyName(learned)} · ${fmt(learned.wins)}/${fmt(learned.episodes)} · ${splitNames[split]}`
+    : evaluating ? `Esperando el resultado completo de ${splitNames[split]}; progreso de la evaluación indicado arriba`
+    : awaiting ? `Evaluación aprendida pendiente de ${splitNames[split]}; aún no se ha registrado un resultado completo para este nivel y fase`
+    : 'Sin evaluación aprendida en esta fase';
   $('behavior-random').textContent = pct(baseline?.win_rate);
   $('behavior-random-wins').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitNames[split]}` : 'Sin evaluación al azar en esta fase';
   $('behavior-ms').textContent = fmt(learned?.decision_ms, 2);
