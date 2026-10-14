@@ -1,5 +1,6 @@
 """Public outcome, frozen-weight and independent planning-oracle contracts."""
 from contextlib import nullcontext, redirect_stderr
+from collections import deque
 from dataclasses import asdict, replace
 from pathlib import Path
 import random
@@ -30,6 +31,101 @@ def obs(state='NOT_FINISHED', completed=0):
 
 
 class Contracts(unittest.TestCase):
+    def test_multilevel_cli_rejects_ambiguous_or_unbounded_scope(self):
+        for extra in (['--levels', '3', '3'], ['--levels', '3', '6'],
+                      ['--levels', '3', '4', '5', '--max-records', '2'],
+                      ['--level', '2', '--levels', '3']):
+            with self.subTest(extra=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                main(['--checkpoint', '/not-read.pt', '--output', '/not-created', *extra])
+            self.assertEqual(error.exception.code, 2)
+
+    def test_multilevel_collection_retains_each_level_and_resets_memory(self):
+        seen = []
+        class FakeFactory:
+            def make(self, seed, level):
+                seen.append((seed, level))
+                start = replace(obs(), frames=np.full((1, 8, 8), level, np.uint8), available_actions=(1,))
+                after = replace(start, state={3: 'WIN', 4: 'GAME_OVER', 5: 'NOT_FINISHED'}[level])
+                return SimpleNamespace(observation=start, step=lambda action: after)
+        class FakeEngine:
+            device = 'cpu'
+            model = SimpleNamespace(config=SimpleNamespace(memory=1))
+            def autocast(self):
+                return nullcontext()
+            def encode(self, observations):
+                return [torch.tensor([[float(o.final[0, 0])]]) for o in observations]
+            def actions(self, actions):
+                return torch.tensor([[a.id] for a in actions])
+            def advance(self, z, h, action):
+                return h + z[:, 0] + action, None
+        records = {lv: deque(maxlen=2) for lv in (3, 4, 5)}
+        report = collect(FakeEngine(), FakeFactory(), [3, 4, 5], [2, 4, 6, 8, 10, 12], 2, .95, records)
+        self.assertEqual(seen, [(2, 3), (4, 4), (6, 5), (8, 3), (10, 4), (12, 5)])
+        self.assertEqual(report['episodes'], 6)
+        self.assertEqual(report['actions'], 8)
+        self.assertEqual(report['wins'], 2)
+        self.assertEqual(report['per_level'][5], {'episodes': 2, 'wins': 0, 'actions': 4})
+        self.assertEqual({lv: len(rows) for lv, rows in records.items()}, {3: 2, 4: 2, 5: 2})
+        self.assertEqual([r[1].item() for r in records[5]], [0., 6.])
+        for lv, rows in records.items():
+            self.assertEqual([r[0].item() for r in rows], [float(lv)] * 2)
+        self.assertEqual([r[4] for r in records[3]], [1., 1.])
+        self.assertEqual([r[4] for r in records[4]], [0., 0.])
+
+    def test_multilevel_transfer_fits_shared_heads_and_matches_evaluation_pairs(self):
+        torch.set_num_threads(2)
+        net = WorldModel(NetworkConfig.small())
+        source = fingerprint(net)
+        heads = GoalValue(16, 32)
+        original_heads = fingerprint(heads)
+        fitted = []
+        class FakeFactory:
+            def __init__(self, *args):
+                pass
+            def make(self, seed, level):
+                start = replace(obs(), frames=np.full((1, 8, 8), level, np.uint8), available_actions=(1, 2))
+                after = replace(start, state='WIN' if level == 3 else 'GAME_OVER')
+                return SimpleNamespace(observation=start, step=lambda action: after)
+        def real_fit(engine, trained, records, *args, **kwargs):
+            self.assertEqual({lv: len(rows) for lv, rows in records.items()}, {3: 2, 4: 2, 5: 2})
+            fit(engine, trained, records, *args, **kwargs)
+            fitted.append(fingerprint(trained))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            world, initial = root / 'world.pt', root / 'initial.pt'
+            checkpoint.write(world, {'network': asdict(net.config), 'training': asdict(TrainConfig()),
+                                    'weights': net.state_dict(), 'progress': {'actions': 17}})
+            save_heads(initial, heads, source, PlanConfig(horizon=1),
+                       {'config': {'game': 'sc01-v1', 'level': 2}, 'selected': {'policy': 'q'}})
+            world_bytes, initial_bytes = world.read_bytes(), initial.read_bytes()
+            with patch('model.behavior_experiment.Factory', FakeFactory), \
+                 patch('model.behavior_experiment.fit', side_effect=real_fit):
+                main(['--checkpoint', str(world), '--init-heads', str(initial), '--output', str(root / 'joint'),
+                      '--levels', '3', '4', '5', '--device', 'cpu', '--rounds', '1', '--train-episodes', '2',
+                      '--dev-episodes', '2', '--final-episodes', '2', '--epochs', '1', '--batch-size', '2',
+                      '--max-records', '6', '--horizons', '1', '--seed-offset', '40000'])
+            saved = load_heads(root / 'joint/heads.pt', heads, source, game='sc01-v1', levels=[3, 4, 5])
+            report = saved['report']
+            self.assertNotEqual(fitted, [original_heads])
+            self.assertEqual(report['config']['levels'], [3, 4, 5])
+            self.assertIsNone(report['config']['level'])
+            self.assertTrue(report['world_unchanged'])
+            finals = [report[k] for k in ('final_random', 'final_initial', 'final_learned')]
+            for result in finals:
+                self.assertIsNone(result['level'])
+                self.assertEqual((result['episodes'], result['wins'], result['actions']), (6, 2, 6))
+                self.assertEqual([(r['level'], r['episodes'], r['wins']) for r in result['per_level']],
+                                 [(3, 2, 2), (4, 2, 0), (5, 2, 0)])
+                self.assertEqual([(r['seed'], r['level']) for r in result['results']],
+                                 [(8080001, 3), (8080003, 4), (8080005, 5), (8080007, 3), (8080009, 4), (8080011, 5)])
+            self.assertEqual(finals[1]['role'], 'initial')
+            self.assertEqual(world.read_bytes(), world_bytes)
+            self.assertEqual(initial.read_bytes(), initial_bytes)
+            with self.assertRaisesRegex(ValueError, 'same game'):
+                load_heads(initial, heads, source, game='si01-v1', levels=[3, 4, 5])
+            with self.assertRaisesRegex(ValueError, 'different world-model'):
+                load_heads(initial, heads, 'wrong', game='sc01-v1', levels=[3, 4, 5])
+
     def test_initialization_and_evaluation_only_are_mutually_exclusive(self):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
             main(['--checkpoint', '/not-read.pt', '--output', '/not-created',

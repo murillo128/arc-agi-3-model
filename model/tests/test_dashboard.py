@@ -243,6 +243,23 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(data['evaluations'], [])
         self.assertEqual(data['progress']['collection']['actions'], 1)
 
+    def test_behavior_multilevel_metrics_keep_aggregate_and_level_rows_distinct(self):
+        monitor = BehaviorMonitor(self.path)
+        self.append({'event': 'behavior_started', 'levels': [3, 4, 5], 'level': None, 'world_trainable': 0},
+                    {'event': 'behavior_collection', 'actions': 12, 'level': 5,
+                     'per_level': {'3': {'episodes': 2, 'actions': 4}, '4': {'episodes': 2, 'actions': 4},
+                                   '5': {'episodes': 2, 'actions': 4}}},
+                    {'event': 'behavior_evaluation', 'split': 'development', 'level': 3, 'wins': 2, 'episodes': 2},
+                    {'event': 'behavior_evaluation', 'split': 'development', 'level': 4, 'wins': 0, 'episodes': 2},
+                    {'event': 'behavior_evaluation', 'split': 'development', 'level': 5, 'wins': 1, 'episodes': 2},
+                    {'event': 'behavior_evaluation', 'split': 'development', 'level': None, 'wins': 3, 'episodes': 6},
+                    {'event': 'behavior_world_verified', 'world_unchanged': True})
+        data = monitor.snapshot()
+        self.assertEqual(data['run']['levels'], [3, 4, 5])
+        self.assertTrue(data['run']['world_unchanged'])
+        self.assertEqual([r['level'] for r in data['evaluations']], [3, 4, 5, None])
+        self.assertEqual(data['progress']['collection']['per_level']['5']['episodes'], 2)
+
 
 if __name__ == '__main__':
     unittest.main()
