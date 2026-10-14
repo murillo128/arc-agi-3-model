@@ -4,6 +4,7 @@ import { chartPoints, comparePrediction, diagnosticMetrics, latentSummary, laten
 import { DiagnosticsView } from '../src/diagnostics-view';
 import { decodeAttempt } from '../src/decoder';
 import { Replay } from '../src/replay';
+import { ReplayView } from '../src/replay-view';
 import type { Attempt, Observation, Prediction, Tensor } from '../src/types';
 import { planningView } from '../src/planning';
 import { PALETTE } from '../src/canvas';
@@ -207,6 +208,8 @@ class TestElement {
   style: Record<string, string> = {}; attributes: Record<string, string> = {};
   addEventListener() {}
   setAttribute(key: string, value: string) { this.attributes[key] = value; }
+  toggleAttribute(key: string, force: boolean) { if (force) this.attributes[key] = ''; else delete this.attributes[key]; }
+  classList = { add() {}, toggle() {} };
   replaceChildren() { this.children = []; }
   append(...values: (TestElement | string)[]) { for (const value of values) typeof value === 'string' ? this.textContent += value : this.children.push(value); }
   bitmap?: Uint8Array;
@@ -241,13 +244,19 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     planReplay.select(1); view.display(planReplay); view.render(planReplay);
     expect(get('goal-value').textContent).toBe('0.4000');
     expect(get('goal-progress').textContent).toBe('30.00%');
+    expect(get('chosen-action').textContent).toBe('ACTION1 (↑) · {}');
+    expect(get('goal-score-label').textContent).toBe('Selected SDK-success score');
     expect(get('plan-steps').children).toHaveLength(2);
+    expect(get('plan-steps').children[0]!.children[0]!.textContent).toBe('1. ACTION1 (↑)');
     expect(get('plan-steps').children[1]!.children[1]!.textContent).toContain('Imagined only');
     expect(get('plan-outcome').textContent).toContain('No progress or terminal event observed');
     const goalFile = await fixture('v11-goal-planning'), goalReplay = new Replay(goalFile.attempt, goalFile.minor);
     goalReplay.select(1); view.display(goalReplay); view.render(goalReplay);
     expect(get('goal-info').textContent).toContain('Goal hypothesis');
     expect(get('goal-info').textContent).toContain('age 0');
+    expect(get('goal-info').textContent).toContain('imagined proposal');
+    expect(get('goal-info').textContent).toContain('Current goal distance (latent MSE): 2.00000');
+    expect(get('goal-score-label').textContent).toBe('Selected goal similarity (0–1)');
     expect(get('goal-canvas').hidden).toBe(false);
     expect(get('goal-reference-canvas').hidden).toBe(false);
     const rgba = (color: number) => [...Buffer.from(PALETTE[color]!, 'hex'), 255];
@@ -293,11 +302,76 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
   } finally { vi.unstubAllGlobals(); }
 });
 
+it('propagates shared labels and keeps help keys, palette warnings and recording replacement intact', async () => {
+  const elements = new Map<string, TestElement>();
+  const get = (id: string) => { if (!elements.has(id)) elements.set(id, new TestElement()); return elements.get(id)!; };
+  const listeners: Record<string, (event: KeyboardEvent) => void> = {};
+  vi.stubGlobal('document', { getElementById: get, createElement: () => new TestElement(), createElementNS: () => new TestElement(),
+    addEventListener: (name: string, listener: (event: KeyboardEvent) => void) => { listeners[name] = listener; } });
+  const key = (tag: string, name: string) => {
+    const preventDefault = vi.fn();
+    // Simulate the target's native closest() without simulating keyboard behavior.
+    const target = { closest: (selector: string) => selector.split(', ').includes(tag) ? target : null };
+    listeners.keydown!({ target, key: name, preventDefault } as unknown as KeyboardEvent);
+    return preventDefault;
+  };
+  try {
+    get('episode-speed').value = '1'; get('frame-speed').value = '6';
+    const view = new ReplayView();
+    const decoded = await fixture('multi-frame');
+    view.display(decoded, { kind: 'local', name: 'synthetic.arc3', bytes: 100 });
+    expect(get('action-history').children[0]!.children[0]!.children[0]!.textContent).toBe('#0  ACTION6 (63, 0)');
+    // Help summaries retain every shortcut, including their native Space/Enter.
+    for (const name of ['ArrowLeft', 'ArrowRight', 'Home', 'End', ' ', 'Enter']) {
+      expect(key('summary', name)).not.toHaveBeenCalled();
+      expect(get('timeline-position').textContent).toBe('Position 0 / 1');
+      expect(get('play').attributes['aria-pressed']).toBe('false');
+    }
+    for (const tag of ['input', 'select', 'textarea']) expect(key(tag, 'ArrowRight')).not.toHaveBeenCalled();
+    expect(key('div', 'ArrowRight')).toHaveBeenCalledOnce();
+    expect(get('timeline-position').textContent).toBe('Position 1 / 1');
+    expect(get('observation-info').textContent).toContain('ACTION6 (63, 0)');
+    expect(get('action-info').textContent).toBe('ACTION6 (63, 0) · {"x":63,"y":0,"extra":-2}');
+    expect(get('score-rows').children[0]!.children[0]!.textContent).toBe('ACTION1 (↑) · {}');
+    expect(get('score-rows').children[1]!.children[0]!.textContent).toBe('ACTION6 (1, 0) · {"x":1,"y":0}');
+    expect(get('score-heading').textContent).toBe('Probability (0–1)');
+    expect(key('div', ' ')).toHaveBeenCalledOnce();
+    expect(get('play').attributes['aria-pressed']).toBe('true');
+    expect(key('div', ' ')).toHaveBeenCalledOnce();
+    expect(get('play').attributes['aria-pressed']).toBe('false');
+    expect(key('div', 'Home')).toHaveBeenCalledOnce();
+    expect(get('timeline-position').textContent).toBe('Position 0 / 1');
+    const planned = await fixture('v11-planning');
+    view.display(planned, { kind: 'local', name: 'planned.arc3', bytes: 100 });
+    key('div', 'ArrowRight');
+    expect(get('action-history').children[0]!.children[0]!.children[0]!.textContent).toBe('#0  ACTION1 (↑)');
+    expect(get('observation-info').textContent).toContain('ACTION1 (↑) {}');
+    expect(get('action-info').textContent).toBe('ACTION1 (↑) · {}');
+    // A recording with an unknown pre-action palette must keep its warning visible.
+    decoded.attempt.initial_observation.frames.data[0] = 255;
+    view.display(decoded, { kind: 'local', name: 'palette-warning.arc3', bytes: 100 });
+    expect(get('canvas-message').hidden).toBe(false);
+    expect(get('canvas-message').textContent).toContain('Unknown palette indices: 255');
+    key('div', 'ArrowRight');
+    expect(get('previous-palette-info').hidden).toBe(false);
+    expect(get('previous-palette-info').textContent).toContain('Unknown palette indices: 255');
+    const empty = await fixture('zero-step');
+    view.display(empty, { kind: 'local', name: 'empty.arc3', bytes: 100 });
+    expect(get('timeline-position').textContent).toBe('Position 0 / 0');
+    expect(get('previous-palette-info').textContent).toBe('No pre-action observation for the initial view.');
+    expect(get('previous-palette-info').textContent).not.toContain('255');
+    expect(get('score-table').hidden).toBe(true);
+    expect(get('score-rows').children).toHaveLength(0);
+    view.clear();
+    expect(key('div', 'ArrowRight')).not.toHaveBeenCalled();
+  } finally { vi.unstubAllGlobals(); }
+});
+
 it('keeps pre-action goal beliefs separate from the real result and ignores v1.0 planning names', async () => {
   const {attempt, minor} = await fixture('v11-planning');
   const step = attempt.steps[0]!;
   const view = planningView(step, attempt.initial_observation, minor)!;
-  expect(view.steps.map(s => s.label)).toEqual(['1. ACTION1', '2. ACTION6 (3, 5)']);
+  expect(view.steps.map(s => s.label)).toEqual(['1. ACTION1 (↑)', '2. ACTION6 (3, 5)']);
   expect(view.steps[1]!.progress).toBe(.8);
   step.observation = {...step.observation, state: 'GAME_OVER'};
   expect(planningView(step, attempt.initial_observation, minor)!.outcome).toBe('GAME_OVER observed');

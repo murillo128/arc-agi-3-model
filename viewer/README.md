@@ -38,8 +38,20 @@ through a local file dialog, drag/drop, a submitted HTTP(S) URL, or an explicit
 `?file=<encoded-https-url>` deep-link. It requires no application backend, SDK,
 game execution, Python process, account, database, or proxy at runtime.
 
-The English replay console uses original magenta/purple arcade styling. A validated
-file supplies the game, attempt/session, step/action counts, terminal reason, SDK
+The English replay console uses calm dark surfaces, a restrained accent and
+system sans-serif text, with monospace data readouts. Nearby native `(i)` help
+disclosures open by click, tap, Enter or Space and keep their own keyboard keys.
+They explain loading/privacy, navigation, planning, diagnostic legends and charts;
+live values, missing states, warnings and real-versus-imagined labels stay visible.
+The raw metadata and exact-value disclosures remain available.
+
+ACTION1–4 share the labels `ACTION1 (↑)`, `ACTION2 (↓)`, `ACTION3 (←)` and
+`ACTION4 (→)` throughout the presentation. These follow the conventional controls
+in [ARC Prize's reasoning template](https://github.com/arcprize/ARC-AGI-3-Agents/blob/main/agents/templates/reasoning_agent.py),
+and do not guarantee spatial movement in a particular game. Recorded IDs/data,
+RESET, ACTION5–7 and click coordinates retain their meaning.
+
+A validated file supplies the game, attempt/session, step/action counts, terminal reason, SDK
 and model identifiers, source provenance and summary. The public completed-level
 counter is shown as recorded; it is not a hidden level ID. Summary counters may
 differ from the last persisted observation when an executed result was unavailable

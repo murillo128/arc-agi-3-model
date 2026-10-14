@@ -69,8 +69,8 @@ export class DiagnosticsView {
     element('prediction-canvas').setAttribute('aria-label', `Model prediction aligned to step ${step?.index}, real frame ${replay.frame}`);
     element('difference-canvas').setAttribute('aria-label', `Pixel disagreements for step ${step?.index}, real frame ${replay.frame}`);
     element('difference-info').textContent = visual.fraction === undefined ? 'Not available: no comparable decoded visual prediction.' :
-      `Pixel disagreement fraction: ${visual.fraction} (${visual.disagreements}/${visual.total} pixels; ${(visual.fraction * 100).toFixed(2)}%)\nSelected real frame ${replay.frame} · exact palette-index values before display rounding. Red = disagreement; black = equal.`;
-    element('prediction-values').textContent = visual.values ? JSON.stringify(visual.values) + '\nRow-major values, limited to the top-left 32 × 32.' : 'Not recorded for this frame.';
+      `Pixel disagreement fraction: ${visual.fraction} (${visual.disagreements}/${visual.total} pixels; ${(visual.fraction * 100).toFixed(2)}%)\nSelected real frame ${replay.frame} · exact palette-index values before display rounding.`;
+    element('prediction-values').textContent = visual.values ? JSON.stringify(visual.values) + '\nTop-left 32 × 32 preview (row-major).' : 'Not recorded for this frame.';
     const predictedChange = predictedVisualChange(prediction, replay.observation, replay.frame, replay.minor);
     const observedChange = replay.step ? observedAnimationChange(replay.observation, replay.frame, replay.preAction) : { message: 'Unavailable: no real action result at this position.' };
     for (const [kind, change] of [['predicted', predictedChange], ['observed', observedChange]] as const) {
@@ -92,11 +92,11 @@ export class DiagnosticsView {
     element('policy-mode').textContent = `Recorded policy mode: ${replay.minor >= 1 ? step?.policy_mode ?? 'Not recorded' : 'Not recorded'}`;
     const decision = step?.decision;
     element('chosen-action').textContent = step ? `${actionName(step.action)} · ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? 'RESET · executed closing boundary; no result recorded' : 'No action precedes the initial observation.';
-    element('selected-value').textContent = `Recorded selected-action value estimate: ${numeric(decision?.selected_value)}`;
-    element('score-info').textContent = decision ? `Recorded ${decision.score_type} scores · writer order; candidates may be a subset.` : 'Not recorded for this position.';
+    element('selected-value').textContent = `Selected-action value estimate (recorded units): ${numeric(decision?.selected_value)}`;
+    element('score-info').textContent = decision ? `Recorded ${decision.score_type} scores.` : 'Not recorded for this position.';
     const rows = element('score-rows'); rows.replaceChildren();
     element('score-table').hidden = !decision;
-    element('score-heading').textContent = decision ? `${decision.score_type[0]!.toUpperCase()}${decision.score_type.slice(1)} (recorded)` : 'Score';
+    element('score-heading').textContent = decision ? decision.score_type === 'probability' ? 'Probability (0–1)' : decision.score_type === 'logit' ? 'Logit (unnormalized)' : 'Value (recorded units)' : 'Score';
     // Bound DOM work; preserve the writer's order and disclose a large-table preview.
     decision?.candidates.slice(0, 256).forEach(candidate => {
       const row = document.createElement('tr'), action = document.createElement('td'), score = document.createElement('td');
@@ -104,9 +104,9 @@ export class DiagnosticsView {
       score.textContent = String(candidate.score); row.append(action, score); rows.append(row);
     });
     if (decision && decision.candidates.length > 256) element('score-info').append(` Showing first 256 of ${decision.candidates.length} candidates.`);
-    element('uncertainty-info').textContent = `Prediction uncertainty: ${numeric(prediction?.uncertainty)} (recorded estimator units; public config below)\nAction entropy: ${numeric(decision?.action_entropy)} (nats)`;
-    element('recorded-errors').textContent = `Recorded target MAE (palette-index units): ${numeric(prediction?.errors?.mae)}\nRecorded target MSE (squared palette-index units): ${numeric(prediction?.errors?.mse)}\nThese target-wide recorded errors are separate from the viewer's selected-frame disagreement.` +
-      (replay.minor >= 1 ? `\nFrozen prediction latent MSE: ${numeric(prediction?.errors?.latent_mse)}\nNo-change latent MSE: ${numeric(prediction?.errors?.no_change_mse)}\nLatent metrics use squared representation units; they are not pixel errors or training losses.` : '');
+    element('uncertainty-info').textContent = `Prediction uncertainty: ${numeric(prediction?.uncertainty)} (recorded estimator units)\nAction entropy: ${numeric(decision?.action_entropy)} (nats)`;
+    element('recorded-errors').textContent = `Recorded target MAE (palette-index units): ${numeric(prediction?.errors?.mae)}\nRecorded target MSE (squared palette-index units): ${numeric(prediction?.errors?.mse)}` +
+      (replay.minor >= 1 ? `\nFrozen prediction latent MSE (squared representation units): ${numeric(prediction?.errors?.latent_mse)}\nNo-change latent MSE (squared representation units): ${numeric(prediction?.errors?.no_change_mse)}` : '');
     const o = replay.observation;
     element('level-progress-info').textContent = `${o.levels_completed} / ${o.win_levels} public levels completed` + (replay.preAction && replay.preAction.levels_completed !== o.levels_completed ? ` · counter ${replay.preAction.levels_completed} → ${o.levels_completed}` : '') + (o.win_levels === 0 ? ' · target unavailable (zero)' : '');
     const progress = element<HTMLProgressElement>('level-progress'); progress.hidden = o.win_levels === 0;
@@ -134,13 +134,14 @@ export class DiagnosticsView {
     }
     const p = view.plan, percent = (n: number) => `${(n * 100).toFixed(2)}%`;
     element('goal-info').textContent = p.goal ?
-      `Goal hypothesis · imagined proposal, created at real position ${p.goal.created_position} · age ${view.age} real actions. Current goal distance (latent MSE): ${distanceText(p.goal.distance)}. Proposal SDK-success score: ${p.goal.proposal_score.toPrecision(6)}. Proximity does not declare SDK success.` :
+      `Goal hypothesis · imagined proposal, created at real position ${p.goal.created_position} · age ${view.age} real actions. Current goal distance (latent MSE): ${distanceText(p.goal.distance)}. Proposal SDK-success score: ${p.goal.proposal_score.toPrecision(6)}.` :
       'Goal proxy: SDK level progress / WIN. Learned from real outcomes. Goal image: Not recorded.';
     element('goal-value').textContent = p.state_value.toFixed(4);
     element('goal-score').textContent = p.selected_score.toPrecision(6);
+    element('goal-score-label').textContent = p.mode === 'goal_mpc' ? 'Selected goal similarity (0–1)' : 'Selected SDK-success score';
     element('goal-progress').textContent = percent(p.steps[0]!.progress);
     element('goal-failure').textContent = percent(p.steps[0]!.game_over);
-    element('plan-info').textContent = `${p.mode === 'q' ? 'Direct Q choice · no imagined trajectory' : p.mode === 'goal_mpc' ? 'Goal-conditioned MPC · score = exp(−terminal goal distance), separate from SDK V' : 'Latent MPC'} · horizon ${p.horizon} · beam ${p.beam} · discount ${p.discount}. Captured before this action. Images are imagined successors; only the first action executes, then the agent observes and replans. Future legality is assumed, not observed. The plan endpoint is separate from the goal hypothesis.`;
+    element('plan-info').textContent = `${p.mode === 'q' ? 'Direct Q choice · no imagined trajectory' : p.mode === 'goal_mpc' ? 'Goal-conditioned MPC · score = exp(−terminal goal distance), separate from SDK V' : 'Latent MPC'} · horizon ${p.horizon} · beam ${p.beam} · discount ${p.discount}. Captured before this action${p.mode === 'q' ? '.' : ' · imagined successors · future legality assumed.'}`;
     element('plan-outcome').textContent = `Real result of the first action: ${view.outcome}.`;
     for (const item of view.steps) {
       const li = document.createElement('li'), title = document.createElement('h4'), status = document.createElement('p');
@@ -187,7 +188,7 @@ export class DiagnosticsView {
       const row = document.createElement('tr'), step = document.createElement('td'), value = document.createElement('td'), resets = document.createElement('td');
       step.textContent = String(point.step); value.textContent = numeric(point.value); resets.textContent = point.resets?.join('\n') ?? ''; row.append(step, value, resets); table.append(row);
     });
-    element('chart-info').textContent = `${metric.label} · steps ${points[0]!.step}–${points.at(-1)!.step} · ${values.length} recorded samples; ${points.length - values.length} missing. Gaps remain missing; values are not interpolated. Selected step: ${this.replay?.step?.index ?? 'none'}.`;
+    element('chart-info').textContent = `${metric.label} · steps ${points[0]!.step}–${points.at(-1)!.step} · ${values.length} recorded samples; ${points.length - values.length} missing. Selected step: ${this.replay?.step?.index ?? 'none'}.`;
     points.forEach((point, i) => {
       if (!point.resets) return;
       const px = 50 + (points.length === 1 ? 240 : i / (points.length - 1) * 480);
