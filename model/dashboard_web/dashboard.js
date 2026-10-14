@@ -255,15 +255,17 @@ function renderBehavior(b) {
   }
   const levelRows = (b?.evaluations || []).filter(r =>
     levelSelect.value === 'all' ? levels.length < 2 || !finite(r.level) : r.level === Number(levelSelect.value));
-  if (!behaviorFilterManual && levelRows.length) {
-    const latest = levelRows.findLast(r => r.policy !== 'random' && r.role !== 'initial') || levelRows.at(-1);
-    $('behavior-split').value = latest.split;
+  const evaluation = b?.progress.evaluation;
+  if (!behaviorFilterManual) {
+    const latest = levelRows.findLast(r => r.policy !== 'random' && r.role !== 'initial');
+    const availableSplit = latest?.split
+      || (b?.phase === 'behavior_evaluation_progress' ? evaluation?.split : null) || levelRows.at(-1)?.split;
+    if (availableSplit) $('behavior-split').value = availableSplit;
   }
   const split = $('behavior-split').value;
   const rows = levelRows.filter(r => r.split === split);
   const learned = rows.findLast(r => r.policy !== 'random' && r.role !== 'initial'), baseline = rows.findLast(r => r.policy === 'random');
   const collection = b?.progress.collection, fit = b?.progress.fit;
-  const evaluation = b?.progress.evaluation;
   const complete = b?.phase === 'behavior_finished';
   const stale = b?.source.age_seconds > 60;
   $('behavior-status').textContent = !b ? 'No se ha configurado un log de comportamiento.' : !b.source.available

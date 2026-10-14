@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const assets = path.join(__dirname, '../dashboard_web');
 const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8');
-const nodes = new Map();
+const script = fs.readFileSync(path.join(assets, 'dashboard.js'), 'utf8');
 function element(tag = 'div') {
   return {textContent: '', hidden: false, style: {}, className: '', value: '', options: [], children: [],
     clientWidth: 640, clientHeight: 240, nextElementSibling: {hidden: true}, listeners: {},
@@ -16,11 +16,23 @@ function element(tag = 'div') {
     getContext() { return new Proxy({}, {get: (target, key) => target[key] || (() => {})}); }
   };
 }
-for (const m of html.matchAll(/<([a-z]+)[^>]*\bid="([^"]+)"[^>]*>/g)) nodes.set(m[2], element(m[1]));
-for (const m of html.matchAll(/<select[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
-  const node = nodes.get(m[1]);
-  node.options = [...m[2].matchAll(/<option value="([^"]+)"/g)].map(o => ({value: o[1]}));
-  node.value = node.options[0].value;
+async function dashboard(data) {
+  const nodes = new Map();
+  for (const m of html.matchAll(/<([a-z]+)[^>]*\bid="([^"]+)"[^>]*>/g)) nodes.set(m[2], element(m[1]));
+  for (const m of html.matchAll(/<select[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
+    const node = nodes.get(m[1]);
+    node.options = [...m[2].matchAll(/<option value="([^"]+)"/g)].map(o => ({value: o[1]}));
+    node.value = node.options[0].value;
+  }
+  const text = id => nodes.get(id).textContent;
+  const change = (id, value) => { nodes.get(id).value = value; nodes.get(id).listeners.change(); };
+  const context = vm.createContext({console, window: {devicePixelRatio: 1},
+    document: {getElementById: id => nodes.get(id) || null, createElement: element},
+    ResizeObserver: class { observe() {} }, Option: function(text, value) { this.value = value; this.textContent = text; },
+    fetch: async () => ({ok: true, json: async () => data}), AbortSignal, setTimeout: () => {}});
+  vm.runInContext(script, context);
+  await new Promise(resolve => setImmediate(resolve)); // actual initial poll + render
+  return {nodes, text, change, context};
 }
 const row = (split, policy, level, wins, episodes, role = 'candidate') =>
   ({split, policy, level, wins, episodes, role, horizon: 2, win_rate: wins / episodes, decision_ms: 2, actions_per_second: 100});
@@ -35,16 +47,43 @@ const behavior = {phase: 'behavior_evaluation_progress', source: {available: tru
     row('final', 'random', 3, 10, 128)]};
 const data = {phase: 'stopped', reason: 'interrupted', source: {available: true, age_seconds: 1000},
   run: {game: 'old-world-run'}, progress: {}, progress_points: [], validations: [], events: [], behavior};
-const text = id => nodes.get(id).textContent;
-const change = (id, value) => { nodes.get(id).value = value; nodes.get(id).listeners.change(); };
-const context = vm.createContext({console, window: {devicePixelRatio: 1},
-  document: {getElementById: id => nodes.get(id) || null, createElement: element},
-  ResizeObserver: class { observe() {} }, Option: function(text, value) { this.value = value; this.textContent = text; },
-  fetch: async () => ({ok: true, json: async () => data}), AbortSignal, setTimeout: () => {}});
-
 (async () => {
-  vm.runInContext(fs.readFileSync(path.join(assets, 'dashboard.js'), 'utf8'), context);
-  await new Promise(resolve => setImmediate(resolve)); // actual initial poll + render
+  for (const [evaluation, phaseName] of [
+    [{split: 'development', policy: 'random', episodes: 16, wins: 2}, 'Desarrollo'],
+    [{split: 'evaluation_only', policy: 'random', episodes: 16, wins: 1}, 'Aislada']
+  ]) {
+    const startup = {phase: 'stopped', reason: 'interrupted', source: {available: true, age_seconds: 1000},
+      run: {}, progress: {}, progress_points: [], validations: [], events: [],
+      behavior: {phase: 'behavior_evaluation_progress', source: {available: true, age_seconds: 2},
+        run: {game: 'sc01-v1', levels: [3, 4, 5], world_trainable: 0},
+        progress: {evaluation}, evaluations: [], fits: []}};
+    const panel = await dashboard(startup);
+    assert.equal(panel.nodes.get('behavior-split').value, evaluation.split, 'startup selects the phase being evaluated');
+    assert.match(panel.text('connection'), /Evaluando/);
+    assert.equal(panel.text('behavior-win'), 'En curso', 'no completed rows means pending evaluation');
+    assert.ok(panel.text('behavior-wins').includes(`Esperando el resultado completo de ${phaseName}`));
+    assert.equal(panel.text('behavior-random'), '—', 'progress is not a completed baseline');
+    assert.equal(panel.text('behavior-ms'), '—');
+    assert.equal(vm.runInContext('behaviorCharts.wins.series.length', panel.context), 0);
+    startup.behavior.evaluations = [
+      {split: 'final', policy: 'random', level: null, wins: 12, episodes: 16, win_rate: .75},
+      {split: 'final', policy: 'q', role: 'initial', level: null, wins: 4, episodes: 16, win_rate: .25}
+    ];
+    await vm.runInContext('poll()', panel.context);
+    assert.equal(panel.nodes.get('behavior-split').value, evaluation.split, 'running phase takes priority over other-phase baselines');
+    assert.equal(panel.text('behavior-win'), 'En curso', 'an initial policy is not a completed learned candidate');
+    assert.equal(panel.text('behavior-random'), '—');
+    assert.equal(vm.runInContext('behaviorCharts.wins.series.length', panel.context), 0);
+    panel.change('behavior-level', '3');
+    await vm.runInContext('poll()', panel.context);
+    assert.equal(panel.nodes.get('behavior-split').value, evaluation.split);
+    assert.equal(panel.text('behavior-win'), 'En curso');
+    panel.change('behavior-split', 'final');
+    await vm.runInContext('poll()', panel.context);
+    assert.equal(panel.nodes.get('behavior-split').value, 'final', 'startup fallback respects manual phase');
+    assert.equal(panel.text('behavior-win'), '—');
+  }
+  const {nodes, text, change, context} = await dashboard(data);
   assert.match(text('connection'), /Evaluando/, 'header must describe the active behavior run');
   assert.doesNotMatch(text('notice'), /Entrenamiento detenido/);
   assert.match(text('world-status'), /detenido/i);
@@ -61,8 +100,14 @@ const context = vm.createContext({console, window: {devicePixelRatio: 1},
   assert.match(text('behavior-random-wins'), /30\/384.*Final/);
   assert.doesNotMatch(text('behavior-wins'), /8\/96|0\/384/, 'pending result cannot substitute another phase or initial policy');
 
+  const automatic = await dashboard(data);
+  assert.equal(automatic.nodes.get('behavior-split').value, 'development');
   behavior.evaluations.push(row('final', 'mpc', 3, 18, 128), row('final', 'mpc', null, 54, 384));
   behavior.phase = 'behavior_finished';
+  await vm.runInContext('poll()', automatic.context);
+  assert.equal(automatic.nodes.get('behavior-split').value, 'final', 'completed final candidate triggers automatic handover');
+  assert.match(automatic.text('behavior-wins'), /54\/384.*Final/);
+  assert.match(automatic.text('behavior-random-wins'), /30\/384.*Final/);
   await vm.runInContext('poll()', context);
   assert.match(text('behavior-wins'), /54\/384.*Final/);
   change('behavior-level', '3');
@@ -72,9 +117,6 @@ const context = vm.createContext({console, window: {devicePixelRatio: 1},
   change('behavior-split', 'development');
   await vm.runInContext('poll()', context);
   assert.match(text('behavior-wins'), /3\/32.*Desarrollo/, 'manual phase selection is retained');
-  vm.runInContext('behaviorFilterManual = false', context);
-  await vm.runInContext('poll()', context);
-  assert.equal(nodes.get('behavior-split').value, 'final');
   assert.match(text('connection'), /terminado/i);
 
   behavior.phase = 'behavior_fit'; behavior.source.age_seconds = 200;
@@ -85,5 +127,5 @@ const context = vm.createContext({console, window: {devicePixelRatio: 1},
   await vm.runInContext('poll()', context);
   assert.match(text('connection'), /Entrenamiento detenido/);
   assert.match(text('notice'), /interrupción/);
-  console.log('Dashboard full poll/render: active run, phase handover, level isolation and world-only fallback passed');
+  console.log('Dashboard full poll/render: startup pending, active run, phase handover, level isolation and world-only fallback passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
