@@ -1,6 +1,8 @@
 """Dashboard contracts use literal log records, real files and loopback HTTP."""
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -13,6 +15,12 @@ from model.dashboard import LogMonitor, BehaviorMonitor, MAX_LINE, MAX_READ, mak
 
 
 class DashboardTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'Node.js required for dashboard JavaScript rendering contract')
+    def test_full_javascript_poll_and_render(self):
+        result = subprocess.run(['node', str(Path(__file__).with_name('dashboard_runtime.cjs'))],
+                                text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
