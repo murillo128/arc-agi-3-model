@@ -262,6 +262,38 @@ class DashboardTests(unittest.TestCase):
         self.append({'event': 'campaign_phase', 'variant': 'rollout2', 'seed': 1, 'stage': 'initializing', 'actions': 0}, progress)
         self.assertNotIn('evaluation', monitor.snapshot()['progress'], 'previous seed progress cannot leak')
 
+    def test_frozen_diagnostics_refresh_independently_of_paused_campaign_report(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'paused', 'cells': []}))
+        monitor = CampaignMonitor(self.path, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['diagnostics']['available'])
+        diagnostic_path = path.parent / 'diagnostics' / 'report.json'
+        diagnostic_path.parent.mkdir()
+        diagnostic = {'status': 'running', 'progress': {'checkpoint': 'reference', 'current_episode': 2},
+                      'results': [{'checkpoint': 'reference', 'private_path': '/must/not/expose',
+                                   'probes': [{'game': 'sc01-v1', 'level': 1, 'predictor': {'delta_error': 0},
+                                               'distinct_pairs': 0, 'distinct_correct': {'delta_error': None}}],
+                                   'policies': {'random': {'summary': {'episodes': 8, 'wins': 0,
+                                                                     'results': ['private trace']}}}}]}
+        diagnostic_path.write_text(json.dumps(diagnostic))
+        snapshot = monitor.snapshot()['report']['diagnostics']
+        self.assertTrue(snapshot['available'])
+        self.assertEqual(snapshot['progress']['current_episode'], 2)
+        self.assertEqual(snapshot['results'][0]['probes'][0]['predictor']['delta_error'], 0)
+        self.assertIsNone(snapshot['results'][0]['probes'][0]['distinct_correct']['delta_error'])
+        self.assertNotIn('private_path', snapshot['results'][0])
+        self.assertNotIn('results', snapshot['results'][0]['policies']['random']['summary'])
+        diagnostic['progress']['current_episode'] = 3
+        diagnostic_path.write_text(json.dumps(diagnostic))
+        self.assertEqual(monitor.snapshot()['report']['diagnostics']['progress']['current_episode'], 3)
+        diagnostic_path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['diagnostics']['available'])
+        self.append({'event': 'campaign_phase', 'variant': 'staged_freeze', 'seed': 0, 'stage': 'behavior_evaluation'},
+                    {'event': 'campaign_paused', 'variant': 'staged_freeze', 'seed': 0, 'stage': 'paused'})
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot['phase'], 'campaign_paused')
+        self.assertEqual(snapshot['progress']['stage'], 'paused')
+
     def test_campaign_report_refresh_retention_and_read_only_summary(self):
         path = self.path.with_name('report.json')
         monitor = CampaignMonitor(self.path, max_points=2, report_path=path)

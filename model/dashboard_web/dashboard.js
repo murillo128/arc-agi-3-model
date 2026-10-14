@@ -198,6 +198,7 @@ function statusFor(view, archived) {
   if (archived) return 'Registro anterior · consulta';
   if (view.phase === 'campaign_error') return 'Ejecución detenida por error';
   if (view.phase === 'campaign_finished') return 'Campaña terminada';
+  if (view.phase === 'campaign_paused') return 'Campaña pausada · diagnósticos en Comparación de variantes';
   if (view.phase === 'behavior_finished') return 'Experimento terminado';
   if (view.phase === 'stopped') return 'Entrenamiento detenido';
   const status = view.kind === 'campaign' ? stages[view.progress.stage] || 'Ejecución en curso según el log'
@@ -352,7 +353,7 @@ function render(data) {
   const aggregateLearned = learned.filter(r => !finite(r.level));
   const latest = (aggregateLearned.length ? aggregateLearned : learned).at(-1);
   const pending = view?.kind === 'behavior' ? raw.progress?.evaluation : view?.kind === 'campaign' ? p.evaluation : null;
-  const completed = ['behavior_finished', 'campaign_finished', 'campaign_error', 'stopped'].includes(view?.phase) || archived;
+  const completed = ['behavior_finished', 'campaign_finished', 'campaign_error', 'campaign_paused', 'stopped'].includes(view?.phase) || archived;
   const ongoing = view?.source.available && !completed && ['behavior', 'campaign'].includes(view?.kind);
   const evaluating = ongoing && (view.phase === 'behavior_evaluation_progress'
     || (view.kind === 'campaign' && p.stage === 'behavior_evaluation'));

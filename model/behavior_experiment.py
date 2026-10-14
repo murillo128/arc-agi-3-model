@@ -194,7 +194,7 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
 
 @torch.no_grad()
 def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None,
-             role='candidate', game=None, pair_index=None, pair_count=None):
+             role='candidate', game=None, pair_index=None, pair_count=None, progress_callback=None):
     results, started = [], time.monotonic()
     seeds = list(seeds)
     context = {'split': split, 'round': round_index, 'role': role, 'policy': mode,
@@ -208,11 +208,14 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
         if not force and now - last_progress < 2:
             return
         last_progress = now
-        emit('behavior_evaluation_progress', **context, level=current_level,
+        data = dict(context, level=current_level,
              episodes=len(results), total_episodes=len(seeds), wins=wins,
              current_episode=index + 1, episode_actions=actions, episode_budget=steps,
              episode_complete=complete, actions=completed_actions + (0 if complete else actions),
              seconds=now - started, episode_seconds=now - episode_start)
+        emit('behavior_evaluation_progress', **data)
+        if progress_callback:
+            progress_callback(**data)
 
     levels = [level] if isinstance(level, int) else level
     for index, seed in enumerate(seeds):

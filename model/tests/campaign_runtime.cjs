@@ -68,6 +68,21 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.match(row(1)[8].textContent, /Sin mejora concluyente/);
   assert.equal(row(2)[2].textContent, 'Aplazada');
   assert.equal(nodes.get('campaign-final').hidden, true);
+  report.status = 'paused';
+  report.diagnostics = {available: true, status: 'running', age_seconds: 1,
+    progress: {checkpoint: 'reference', phase: 'behavior', policy: 'q', game: 'sc01-v1', level: 1,
+      current_episode: 2, total_episodes: 8, episode_actions: 10, episode_budget: 128},
+    results: [{checkpoint: 'reference', policies: {random: {complete: false, summary: {wins: 0, episodes: 8, win_rate: 0}}},
+      probes: [{game: 'sc01-v1', level: 1, predictor: {delta_error: 0}, no_change: {delta_error: 1},
+        distinct_pairs: 0, distinct_correct: {delta_error: null}, distinct_wrong: {delta_error: null}}]}]};
+  await vm.runInContext('pollCampaign()', context);
+  assert.match(text('campaign-connection'), /pausada/);
+  assert.equal(nodes.get('diagnostics').hidden, false);
+  assert.match(text('diagnostic-status'), /partida 2\/8.*10\/128/);
+  assert.equal(nodes.get('diagnostic-policies').children[0].children[3].textContent, '0 %');
+  assert.equal(nodes.get('diagnostic-policies').children[0].children[6].textContent, 'Parcial');
+  assert.equal(nodes.get('diagnostic-actions').children[0].children[2].textContent, '0 %');
+  assert.equal(nodes.get('diagnostic-actions').children[0].children[4].textContent, '—');
   report.status = 'complete';
   report.final = {reference: {win_rate: .5, wins: 2, episodes: 4}, selected: {win_rate: .75, wins: 3, episodes: 4}};
   await vm.runInContext('pollCampaign()', context);

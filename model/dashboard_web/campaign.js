@@ -73,18 +73,19 @@ function renderCampaign(data) {
   const available = report.available === true;
   const p = campaign.progress || {}, config = report.config || {}, rows = report.cells || [];
   renderComparisonCharts(available ? report : {});
-  const terminal = ['complete', 'pilot_complete', 'failed', 'interrupted'].includes(report.status);
+  renderDiagnostics(report.diagnostics);
+  const terminal = ['complete', 'pilot_complete', 'failed', 'interrupted', 'paused'].includes(report.status);
   const failed = ['failed', 'interrupted'].includes(report.status) || campaign.phase === 'campaign_error';
   const finished = ['complete', 'pilot_complete'].includes(report.status);
   $('campaign-connection').textContent = !available ? 'Informe no disponible' : failed ? 'Campaña detenida'
-    : finished ? 'Campaña terminada' : source.available ? 'Campaña en curso · según el log' : 'Sin log de progreso';
+    : finished ? 'Campaña terminada' : report.status === 'paused' ? 'Campaña pausada · diagnósticos separados' : source.available ? 'Campaña en curso · según el log' : 'Sin log de progreso';
   $('campaign-connection').className = !available || failed || !source.available || source.age_seconds > 120 ? 'warn' : '';
   $('campaign-freshness').textContent = `Última escritura del log hace ${fmt(source.age_seconds)} s · consulta cada 2 s`;
   $('campaign-notice').hidden = available && !failed;
   $('campaign-notice').textContent = !available
     ? 'El informe de esta campaña todavía no está disponible. No se sustituyen sus resultados por los de otro entrenamiento.'
     : report.error || campaign.reason || 'La campaña está interrumpida; se conservan las evaluaciones completadas.';
-  $('campaign-current').textContent = terminal ? (finished ? 'Terminada' : 'Detenida') : title(p.variant);
+  $('campaign-current').textContent = terminal ? (finished ? 'Terminada' : report.status === 'paused' ? 'Pausada' : 'Detenida') : title(p.variant);
   $('campaign-stage').textContent = p.variant ? `Semilla ${fmt(p.seed)} · ${stages[p.stage] || p.stage || 'Esperando'} · ${fmt(p.actions)} / ${fmt(p.total_actions ?? config.actions)} acciones` : 'Esperando progreso';
   const variants = config.variants || [], seeds = config.seeds || [];
   $('campaign-completed').textContent = available ? `${rows.length} / ${variants.length * seeds.length}` : '—';
@@ -133,6 +134,34 @@ function renderCampaign(data) {
   if (hasFinal) for (const [label, r] of [['Referencia', final.reference], [title(report.selected), final.selected]]) {
     const tr = document.createElement('tr'); tr.append(cell(label), cell(`${fmt(r.wins)} / ${fmt(r.episodes)}`),
       cell(pct(r.win_rate)), cell(fmt(r.actions_per_success, 1))); finalTable.append(tr);
+  }
+}
+function renderDiagnostics(diagnostic) {
+  $('diagnostics').hidden = !diagnostic?.available;
+  const policies = $('diagnostic-policies'), actions = $('diagnostic-actions');
+  policies.replaceChildren(); actions.replaceChildren();
+  if (!diagnostic?.available) return;
+  const p = diagnostic.progress || {};
+  const state = diagnostic.status === 'complete' ? 'Terminados' : diagnostic.status === 'failed' ? `Error: ${diagnostic.error}` : 'En curso';
+  $('diagnostic-status').textContent = `${state} · ${p.checkpoint || ''} · ${p.game || ''} ${finite(p.level) ? `nivel ${fmt(p.level)}` : ''}`
+    + (p.phase === 'behavior' ? ` · ${p.policy} · partida ${fmt(p.current_episode)}/${fmt(p.total_episodes)} · ${fmt(p.episode_actions)}/${fmt(p.episode_budget)} acciones` : '')
+    + (p.phase === 'actions' ? ` · estado ${fmt((p.anchor ?? 0) + 1)} · alternativa ${fmt((p.action_index ?? 0) + 1)}/${fmt(p.candidates)}` : '')
+    + ` · último registro hace ${fmt(diagnostic.age_seconds)} s`;
+  for (const result of diagnostic.results || []) {
+    for (const [mode, policy] of Object.entries(result.policies || {})) {
+      const r = policy.summary || {}, tr = document.createElement('tr');
+      tr.append(cell(result.checkpoint), cell({random: 'Azar', q: 'Q directa', value_mpc: 'Planner'}[mode] || mode),
+        cell(`${fmt(r.wins)} / ${fmt(r.episodes)}`), cell(pct(r.win_rate)), cell(fmt(r.actions_per_success, 1)),
+        cell(fmt(r.decision_ms, 1)), cell(policy.complete ? 'Terminada' : 'Parcial'));
+      policies.append(tr);
+    }
+    for (const r of result.probes || []) {
+      const tr = document.createElement('tr');
+      tr.append(cell(result.checkpoint), cell(`${r.game} / ${fmt(r.level)}`), cell(pct(r.predictor?.delta_error)),
+        cell(pct(r.no_change?.delta_error)), cell(pct(r.distinct_correct?.delta_error)),
+        cell(pct(r.distinct_wrong?.delta_error)), cell(fmt(r.distinct_pairs)));
+      actions.append(tr);
+    }
   }
 }
 async function pollCampaign() {

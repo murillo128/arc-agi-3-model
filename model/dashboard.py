@@ -335,10 +335,40 @@ class CampaignMonitor(LogMonitor):
                 summary['error'] = str(report.get('error', ''))[:500]
                 summary.update(available=True, updated_at=stat.st_mtime)
                 self.report_summary, self.report_identity = summary, identity
-            return self.report_summary
+            return dict(self.report_summary, diagnostics=self._diagnostics())
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             self.report_identity = None
             return {'available': False, 'reason': 'unreadable'}
+
+    def _diagnostics(self):
+        path = self.report_path.parent / 'diagnostics' / 'report.json'
+        try:
+            with path.open('rb') as stream:
+                payload = stream.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError('Diagnostic report too large')
+            report = json.loads(payload)
+            count_keys = ('wrong', 'union', 'samples', 'delta_error', 'invented', 'missed', 'wrong_color', 'correct')
+            results = []
+            for row in report.get('results', [])[:10]:
+                probes = []
+                for p in row.get('probes', [])[:100]:
+                    probes.append({'game': str(p['game'])[:80], 'level': number(p['level']),
+                        'distinct_pairs': number(p.get('distinct_pairs')),
+                        **{k: numbers(p.get(k), count_keys) for k in (
+                            'predictor', 'no_change', 'wrong_action', 'distinct_correct', 'distinct_wrong')}})
+                policies = {mode: {'complete': value.get('complete') is True,
+                    'summary': numbers(value.get('summary'), ('episodes', 'wins', 'win_rate', 'actions',
+                                                            'actions_per_success', 'decision_ms'))}
+                    for mode, value in row.get('policies', {}).items() if mode in ('random', 'q', 'value_mpc')}
+                results.append({'checkpoint': str(row['checkpoint'])[:80], 'probes': probes, 'policies': policies,
+                                'weights_unchanged': row.get('weights_unchanged') is True})
+            return {'available': True, 'status': str(report['status'])[:80],
+                    'progress': compact_values(report.get('progress')), 'results': results,
+                    'error': str(report.get('error', ''))[:240],
+                    'age_seconds': max(0, time.time() - path.stat().st_mtime)}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return {'available': False}
 
     def _reset(self):
         super()._reset()
@@ -375,7 +405,7 @@ class CampaignMonitor(LogMonitor):
             return
         if event not in ('campaign_started', 'campaign_phase', 'campaign_progress', 'campaign_evaluation',
                          'campaign_finished', 'campaign_error', 'campaign_imagination_gate',
-                         'campaign_variant_deferred'):
+                         'campaign_variant_deferred', 'campaign_paused'):
             return
         if event == 'campaign_started':
             self._reset()
@@ -424,6 +454,10 @@ class CampaignMonitor(LogMonitor):
         elif event == 'campaign_finished':
             self.run['selected'] = compact_values(row.get('selected'))
             self.run['status'] = str(row.get('status', 'finished'))[:80]
+        elif event == 'campaign_paused':
+            self.progress.update(point)
+            self.progress.pop('evaluation', None)
+            self.run['status'] = 'paused'
         elif event == 'campaign_error':
             self.reason = str(row.get('error', row.get('message', row.get('reason', 'Error sin detalle'))))[:500]
         key = (point.get('variant'), point.get('seed'))

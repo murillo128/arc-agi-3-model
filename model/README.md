@@ -166,6 +166,32 @@ anteriores. El servicio web puede reiniciarse sin reiniciar el entrenamiento.
 
 ### Agente portable y contratos
 
+La campaña puede pausarse entre ejecuciones completadas y conservar su `report.json`
+para reanudar las pendientes. Para diagnosticar un predictor antes de ampliar el
+entrenamiento, `python -m model.diagnostics --agents referencia.pt candidato.pt
+--labels referencia candidato --output model/runs/architecture-evolution/full/diagnostics`
+evalúa ambos agentes congelados; CUDA mantiene `torch.compile` y `--device cpu`
+permite la comprobación pequeña. No actualiza pesos ni escribe replay.
+
+El protocolo de diagnóstico usa los diez pares sintéticos juego/nivel. Por defecto
+compara azar, Q directa y MPC con ocho episodios por par, las mismas semillas de
+desarrollo nuevas y 128 acciones máximas. El coste temporal observado puede incluir
+compilación: no se usa para promover una arquitectura. Otras dos sondas comparan
+el delta visual predicho con conservar el tablero y con predecir otra acción.
+Cada alternativa se ejecuta realmente desde la misma semilla y prefijo de acciones;
+se comprueba la igualdad de todas las observaciones del prefijo y se repite el
+sucesor para detectar falta de reproducibilidad. No se inspeccionan reglas ni estado
+privado del juego. Los resultados de acciones equivalentes se separan de los pares
+con sucesores visuales distintos. La sonda cubre dos semillas y cuatro estados
+iniciales por par: es diagnóstico limitado, no confirmación ni generalización.
+
+El informe se guarda atómicamente en el directorio indicado, que debe estar libre
+de informes anteriores. Si está en `diagnostics/report.json` junto al informe de
+campaña, la página de comparación muestra su progreso y tablas aparte. La web lee
+como máximo 1 MiB y sólo publica resúmenes, sin pesos, rutas de checkpoints ni trazas.
+Una nueva variante de entrenamiento se decide después de interpretar estas sondas;
+el diagnóstico no selecciona ni promueve automáticamente ningún modelo.
+
 ```sh
 .venv/bin/python -m model.agent_checkpoint \
   --world model/runs/active-training/latest.pt \

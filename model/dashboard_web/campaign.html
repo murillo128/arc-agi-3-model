@@ -31,6 +31,15 @@
       <article class="chart-card"><h3>Coste de decidir <span>ms / decisión · más bajo es mejor</span></h3><p>Tiempo observado; puede incluir efectos de compilación y caché. No demuestra por sí solo una mejora de velocidad.</p><div id="campaign-latency-chart" class="comparison-bars"></div></article>
     </div>
   </section>
+  <section id="diagnostics" class="campaign-results" hidden>
+    <h2>Diagnósticos con pesos congelados</h2>
+    <p id="diagnostic-status" class="muted"></p>
+    <p>Prueba corta de desarrollo. Mismos pesos y presupuestos para azar, Q directa y planner. No selecciona automáticamente una arquitectura.</p>
+    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Política</th><th>Victorias / partidas</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="diagnostic-policies"></tbody></table></div>
+    <h3>Acciones alternativas desde el mismo estado real</h3>
+    <p>Error visual del delta; menor es mejor. «Sin cambio» conserva el tablero. Las dos últimas columnas comparan la acción correcta con otra sólo cuando sus resultados reales difieren.</p>
+    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Juego / nivel</th><th>Predictor</th><th>Sin cambio</th><th>Acción correcta · distintos</th><th>Otra acción · distintos</th><th>Pares distintos</th></tr></thead><tbody id="diagnostic-actions"></tbody></table></div>
+  </section>
   <section class="campaign-results">
     <h2>Resultados de desarrollo</h2>
     <p class="muted">Sólo evaluaciones completas de cada semilla. Errores y éxito: media entre semillas terminadas; resultados parciales hasta completar todas. Las acciones por victoria usan el total de acciones y victorias. Las acciones de evaluación no cuentan como entrenamiento.</p>
