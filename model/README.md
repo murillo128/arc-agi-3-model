@@ -182,7 +182,8 @@ anteriores. El servicio web puede reiniciarse sin reiniciar el entrenamiento.
 
 El ensayo pequeño `python -m model.learning_probe --agent agente.pt --output
 model/runs/architecture-evolution/full/learning-probe` compara pérdida latente a dos
-pasos frente a añadir supervisión visual a dos pasos. Usa el `Learner` de producción,
+pasos frente a añadir supervisión visual a dos pasos. Ambas ramas conservan la
+supervisión visual original a un paso. Usa el `Learner` de producción,
 los mismos pesos iniciales, datos, orden de muestreo y 120 actualizaciones por rama.
 Encoder/decoder permanecen congelados, verificados al finalizar. Por defecto recoge
 dos prefijos reales de hasta ocho acciones por juego/nivel para aprender y otros
