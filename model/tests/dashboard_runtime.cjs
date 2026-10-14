@@ -98,6 +98,21 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(nodes.get('panel-behavior').hidden, false);
   assert.equal(text('actions'), '10');
   assert.equal(nodes.get('tab-behavior')['aria-selected'], 'true');
+  // Inner evaluation events give provisional counters, never fabricated training losses.
+  data.campaign.progress.stage = 'behavior_evaluation';
+  data.campaign.progress.evaluation = {level: 1, episodes: 16, wins: 7, split: 'dev', policy: 'value_mpc'};
+  data.campaign.source.age_seconds = 177;
+  await vm.runInContext('poll()', context);
+  assert.equal(text('actions'), '10', 'evaluation does not increment training actions');
+  assert.equal(text('behavior-win'), '43,75 %');
+  assert.match(text('behavior-wins'), /7\/16.*parcial/);
+  assert.match(text('behavior-status'), /cada 16 partidas/);
+  assert.doesNotMatch(text('connection'), /sin datos recientes/);
+  assert.equal(nodes.get('connection').className, '');
+  assert.equal(nodes.get('behavior-loss-card').hidden, true);
+  assert.equal(nodes.get('behavior-actor-card').hidden, true);
+  assert.equal(nodes.get('behavior-wins-card').hidden, true);
+  assert.match(text('speed-note'), /no hay TPS de aprendizaje/);
   const old = nodes.get('execution-select').options.find(o => o.textContent.includes('world_reference'));
   ui.change('execution-select', old.value);
   assert.equal(text('actions'), '100', 'global selection changes counters as well as curves');

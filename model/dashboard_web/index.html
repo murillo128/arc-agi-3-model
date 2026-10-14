@@ -54,14 +54,14 @@
     <p id="behavior-status" class="muted"></p>
     <div class="metrics summary-metrics">
       <article><h2>Éxito del agente</h2><strong id="behavior-win">—</strong><small id="behavior-wins"></small></article>
-      <article><h2>Referencia al azar</h2><strong id="behavior-random">—</strong><small id="behavior-random-note">Misma fase y nivel</small></article>
-      <article><h2>Coste de decidir</h2><strong id="behavior-ms">—</strong><small>ms / acción · evaluación</small></article>
-      <article><h2>Velocidad de evaluación</h2><strong id="behavior-tps">—</strong><small>acciones/s · separadas del aprendizaje</small></article>
+      <article id="behavior-baseline-card"><h2>Referencia al azar</h2><strong id="behavior-random">—</strong><small id="behavior-random-note">Misma fase y nivel</small></article>
+      <article id="behavior-ms-card"><h2>Coste de decidir</h2><strong id="behavior-ms">—</strong><small>ms / acción · evaluación</small></article>
+      <article id="behavior-tps-card"><h2>Velocidad de evaluación</h2><strong id="behavior-tps">—</strong><small>acciones/s · separadas del aprendizaje</small></article>
     </div>
     <div class="charts">
-      <article class="chart-card"><h3>Éxito en el juego <span>% · evaluación</span></h3><p>Series separadas por política, fase y nivel. La pestaña Evaluaciones contiene todos los resultados.</p><div id="wins-legend" class="legend"></div><div class="plot"><canvas id="wins" role="img" aria-label="Éxito del agente"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Progreso y valor <span>pérdidas</span></h3><p>Eventos, valor del estado V y valor de la acción Q. No son porcentajes de error ni una imagen objetivo.</p><div id="behaviorLoss-legend" class="legend"></div><div class="plot"><canvas id="behaviorLoss" role="img" aria-label="Pérdidas de progreso y valor"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Actor y crítico <span>pérdidas</span></h3><p>Imitación del planner, política y crítico, sólo cuando se entrenan en esta ejecución.</p><div id="actor-legend" class="legend"></div><div class="plot"><canvas id="actor" role="img" aria-label="Pérdidas de actor y crítico"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-wins-card" class="chart-card"><h3>Éxito en el juego <span>% · evaluación</span></h3><p>Series separadas por política, fase y nivel. La pestaña Evaluaciones contiene todos los resultados.</p><div id="wins-legend" class="legend"></div><div class="plot"><canvas id="wins" role="img" aria-label="Éxito del agente"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-loss-card" class="chart-card"><h3>Progreso y valor <span>pérdidas</span></h3><p>Eventos, valor del estado V y valor de la acción Q. No son porcentajes de error ni una imagen objetivo.</p><div id="behaviorLoss-legend" class="legend"></div><div class="plot"><canvas id="behaviorLoss" role="img" aria-label="Pérdidas de progreso y valor"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-actor-card" class="chart-card"><h3>Actor y crítico <span>pérdidas</span></h3><p>Imitación del planner, política y crítico, sólo cuando se entrenan en esta ejecución.</p><div id="actor-legend" class="legend"></div><div class="plot"><canvas id="actor" role="img" aria-label="Pérdidas de actor y crítico"></canvas><output class="tooltip" hidden></output></div></article>
     </div>
   </section>
   <section id="panel-evaluations" role="tabpanel" aria-labelledby="tab-evaluations" hidden>

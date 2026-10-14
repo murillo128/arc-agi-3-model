@@ -224,10 +224,39 @@ class DashboardTests(unittest.TestCase):
                 urlopen(base + route)
             self.assertEqual(error.exception.code, 404)
 
+    def test_campaign_inner_evaluation_progress_keeps_training_counters_and_context(self):
+        monitor = CampaignMonitor(self.path)
+        progress = {'event': 'behavior_evaluation_progress', 'role': 'campaign', 'split': 'dev',
+                    'level': 1, 'episodes': 16, 'wins': 7, 'policy': 'value_mpc', 'horizon': 2}
+        self.append(progress)
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'], 'orphan events have no reliable variant identity')
+        self.append({'event': 'campaign_phase', 'variant': 'rollout2', 'seed': 0,
+                     'stage': 'behavior_evaluation', 'actions': 16384}, progress)
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot['progress']['actions'], 16384)
+        self.assertEqual(snapshot['progress']['evaluation']['wins'], 7)
+        self.assertEqual(snapshot['executions'][0]['evaluation']['episodes'], 16)
+        self.assertEqual(snapshot['evaluations'], [], 'partial evaluation is not a completed campaign result')
+        self.append(dict(progress, event='behavior_evaluation', episodes=32, wins=14,
+                         actions=3000, decision_ms=120, actions_per_second=8))
+        self.assertEqual(monitor.snapshot()['progress']['evaluation']['decision_ms'], 120)
+        self.append(dict(progress, level=2, wins=0))
+        current = monitor.snapshot()['progress']['evaluation']
+        self.assertEqual(current['wins'], 0)
+        self.assertNotIn('decision_ms', current, 'a new level cannot inherit the previous latency')
+        self.append(dict(progress, split='final', wins=15))
+        self.assertEqual(monitor.snapshot()['progress']['evaluation']['wins'], 0)
+        self.append({'event': 'campaign_evaluation', 'variant': 'rollout2', 'seed': 0, 'actions': 16384,
+                     'split': 'dev', 'behavior': {'win_rate': .4}})
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'])
+        self.append({'event': 'campaign_phase', 'variant': 'rollout2', 'seed': 1, 'stage': 'initializing', 'actions': 0}, progress)
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'], 'previous seed progress cannot leak')
+
     def test_campaign_report_refresh_retention_and_read_only_summary(self):
         path = self.path.with_name('report.json')
         monitor = CampaignMonitor(self.path, max_points=2, report_path=path)
         self.assertFalse(monitor.snapshot()['report']['available'])
+
         report = {'status': 'running', 'selected': None,
             'config': {'variants': ['world_reference', 'rollout2'], 'seeds': [0, 1, 2], 'actions': 100},
             'cells': [{'variant': 'world_reference', 'seed': 0,

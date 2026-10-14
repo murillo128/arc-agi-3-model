@@ -351,6 +351,23 @@ class CampaignMonitor(LogMonitor):
         if not isinstance(row, dict):
             return
         event = row.get('event')
+        if event in ('behavior_evaluation_progress', 'behavior_evaluation'):
+            # The campaign's evaluator emits inner events without variant/seed.
+            # Bind only to an explicit active development-evaluation context.
+            # Final confirmation belongs to report.json, not the last variant.
+            if (self.progress.get('stage') != 'behavior_evaluation' or
+                    self.progress.get('variant') is None or self.progress.get('seed') is None or
+                    row.get('role') != 'campaign' or row.get('split') != 'dev'):
+                return
+            evaluation = numbers(row, ('level', 'episodes', 'wins', 'horizon', 'win_rate',
+                                       'actions', 'decision_ms', 'actions_per_second'))
+            evaluation.update(split='dev', policy=str(row.get('policy', ''))[:80],
+                              level_complete=event == 'behavior_evaluation')
+            self.progress['evaluation'] = evaluation
+            key = (self.progress['variant'], self.progress['seed'])
+            self.executions.setdefault(key, {}).update(self.progress)
+            self.revision += 1
+            return
         if event not in ('campaign_started', 'campaign_phase', 'campaign_progress', 'campaign_evaluation',
                          'campaign_finished', 'campaign_error', 'campaign_imagination_gate',
                          'campaign_variant_deferred'):
@@ -367,6 +384,7 @@ class CampaignMonitor(LogMonitor):
             if (point.get('variant'), point.get('seed')) != (self.progress.get('variant'), self.progress.get('seed')):
                 self.progress = {}
             self.progress.update(point)
+            self.progress.pop('evaluation', None)
             self.progress.pop('actions_per_second', None)
             self.progress['message'] = str(row.get('message', ''))[:240]
         elif event == 'campaign_progress':
@@ -374,6 +392,8 @@ class CampaignMonitor(LogMonitor):
             self.progress = point
             self.progress_points.append(dict(point))
         elif event == 'campaign_evaluation':
+            if (point.get('variant'), point.get('seed')) == (self.progress.get('variant'), self.progress.get('seed')):
+                self.progress.pop('evaluation', None)
             point['world'] = numbers(row.get('world'), VALIDATION_KEYS)
             world = row.get('world')
             if isinstance(world, dict) and isinstance(world.get('rollouts'), dict):
@@ -404,6 +424,8 @@ class CampaignMonitor(LogMonitor):
         key = (point.get('variant'), point.get('seed'))
         if key[0] is not None and key[1] is not None:
             summary = self.executions.setdefault(key, {})
+            if event in ('campaign_phase', 'campaign_evaluation'):
+                summary.pop('evaluation', None)
             if event in ('campaign_phase', 'campaign_progress'):
                 summary.update(self.progress)
             elif event == 'campaign_evaluation':
