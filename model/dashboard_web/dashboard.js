@@ -241,6 +241,16 @@ function aggregateDiagnostics(row) {
   }
   return result;
 }
+function evaluationDiagnostics(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = JSON.stringify([row.actions, row.split]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.values()].map(group => aggregateDiagnostics(group.length === 1 ? group[0]
+    : {actions: group[0].actions, split: group[0].split, per_pair: group}));
+}
 function render(data) {
   const {views, current} = executionCatalogue(data);
   const select = $('execution-select');
@@ -311,7 +321,7 @@ function render(data) {
   charts.rollouts.set(groupedLines(visualRows, [
     ...[1, 2, 4].map(h => [`${h} paso${h > 1 ? 's' : ''}`, r => r.rollouts?.[String(h)]?.latent_mse]),
     ['Identidad · 4 pasos', r => r.rollouts?.['4']?.identity_latent_mse]], curveGroup));
-  const diagnostics = visualRows.map(aggregateDiagnostics);
+  const diagnostics = evaluationDiagnostics(visualRows);
   charts.changes.set([['Inventados', 'extra_changes'], ['Omitidos', 'missed_changes'],
     ['Color incorrecto', 'wrong_replacement_colors'], ['Acertados', 'correct_changes']]
     .map(([name, key]) => line(name, diagnostics, r => r[key])), undefined, ' px');
