@@ -58,7 +58,12 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
     evaluations: [{variant: 'world_reference', seed: 0, actions: 100, split: 'dev',
       world: {delta_error: .5, decoder_delta_error: .1}, behavior: {win_rate: .25, actions: 88}},
       {variant: 'rollout2', seed: 0, actions: 10, split: 'intermediate',
-        world: {delta_error: .1, decoder_delta_error: 0, rollouts: {'2': {latent_mse: .3}}}}]}}
+        world: {delta_error: .1, decoder_delta_error: 0, rollouts: {'2': {latent_mse: .3}}, per_pair: [
+          {game: 'first', level: 1, transitions: 1, latent_std: .2,
+            extra_changes: 2, missed_changes: 3, wrong_replacement_colors: 4, correct_changes: 5},
+          {game: 'second', level: 2, transitions: 3, latent_std: .6,
+            extra_changes: 10, missed_changes: 20, wrong_replacement_colors: 30, correct_changes: 40}
+        ]}}]}}
 ;
 (async () => {
   assert.equal([...html.matchAll(/<select\b/g)].length, 1, 'one global execution selector, no independent selectors');
@@ -72,7 +77,19 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('behavior-win'), '—', 'old behavior results cannot fill current campaign');
   assert.match(text('run-info'), /rollout2.*0/);
   assert.equal(vm.runInContext('charts.latent.series[0].points[0].y', context), .2);
-  assert.equal(nodes.get('world-table').children.length, 1);
+  assert.equal(vm.runInContext('charts.changes.series.length', context), 4);
+  assert.equal(vm.runInContext('JSON.stringify(charts.changes.series.map(s => s.points[0].y))', context), '[12,23,34,45]');
+  assert.equal(vm.runInContext('charts.spread.series.length', context), 1);
+  assert.ok(Math.abs(vm.runInContext('charts.spread.series[0].points[0].y', context) - .5) < 1e-12);
+  assert.equal(vm.runInContext(`aggregateDiagnostics({extra_changes: 7, per_pair: [
+    {extra_changes: 7}]}).extra_changes`, context), 7, 'existing totals are not counted twice');
+  assert.equal(vm.runInContext(`aggregateDiagnostics({per_pair: [
+    {extra_changes: 2, transitions: 1, latent_std: .2}, {transitions: 3}]}).extra_changes`, context),
+    undefined, 'missing counts must not become a partial total');
+  assert.equal(vm.runInContext(`aggregateDiagnostics({per_pair: [
+    {transitions: 1, latent_std: .2}, {transitions: 3}]}).latent_std`, context),
+    undefined, 'missing diversity must not silently exclude an evaluated level');
+  assert.equal(nodes.get('world-table').children.length, 3, 'per-level detail remains available in the evaluation table');
   assert.equal(nodes.get('behavior-table').children.length, 1); // explicit empty row
   assert.match(nodes.get('behavior-table').children[0].children[0].textContent, /Sin evaluaciones/);
   // Tabs preserve the same selected execution and remain keyboard-operable native buttons.
@@ -149,9 +166,22 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('actions'), '—');
   // Current-source fallback without a campaign is still a complete world-only dashboard.
   const onlyWorld = {...data}; delete onlyWorld.campaign;
+  onlyWorld.validations = [
+    {actions: 100, level: 1, transitions: 1, latent_std: .2,
+      extra_changes: 2, missed_changes: 3, wrong_replacement_colors: 4, correct_changes: 5},
+    {actions: 100, level: 2, transitions: 3, latent_std: .6,
+      extra_changes: 10, missed_changes: 20, wrong_replacement_colors: 30, correct_changes: 40},
+    {actions: 200, level: 1, transitions: 1, latent_std: .8,
+      extra_changes: 1, missed_changes: 2, wrong_replacement_colors: 3, correct_changes: 4}
+  ];
   const single = await dashboard(onlyWorld);
   assert.equal(single.text('actions'), '900');
   assert.match(single.text('connection'), /detenido/i);
   assert.match(single.text('notice'), /interrupción/);
+  assert.equal(vm.runInContext('JSON.stringify(charts.changes.series.map(s => s.points.map(p => p.y)))', single.context),
+    '[[12,1],[23,2],[34,3],[45,4]]', 'legacy per-level records aggregate only within each evaluation');
+  assert.equal(vm.runInContext('charts.spread.series[0].points.length', single.context), 2);
+  assert.ok(Math.abs(vm.runInContext('charts.spread.series[0].points[0].y', single.context) - .5) < 1e-12);
+  assert.equal(vm.runInContext('charts.spread.series[0].points[1].y', single.context), .8);
   console.log('Single execution selection: counters, charts, tables, tabs, source/seed isolation and pending evaluations passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
