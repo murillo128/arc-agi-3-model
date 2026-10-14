@@ -107,6 +107,10 @@ Las variantes de
 comportamiento conservan el mundo original; `double_q` y `click_mixed` se comparan
 con `mc`. Los actores parten de las cabezas MC calibradas de su misma semilla.
 Las propuestas de clic mixtas mantienen dieciséis candidatos y exploración uniforme.
+En las variantes de comportamiento se reutiliza la evaluación del mundo de MC
+sólo con la misma semilla y fingerprint exacto; el informe identifica su procedencia.
+La evaluación de las decisiones de cada variante siempre se ejecuta de nuevo.
+Las variantes que entrenan el mundo realizan su propia evaluación completa.
 La selección final conserva una configuración completa que haya sido medida;
 no combina automáticamente ganadores de comparaciones distintas sin evaluarlos juntos.
 

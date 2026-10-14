@@ -11,7 +11,8 @@ from unittest.mock import patch
 
 import torch
 
-from model.campaign import CONTROLS, WORLD_VARIANTS, compare, imagination_gate, main, quotas, world_config
+from model.campaign import (CONTROLS, WORLD_VARIANTS, compare, evaluate_cell_world,
+                            imagination_gate, main, quotas, world_config)
 from model.config import TrainConfig
 from model.planning import OutcomeValue, PlanConfig, fingerprint
 
@@ -130,8 +131,8 @@ class ImaginationAdmission(unittest.TestCase):
                  patch('model.campaign.Factory'), \
                  patch('model.campaign.load_source', return_value=self.engine), \
                  patch('model.campaign.load_heads', return_value=heads), \
-                 patch('model.campaign.evaluate_world', return_value=measured), \
-                 patch('model.campaign.evaluate_behavior', return_value={}), \
+                 patch('model.campaign.evaluate_world', return_value=measured) as world_evaluation, \
+                 patch('model.campaign.evaluate_behavior', return_value={}) as behavior_evaluation, \
                  patch('model.campaign.Agent'), \
                  patch('model.campaign.agent_checkpoint.save', side_effect=save), \
                  patch('model.campaign_behavior.train_behavior', side_effect=train), \
@@ -141,6 +142,8 @@ class ImaginationAdmission(unittest.TestCase):
                     '--variants', 'mc', 'actor_imitation', 'actor_imagined']
                 main(arguments)
                 main(arguments)  # A resumed finished campaign must not retrain deferred cells.
+                self.assertEqual(world_evaluation.call_count, 1)
+                self.assertEqual(behavior_evaluation.call_count, 2)
             report = json.loads((output/'report.json').read_text())
             self.assertEqual(trained, ['mc', 'actor_imitation'])
             self.assertEqual((output/'candidate.pt').read_text(), 'actor_imitation')
@@ -148,6 +151,34 @@ class ImaginationAdmission(unittest.TestCase):
             self.assertEqual(report['deferred_cells'][0]['training'], {'actions': 0, 'updates': 0})
             self.assertEqual(report['deferred_variants']['actor_imagined']['fallback'], 'actor_imitation')
             self.assertEqual(report['status'], 'pilot_complete')
+            self.assertFalse(report['cells'][0]['world_evaluation']['reused'])
+            self.assertTrue(report['cells'][1]['world_evaluation']['reused'])
+
+
+class WorldEvaluationReuse(unittest.TestCase):
+    def test_exact_mc_world_and_seed_can_be_reused_but_other_measurements_cannot(self):
+        engine = SimpleNamespace(model=torch.nn.Linear(1, 1))
+        pairs = [('synthetic', 1)]
+        stored = {'per_pair': [{'game': 'synthetic', 'level': 1, 'delta_error': .1}]}
+        reference = {'variant': 'mc', 'seed': 1, 'world_fingerprint': fingerprint(engine.model), 'world': stored}
+        with patch('model.campaign.evaluate_world', return_value={'fresh': True}) as evaluate:
+            measured, provenance = evaluate_cell_world(engine, {}, pairs, 'double_q', 1, 32, [reference])
+            self.assertIs(measured, stored)
+            self.assertTrue(provenance['reused'])
+            self.assertEqual(provenance['source_variant'], 'mc')
+            self.assertEqual(provenance['source_seed'], 1)
+            self.assertEqual(provenance['episodes_per_pair'], 32)
+            evaluate.assert_not_called()
+            for variant, seed, cell in (
+                    ('double_q', 1, dict(reference, world_fingerprint='different-world')),
+                    ('click_mixed', 2, reference),
+                    ('rollout2', 1, reference)):
+                with self.subTest(variant=variant, seed=seed):
+                    evaluate.reset_mock()
+                    measured, provenance = evaluate_cell_world(engine, {}, pairs, variant, seed, 32, [cell])
+                    evaluate.assert_called_once_with(engine, {}, pairs, seed, episodes=32)
+                    self.assertEqual(measured, {'fresh': True})
+                    self.assertFalse(provenance['reused'])
 
 
 if __name__ == '__main__':

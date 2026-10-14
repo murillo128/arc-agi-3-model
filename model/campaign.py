@@ -174,6 +174,26 @@ def evaluate_world(engine, factories, pairs, seed, episodes=2, *, diagnostics=Tr
     return result
 
 
+def evaluate_cell_world(engine, factories, pairs, variant, seed, episodes, cells):
+    """Reuse only MC's identical frozen-world measurement in this same campaign.
+
+    Campaign resume fixes evaluation configuration and seed schedules. Behavior
+    variants keep that world/config; their actions still require a fresh separate
+    evaluation. World-training variants always collect their own measurement.
+    """
+    source = fingerprint(engine.model)
+    reference = next((row for row in cells
+                      if row['variant'] == 'mc' and row['seed'] == seed
+                      and row.get('world_fingerprint') == source and row.get('world')), None)
+    reuse = variant in BEHAVIOR_VARIANTS and variant != 'mc' and reference is not None
+    measured = (reference['world'] if reuse else
+                evaluate_world(engine, factories, pairs, seed, episodes=episodes))
+    provenance = {'reused': reuse, 'source_variant': 'mc' if reuse else variant,
+                  'source_seed': seed, 'world_fingerprint': source,
+                  'episodes_per_pair': episodes, 'validation_seed': 600000 + seed}
+    return measured, provenance
+
+
 def imagination_gate(engine, factories, pairs, seed, reference_cell=None):
     """Conservative H2 admission, not a claim of sufficient planning accuracy.
 
@@ -507,12 +527,14 @@ def main(argv=None):
                     training_report['cumulative_actions'] += calibration['training']['actions']
                 emit('campaign_phase', variant=variant, seed=seed, stage='world_evaluation',
                      actions=args.actions, total_actions=args.actions)
-                world_report = evaluate_world(engine, factories, pairs, seed, episodes=args.dev_episodes)
+                world_report, world_evaluation = evaluate_cell_world(
+                    engine, factories, pairs, variant, seed, args.dev_episodes, report['cells'])
                 emit('campaign_phase', variant=variant, seed=seed, stage='behavior_evaluation',
                      actions=args.actions, total_actions=args.actions)
                 behavior = evaluate_behavior(engine, planner, factories, pairs, seed, args.dev_episodes, 'dev')
                 cell = {'variant': variant, 'seed': seed, 'training': training_report, 'world': world_report,
-                        'behavior': behavior, 'world_fingerprint': fingerprint(engine.model),
+                        'world_evaluation': world_evaluation,
+                        'behavior': behavior, 'world_fingerprint': world_evaluation['world_fingerprint'],
                         'gpu_peak_bytes': torch.cuda.max_memory_allocated() if args.device == 'cuda' else None}
                 if seed == args.seeds[0]:
                     # Predetermined representative seed, never the best-looking seed.
