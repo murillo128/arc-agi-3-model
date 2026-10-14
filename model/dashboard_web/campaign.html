@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARC · Comparación de variantes</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script src="campaign.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">ARC · EXPERIMENTOS</p><h1>Comparación de variantes</h1><p class="muted">Toda la campaña · resultados de cada variante y sus semillas.</p><a href="./">← Ver entrenamiento</a></div>
+    <div class="connection"><span id="campaign-connection" role="status">Conectando…</span><small id="campaign-freshness"></small></div>
+  </header>
+  <p id="campaign-notice" class="notice" hidden></p>
+  <section class="metrics summary-metrics" aria-label="Estado de la campaña">
+    <article><h2>En curso</h2><strong id="campaign-current">—</strong><small id="campaign-stage"></small></article>
+    <article><h2>Ejecuciones terminadas</h2><strong id="campaign-completed">—</strong><small id="campaign-budget"></small></article>
+    <article><h2>Candidata provisional</h2><strong id="campaign-candidate">Pendiente</strong><small>No confirmada hasta la evaluación final.</small></article>
+    <article><h2>Confirmación final</h2><strong id="campaign-confirmation">Pendiente</strong><small>Referencia y candidata · episodios separados de desarrollo.</small></article>
+  </section>
+  <section class="campaign-results">
+    <h2>Resultados de desarrollo</h2>
+    <p class="muted">Sólo evaluaciones completas de cada semilla. Errores y éxito: media entre semillas terminadas; resultados parciales hasta completar todas. Las acciones por victoria usan el total de acciones y victorias. Las acciones de evaluación no cuentan como entrenamiento.</p>
+    <div class="table-scroll"><table><thead><tr><th>Variante</th><th>Semillas y progreso</th><th>Estado</th><th>Error predictor</th><th>Error decoder</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Comparación con control</th></tr></thead><tbody id="campaign-table"></tbody></table></div>
+    <p class="muted">La comparación muestra el cambio de éxito en puntos porcentuales y su intervalo del 95 %. Conservar rendimiento y simplificar también puede justificar una promoción. «Aplazada» significa que no pasó el control de calidad necesario para imaginar. No se mezclan automáticamente variantes ganadoras.</p>
+  </section>
+  <section id="campaign-final" hidden>
+    <h2>Confirmación final</h2>
+    <p class="muted">Pesos representativos de la semilla 0; estos episodios no intervienen en la selección. No son tres entrenamientos nuevos.</p>
+    <div class="table-scroll"><table><thead><tr><th>Configuración</th><th>Victorias / episodios</th><th>Éxito</th><th>Acciones / victoria</th></tr></thead><tbody id="campaign-final-table"></tbody></table></div>
+  </section>
+  <footer>Actualización automática cada 2 segundos. Lee el informe existente y el progreso del log; no crea historial adicional ni modifica el entrenamiento.</footer>
+</main>
+</body>
+</html>

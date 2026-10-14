@@ -145,6 +145,19 @@ además de sus logs existentes. Muestra el progreso por variante/semilla, presup
 velocidad, errores a uno/dos/cuatro pasos, comparación identidad y éxito real,
 separados de las pérdidas de actor/crítico. No hay inspecciones visuales automáticas.
 
+La página `campaign.html`, enlazada desde el entrenamiento, compara toda la campaña
+sin cambiar el selector de la ejecución individual. Añadir
+`--campaign-report model/runs/architecture-evolution/full/report.json` al dashboard
+permite recuperar los resultados completados incluso tras reiniciar la web o
+descartar el tramo antiguo del log. Se lee el informe existente, sin crear otro
+historial ni exponer trazas de episodios. La tabla muestra medias entre semillas
+terminadas, avance de cada semilla, comparaciones controladas e intervalos del
+95 %, candidata provisional y confirmación final separada. Las semillas pendientes
+no cuentan como ceros y las evaluaciones intermedias no sustituyen resultados de
+desarrollo completos. El informe se limita a 32 MiB y se relee sólo cuando cambia;
+si no está disponible, la página lo indica sin reutilizar silenciosamente datos
+anteriores. El servicio web puede reiniciarse sin reiniciar el entrenamiento.
+
 ### Agente portable y contratos
 
 ```sh

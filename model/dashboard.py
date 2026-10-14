@@ -293,6 +293,53 @@ class CampaignMonitor(LogMonitor):
     # bounded line, then expose only the compact summaries above, never traces.
     max_line = 2 * 1024 * 1024
 
+    def __init__(self, path, max_points=2000, report_path=None):
+        self.report_path = Path(report_path) if report_path else None
+        self.report_identity = None
+        self.report_summary = None
+        super().__init__(path, max_points)
+
+    def _report(self):
+        """Read the trainer's atomic report, exposing summaries rather than episodes."""
+        if self.report_path is None:
+            return {'available': False, 'reason': 'not_configured'}
+        try:
+            stat = self.report_path.stat()
+            identity = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+            if identity != self.report_identity:
+                with self.report_path.open('rb') as stream:
+                    payload = stream.read(32 * 1024 * 1024 + 1)
+                if len(payload) > 32 * 1024 * 1024:
+                    raise ValueError('Report exceeds dashboard limit')
+                report = json.loads(payload)
+                if not isinstance(report, dict) or not isinstance(report.get('cells'), list):
+                    raise ValueError('Invalid campaign report')
+                behavior_keys = ('win_rate', 'wins', 'episodes', 'actions', 'actions_per_success', 'decision_ms')
+                cells = []
+                for cell in report['cells'][:100]:
+                    cells.append({'variant': str(cell['variant'])[:80], 'seed': number(cell['seed']),
+                        'world': numbers(cell.get('world'), VALIDATION_KEYS),
+                        'behavior': numbers(cell.get('behavior'), behavior_keys),
+                        'training': numbers(cell.get('training'), ('actions', 'updates', 'seconds', 'cumulative_actions'))})
+                summary = {k: compact_values(report.get(k)) for k in (
+                    'status', 'selected', 'processed_variants', 'controlled_comparisons',
+                    'comparisons', 'deferred_variants')}
+                config = report.get('config', {})
+                summary['config'] = {k: compact_values(config.get(k)) for k in (
+                    'variants', 'seeds', 'actions', 'dev_episodes', 'final_episodes', 'pilot')}
+                summary['cells'] = cells
+                summary['deferred_cells'] = [{k: compact_values(c.get(k)) for k in (
+                    'variant', 'seed', 'reason', 'fallback')} for c in report.get('deferred_cells', [])[:100]]
+                final = report.get('final', {})
+                summary['final'] = {k: numbers(final.get(k), behavior_keys) for k in ('reference', 'selected')}
+                summary['error'] = str(report.get('error', ''))[:500]
+                summary.update(available=True, updated_at=stat.st_mtime)
+                self.report_summary, self.report_identity = summary, identity
+            return self.report_summary
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            self.report_identity = None
+            return {'available': False, 'reason': 'unreadable'}
+
     def _reset(self):
         super()._reset()
         self.evaluations = deque(maxlen=self.max_points)
@@ -376,7 +423,8 @@ class CampaignMonitor(LogMonitor):
                     'phase': self.phase, 'reason': self.reason, 'run': dict(self.run),
                     'progress': dict(self.progress), 'progress_points': list(self.progress_points),
                     'executions': [dict(p) for p in self.executions.values()],
-                    'evaluations': list(self.evaluations), 'max_points': self.max_points}
+                    'evaluations': list(self.evaluations), 'max_points': self.max_points,
+                    'report': self._report()}
 
 
 def make_server(address, monitor, behavior=None, campaign=None):
@@ -391,7 +439,7 @@ def make_server(address, monitor, behavior=None, campaign=None):
                     state['campaign'] = campaign.snapshot()
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js'):
+            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js'):
                 name = 'index.html' if route == '/' else route[1:]
                 data = (ASSETS / name).read_bytes()
                 mime = {'html': 'text/html', 'css': 'text/css', 'js': 'text/javascript'}[name.rsplit('.', 1)[1]] + '; charset=utf-8'
@@ -424,6 +472,7 @@ def main():
     parser.add_argument('--log', type=Path, required=True)
     parser.add_argument('--behavior-log', type=Path, help='Independent goal/planner JSON-line log')
     parser.add_argument('--campaign-log', type=Path, help='Independent architecture comparison JSON-line log')
+    parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
@@ -432,7 +481,7 @@ def main():
         parser.error('--max-points must be between 2 and 10000')
     monitor = LogMonitor(args.log, args.max_points)
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
-    campaign = CampaignMonitor(args.campaign_log, args.max_points) if args.campaign_log else None
+    campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
     with make_server((args.host, args.port), monitor, behavior, campaign) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:

@@ -17,9 +17,11 @@ from model.dashboard import LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LI
 class DashboardTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for dashboard JavaScript rendering contract')
     def test_full_javascript_poll_and_render(self):
-        result = subprocess.run(['node', str(Path(__file__).with_name('dashboard_runtime.cjs'))],
-                                text=True, capture_output=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for script in ('dashboard_runtime.cjs', 'campaign_runtime.cjs'):
+            with self.subTest(script=script):
+                result = subprocess.run(['node', str(Path(__file__).with_name(script))],
+                                        text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -201,6 +203,7 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = f'http://127.0.0.1:{server.server_port}'
         for route, mime in (('/', 'text/html'), ('/dashboard.js', 'text/javascript'),
+                            ('/campaign.html', 'text/html'), ('/campaign.js', 'text/javascript'),
                             ('/dashboard.css', 'text/css'), ('/api/state', 'application/json')):
             with urlopen(base + route) as response:
                 self.assertEqual(response.headers.get_content_type(), mime)
@@ -220,6 +223,41 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + route)
             self.assertEqual(error.exception.code, 404)
+
+    def test_campaign_report_refresh_retention_and_read_only_summary(self):
+        path = self.path.with_name('report.json')
+        monitor = CampaignMonitor(self.path, max_points=2, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['available'])
+        report = {'status': 'running', 'selected': None,
+            'config': {'variants': ['world_reference', 'rollout2'], 'seeds': [0, 1, 2], 'actions': 100},
+            'cells': [{'variant': 'world_reference', 'seed': 0,
+                'world': {'delta_error': .2, 'per_pair': [{'private_trace': 'not exposed'}]},
+                'behavior': {'win_rate': .5, 'wins': 2, 'episodes': 4, 'results': ['not exposed']},
+                'training': {'actions': 100, 'per_pair': ['not exposed']}}]}
+        path.write_text(json.dumps(report))
+        original = path.read_bytes()
+        snapshot = monitor.snapshot()['report']
+        self.assertTrue(snapshot['available'])
+        self.assertEqual(snapshot['cells'][0]['behavior']['win_rate'], .5)
+        self.assertNotIn('results', snapshot['cells'][0]['behavior'])
+        self.assertNotIn('per_pair', snapshot['cells'][0]['world'])
+        self.assertEqual(path.read_bytes(), original)
+        for action in range(5):
+            self.append({'event': 'campaign_progress', 'variant': 'rollout2', 'seed': 1, 'actions': action})
+        self.assertEqual(len(monitor.snapshot()['report']['cells']), 1)
+        # The trainer atomically replaces its report; a cold dashboard can recover it too.
+        report.update(status='complete', selected='world_reference', final={
+            'selected': {'win_rate': .75, 'results': ['not exposed']}, 'reference': {'win_rate': .5}})
+        replacement = path.with_suffix('.tmp')
+        replacement.write_text(json.dumps(report)); replacement.replace(path)
+        snapshot = monitor.snapshot()['report']
+        self.assertEqual(snapshot['status'], 'complete')
+        self.assertEqual(snapshot['final']['selected'], {'win_rate': .75})
+        self.assertEqual(CampaignMonitor(self.path, report_path=path).snapshot()['report'], snapshot)
+        path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['available'], 'do not silently reuse stale results')
+        path.unlink()
+        self.assertFalse(monitor.snapshot()['report']['available'])
 
     def test_campaign_counters_and_evaluation_are_isolated_by_variant_and_seed(self):
         monitor = CampaignMonitor(self.path, max_points=3)

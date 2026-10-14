@@ -58,6 +58,15 @@ td, th { padding: 12px 12px 12px 0; border-bottom: 1px solid #293733; white-spac
 dl { display: grid; grid-template-columns: 1fr auto; gap: 14px; font-size: 12px; margin: 22px 0; }
 dt { color: #a8bbb5; } dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 footer { padding: 24px 0 4px; color: #7f9890; font-size: 11px; }
+a { color: #77dabb; font-size: 13px; }
+.campaign-results { margin-top: 32px; }
+#campaign-table td { white-space: pre-line; min-width: 90px; vertical-align: top; }
+#campaign-table td:first-child { min-width: 170px; }
+#campaign-table td:last-child { min-width: 210px; }
+#campaign-table small { display: block; margin-top: 6px; line-height: 1.6; }
+#campaign-table progress { display: block; width: 150px; height: 8px; margin-top: 8px; accent-color: #77dabb; }
+.campaign-active { background: #20312d; }
+#campaign-current, #campaign-candidate { font-size: 22px; }
 [hidden] { display: none !important; }
 @media (max-width: 1150px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .details { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { main { padding: 22px 14px; } header, .toolbar { align-items: start; flex-direction: column; } .connection { text-align: left; } .charts { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-card { padding: 18px 14px 10px; } h3 span { float: none; display: block; margin-top: 6px; } .plot { height: 220px; } .controls { width: 100%; } }
