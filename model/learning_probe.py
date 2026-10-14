@@ -127,6 +127,10 @@ def main(argv=None):
             started = time.monotonic()
             for update in range(args.updates + 1):
                 if update:
+                    # Publish the phase before a potentially slow first compiled
+                    # update; count only optimizer updates already completed.
+                    publish(force=update == 1, phase='training', updates=update - 1,
+                            seconds=time.monotonic() - started)
                     batch = rng.sample(samples, min(2, len(samples)))
                     loss = learner.update(batch)
                     publish(phase='training', updates=update, loss=loss, seconds=time.monotonic() - started)
