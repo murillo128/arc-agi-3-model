@@ -41,20 +41,53 @@ continues to treat the name as unknown. No envelope or required field changes.
 
 | Required field | Meaning / constraint |
 | --- | --- |
-| `objective` | `"sdk_level_progress"`: learned proxy for SDK level advance or WIN; not a target image or discovered symbolic rule |
-| `mode` | `"mpc"` or `"q"` |
+| `objective` | `"sdk_level_progress"` for q/mpc, or `"latent_goal"` for goal_mpc |
+| `mode` | `"mpc"`, `"q"`, or `"goal_mpc"`; objective/mode pairs MUST agree |
 | `horizon`, `beam` | Integer horizon 1..64, positive integer beam width |
-| `discount` | Finite number in (0,1] |
-| `state_value` | Pre-action V: finite discounted-success estimate in [0,1] |
-| `selected_score` | Selected Q or accumulated-progress-plus-bootstrap MPC score in [0,1] |
+| `discount` | Finite number in (0,1]; used by SDK-success proposal, not the goal-distance rank |
+| `state_value` | Pre-action V: finite discounted SDK-success estimate in [0,1], separate from goal similarity |
+| `selected_score` | Q/MPC SDK-success score, or exp(−terminal goal distance) for goal_mpc; finite [0,1] |
 | `steps` | Exactly `horizon` maps in the selected branch, in action order |
 
 Each planned step requires an ordinary `action` with the existing ID/data rules
 and finite `continue`, `progress`, `game_over` probabilities in [0,1], summing to
 one within 1e-5. They describe the model's conditional event estimate for that
-step, not the observed outcome or a calibrated guarantee. MPC steps also require
+step, not the observed outcome or a calibrated guarantee. Both MPC modes also require
 `successor_value` in [0,1], evaluated on the imagined successor. Q has horizon 1
 and MUST omit `successor_value`: it does not simulate a trajectory.
+
+`goal_mpc` additionally requires `planning.goal` with all of:
+
+| Field | Meaning / constraint |
+| --- | --- |
+| `source` | `"imagined_proposal"`: reachable imagined goal hypothesis selected by the learned SDK-success readout before the separate reaching search |
+| `created_position` | Integer zero-based real pre-action position, 0..enclosing step index; it MUST NOT refer to a future position |
+| `proposal_score` | Finite SDK-success proposal score in [0,1] |
+| `distance` | Finite nonnegative FP32 mean squared distance from current real z to the held goal z |
+| `frame` | Nonempty rank-2 u8 absolute palette board (0..15), decoded from the exact held goal tensor; geometry MUST match the causal pre-action board |
+
+Every selected step in `goal_mpc` requires `frame` with the same dtype, palette,
+and geometry as the goal, and finite nonnegative `goal_distance` (latent MSE
+from that exact imagined successor to the held target). `selected_score` MUST
+agree with `exp(-steps[-1].goal_distance)` within **absolute tolerance 1e-5**,
+covering FP32 exponential rounding and underflow. Goal and per-step distances
+cannot be recomputed from images: decoder pixels are inspection only. Existing
+per-step event estimates and successor V keep their SDK-success meanings.
+
+A missing/null/malformed required goal or image is invalid in this mode. q/mpc
+MUST omit `goal`; older recordings need no invented target or plan image.
+Creation position and repeated goal frame identify the held hypothesis. Huge
+latent arrays are not recorded. All boards obey the existing tensor/total-trace
+resource limits; no new envelope or required top-level field is introduced.
+
+Goal creation and selected successor decoding occur before the real action.
+Goal hypotheses, imagined plan endpoints, and later real observations remain
+separate even when images coincide. Only actual SDK observations establish
+success or level boundaries. Distance, proposal scores, expiry, and predicted
+events do not. The viewer shows the causal reference, target hypothesis and one
+image per selected step, with distances, creation position/age and actual SDK
+outcome; only the selected decision allocates canvases, capped at horizon 64.
+Missing legacy images and initial/RESET positions show “Not recorded”.
 
 The first planned action MUST equal the enclosing real step's action (ID and
 data). Only that action is executed from this plan; later actions are imagined,

@@ -19,6 +19,7 @@ from .environment import Factory, SYNTHETIC_LEVELS
 from .learning import Engine
 from .networks import WorldModel
 from .planning import GoalValue, Planner, PlanConfig, fingerprint, outcome
+from .goal_planning import GoalConfig, GoalPlanner
 
 
 def tensor(array):
@@ -34,6 +35,8 @@ def observation(obs):
 
 @torch.no_grad()
 def record_episode(engine, planner, factory, level, seed, steps, mode, source):
+    if mode == 'goal_mpc':
+        planner.reset()
     env, rng = factory.make(seed, level), random.Random(seed)
     obs, started = env.observation, time.monotonic()
     state = engine.initial(obs)
@@ -43,7 +46,9 @@ def record_episode(engine, planner, factory, level, seed, steps, mode, source):
                            'source_split': 'evaluation', 'started_at': datetime.now(timezone.utc).isoformat(),
                            'model_id': 'frozen-world-goal-planner', 'checkpoint_id': source,
                            'config': {'synthetic_level': level, 'policy': mode,
-                                      'goal': 'SDK level progress/WIN; learned proxy, not a goal image',
+                                      'goal': ('Imagined latent goal hypothesis; distance-only reaching'
+                                               if mode == 'goal_mpc' else
+                                               'SDK level progress/WIN; learned proxy, not a goal image'),
                                       'future_legality': 'assumed equal to current legality'}},
                'initial_observation': observation(obs), 'steps': []}
     event = 0
@@ -63,6 +68,8 @@ def record_episode(engine, planner, factory, level, seed, steps, mode, source):
                 'visual_delta': {'reference_position': index, 'reference_frame': tensor(obs.final),
                                  'delta': tensor(prediction[2])}}
         after = env.step(action)
+        if mode == 'goal_mpc':
+            planner.after_real_action(action, obs, after)
         attempt['steps'].append({'index': index, 'action': {'id': action.id, 'data': dict(action.data)},
                                  'observation': observation(after), **diagnostics,
                                  'policy_mode': 'learned' if 'planning' in diagnostics else 'random',
@@ -90,7 +97,18 @@ def main():
     parser.add_argument('--level', default=2, type=int)
     parser.add_argument('--steps', default=128, type=int)
     parser.add_argument('--device', default='cuda', choices=['cpu', 'cuda'])
+    parser.add_argument('--goal-planning', action='store_true')
+    parser.add_argument('--goal-horizon', default=8, type=int)
+    parser.add_argument('--goal-beam', default=4, type=int)
+    parser.add_argument('--goal-lifetime', default=8, type=int)
+    parser.add_argument('--plan-horizon', default=4, type=int)
+    parser.add_argument('--plan-beam', default=4, type=int)
     args = parser.parse_args()
+    try:
+        goal_config = GoalConfig(proposal_horizon=args.goal_horizon, proposal_beam=args.goal_beam,
+                                 lifetime=args.goal_lifetime, horizon=args.plan_horizon, beam=args.plan_beam)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.game not in SYNTHETIC_LEVELS or args.level not in range(1, SYNTHETIC_LEVELS.get(args.game, 0) + 1):
         parser.error('Only bundled synthetic games and valid levels are admitted')
     if args.steps < 1 or args.steps > 1024:
@@ -106,16 +124,19 @@ def main():
     source = fingerprint(net)
     heads = GoalValue(net.config.latent, net.config.memory).to(args.device)
     saved = load_heads(args.heads, heads, source)
-    planner = Planner(engine, heads, PlanConfig(**saved['planner']), compile_heads=args.device == 'cuda')
+    planner = (GoalPlanner(engine, heads, goal_config, compile_heads=args.device == 'cuda')
+               if args.goal_planning else
+               Planner(engine, heads, PlanConfig(**saved['planner']), compile_heads=args.device == 'cuda'))
     heads_before = fingerprint(heads)
     factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
     attempt = record_episode(engine, planner, factory, args.level, args.seed, args.steps,
-                             saved['report']['selected']['policy'], source)
+                             'goal_mpc' if args.goal_planning else saved['report']['selected']['policy'], source)
     if fingerprint(net) != source or fingerprint(heads) != heads_before:
         raise RuntimeError('Read-only trace changed weights')
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_attempt(args.output, attempt, format_minor=1)
-    print(f"{args.output}: {len(attempt['steps'])} actions, {attempt['termination']['reason']}; weights unchanged")
+    print(f"{args.output}: {len(attempt['steps'])} actions, {attempt['termination']['reason']}; "
+          f"{attempt['summary']['wall_seconds']:.3f}s; world={source}; heads={heads_before}; weights unchanged")
 
 
 if __name__ == '__main__':

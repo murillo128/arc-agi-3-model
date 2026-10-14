@@ -27,9 +27,10 @@ export type ModuleName = 'world_model' | 'decoder' | 'actor' | 'critic';
 export interface ModuleLearning { updates?: number; loss?: number; losses?: Record<string, number>; reset_reason?: string }
 export interface Learning { updates?: number; loss?: number; replay_size?: number; modules?: Partial<Record<ModuleName, ModuleLearning>> }
 export interface Planning {
-  objective: 'sdk_level_progress'; mode: 'q' | 'mpc'; horizon: number; beam: number;
+  objective: 'sdk_level_progress' | 'latent_goal'; mode: 'q' | 'mpc' | 'goal_mpc'; horizon: number; beam: number;
   discount: number; state_value: number; selected_score: number;
-  steps: { action: Action; continue: number; progress: number; game_over: number; successor_value?: number }[];
+  goal?: { source: 'imagined_proposal'; created_position: number; proposal_score: number; distance: number; frame: Tensor };
+  steps: { action: Action; continue: number; progress: number; game_over: number; successor_value?: number; frame?: Tensor; goal_distance?: number }[];
 }
 export interface Step {
   index: number; action: Action; observation: Observation; decision?: Decision; prediction?: Prediction;

@@ -130,3 +130,7 @@ a { color: var(--pink); }
 .plan-steps li:first-child { border-color: #ed83c4; }
 .plan-steps label { display: block; margin-top: 10px; }
 .plan-steps meter { display: block; width: 100%; height: 16px; }
+.goal-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.goal-images figure { margin: 0; min-width: 0; }
+.goal-images figcaption { margin-bottom: 10px; }
+.plan-steps .diagnostic-screen { height: 220px; }

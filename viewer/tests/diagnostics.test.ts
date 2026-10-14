@@ -6,6 +6,7 @@ import { decodeAttempt } from '../src/decoder';
 import { Replay } from '../src/replay';
 import type { Attempt, Observation, Prediction, Tensor } from '../src/types';
 import { planningView } from '../src/planning';
+import { PALETTE } from '../src/canvas';
 
 const tensor = (shape: number[], data: number[]): Tensor => ({ dtype: 'u8', shape, data: new Uint8Array(data) });
 const observed: Observation = { frames: tensor([2, 2, 2], [0, 1, 2, 3, 3, 2, 1, 0]), state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1] };
@@ -208,7 +209,8 @@ class TestElement {
   setAttribute(key: string, value: string) { this.attributes[key] = value; }
   replaceChildren() { this.children = []; }
   append(...values: (TestElement | string)[]) { for (const value of values) typeof value === 'string' ? this.textContent += value : this.children.push(value); }
-  getContext() { return { imageSmoothingEnabled: false, createImageData: (w: number, h: number) => ({ data: new Uint8Array(w * h * 4) }), putImageData() {} }; }
+  bitmap?: Uint8Array;
+  getContext() { return { imageSmoothingEnabled: false, createImageData: (w: number, h: number) => ({ data: new Uint8Array(w * h * 4) }), putImageData: (b: {data: Uint8Array}) => { this.bitmap = b.data; } }; }
 }
 
 it('clears every populated diagnostic panel, canvas and chart when replacing a file', async () => {
@@ -242,8 +244,27 @@ it('clears every populated diagnostic panel, canvas and chart when replacing a f
     expect(get('plan-steps').children).toHaveLength(2);
     expect(get('plan-steps').children[1]!.children[1]!.textContent).toContain('Imagined only');
     expect(get('plan-outcome').textContent).toContain('No progress or terminal event observed');
+    const goalFile = await fixture('v11-goal-planning'), goalReplay = new Replay(goalFile.attempt, goalFile.minor);
+    goalReplay.select(1); view.display(goalReplay); view.render(goalReplay);
+    expect(get('goal-info').textContent).toContain('Goal hypothesis');
+    expect(get('goal-info').textContent).toContain('age 0');
+    expect(get('goal-canvas').hidden).toBe(false);
+    expect(get('goal-reference-canvas').hidden).toBe(false);
+    const rgba = (color: number) => [...Buffer.from(PALETTE[color]!, 'hex'), 255];
+    expect([...get('goal-canvas').bitmap!.slice(0, 4)]).toEqual(rgba(4));
+    expect([...get('goal-reference-canvas').bitmap!.slice(0, 4)]).toEqual(rgba(0));
+    const endpointCanvas = get('plan-steps').children[1]!.children[2]!.children[0]!;
+    expect([...endpointCanvas.bitmap!.slice(0, 4)]).toEqual(rgba(2));
+    expect(get('plan-steps').children[1]!.children.some(c => c.textContent.includes('0.500000'))).toBe(true);
+    expect(get('plan-outcome').textContent).toContain('No progress or terminal event observed');
+    view.display(planReplay); view.render(planReplay);
+    expect(get('goal-canvas').hidden).toBe(true);
+    expect(get('goal-canvas').width).toBe(1);
+    expect(get('goal-image-info').textContent).toContain('Not recorded');
     planReplay.select(0); view.render(planReplay);
     expect(get('goal-values').hidden).toBe(true);
+    expect(get('goal-canvas').hidden).toBe(true);
+    expect(get('goal-reference-canvas').hidden).toBe(true);
     expect(get('plan-steps').children).toHaveLength(0);
     view.clear();
     for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas',
@@ -285,4 +306,16 @@ it('keeps pre-action goal beliefs separate from the real result and ignores v1.0
   expect(planningView(undefined, undefined, minor)).toBeUndefined();
   const metrics = diagnosticMetrics(attempt, minor);
   expect(metrics.find(m => m.key === 'planning.progress')!.read(step)).toBe(.3);
+});
+
+it('keeps the goal, imagined endpoint and real observation as distinct recorded boards', async () => {
+  const {attempt, minor} = await fixture('v11-goal-planning');
+  const step = attempt.steps[0]!;
+  const view = planningView(step, attempt.initial_observation, minor)!;
+  expect([...view.goal!.frames.data]).toEqual([4, 4, 4, 4]);
+  expect([...view.steps[1]!.image!.frames.data]).toEqual([2, 2, 2, 2]);
+  expect([...step.observation.frames.data]).toEqual([3, 2, 1, 0]);
+  expect(view.steps.map(s => s.goal_distance)).toEqual([1, .5]);
+  expect(view.age).toBe(0);
+  expect(planningView(step, attempt.initial_observation, 0)).toBeUndefined();
 });

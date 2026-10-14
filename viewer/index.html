@@ -39,11 +39,15 @@
         <section class="panel" aria-labelledby="planning-title">
           <div class="panel-heading"><h3 id="planning-title">GOAL &amp; SELECTED PLAN</h3><span>Recorded before the action</span></div>
           <p id="goal-info" class="panel-hint">Not recorded.</p>
+          <div class="goal-images">
+            <figure><figcaption>Real reference · before action</figcaption><div class="diagnostic-screen"><canvas id="goal-reference-canvas" hidden></canvas></div></figure>
+            <figure><figcaption>Goal hypothesis · fixed desired state</figcaption><div class="diagnostic-screen"><canvas id="goal-canvas" hidden></canvas></div><p id="goal-image-info">Not recorded.</p></figure>
+          </div>
           <dl id="goal-values" class="goal-values" hidden>
             <div><dt>Current state V</dt><dd id="goal-value"></dd></div><div><dt>Selected action / plan score</dt><dd id="goal-score"></dd></div>
             <div><dt>Immediate progress estimate</dt><dd id="goal-progress"></dd></div><div><dt>Immediate GAME_OVER estimate</dt><dd id="goal-failure"></dd></div>
           </dl>
-          <p id="plan-info"></p><p class="panel-hint">V and scores are discounted success estimates, not calibrated win percentages. Event probabilities are model estimates, not verified outcomes.</p>
+          <p id="plan-info"></p><p class="panel-hint">V estimates discounted SDK success. Goal MPC scores measure latent similarity; Q/MPC scores estimate SDK success. Event probabilities are model estimates, not verified outcomes.</p>
           <ol id="plan-steps" class="plan-steps" aria-label="Selected planned actions"></ol>
           <p id="plan-outcome" class="boundary-info"></p>
         </section>

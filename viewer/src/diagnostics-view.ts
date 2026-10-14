@@ -7,6 +7,7 @@ import { planningView } from './planning';
 
 function element<T extends HTMLElement>(id: string): T { return document.getElementById(id) as T; }
 function numeric(value: number | undefined): string { return value === undefined ? 'Not recorded' : String(value); }
+function distanceText(value: number): string { return value.toPrecision(6); }
 function shortText(text: string): string { return text.length > 2000 ? `${text.slice(0, 2000)}… [preview truncated]` : text; }
 const svgNS = 'http://www.w3.org/2000/svg';
 function svgNode(tag: string, attributes: Record<string, string>): SVGElement {
@@ -27,7 +28,7 @@ export class DiagnosticsView {
   clear(): void {
     this.replay = undefined; this.metrics = []; this.lastPosition = this.lastFrame = -1;
     for (const id of ['prediction-canvas', 'difference-canvas', 'predicted-change-canvas', 'observed-change-canvas',
-      'real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas']) {
+      'real-delta-canvas', 'predicted-delta-canvas', 'delta-difference-canvas', 'goal-reference-canvas', 'goal-canvas']) {
       const canvas = element<HTMLCanvasElement>(id); canvas.width = canvas.height = 1; canvas.hidden = true;
       canvas.setAttribute('aria-label', 'Not recorded.');
     }
@@ -35,7 +36,7 @@ export class DiagnosticsView {
     element('score-rows').replaceChildren(); element('metric-select').replaceChildren();
     element('plan-steps').replaceChildren();
     element('goal-values').hidden = true;
-    for (const id of ['goal-info', 'plan-info', 'plan-outcome']) element(id).textContent = 'Not recorded.';
+    for (const id of ['goal-info', 'goal-image-info', 'plan-info', 'plan-outcome']) element(id).textContent = 'Not recorded.';
     for (const id of ['prediction-info', 'prediction-values', 'difference-info', 'recorded-errors', 'latent-info',
       'predicted-change-info', 'observed-change-info', 'real-delta-info', 'predicted-delta-info', 'delta-difference-info', 'learning-info', 'module-learning-info', 'policy-mode',
       'chosen-action', 'selected-value', 'score-info', 'uncertainty-info', 'timing-info', 'rationale-info', 'inferred-event', 'chart-info']) element(id).textContent = 'Not recorded.';
@@ -120,22 +121,41 @@ export class DiagnosticsView {
   private renderPlan(replay: Replay): void {
     const view = planningView(replay.step, replay.preAction, replay.minor);
     const list = element('plan-steps'); list.replaceChildren();
+    drawObservation(element<HTMLCanvasElement>('goal-reference-canvas'), view?.reference,
+      Math.max(0, (view?.reference?.frames.shape[0] ?? 1) - 1));
+    const goalWarning = drawObservation(element<HTMLCanvasElement>('goal-canvas'), view?.goal, 0);
+    element('goal-image-info').textContent = view?.goal ? goalWarning : 'Not recorded for this position.';
+    element('goal-canvas').setAttribute('aria-label', 'Goal hypothesis, decoded from the fixed target used for ranking');
+    element('goal-reference-canvas').setAttribute('aria-label', 'Real causal pre-action reference');
     element('goal-values').hidden = !view;
     if (!view) {
       for (const id of ['goal-info', 'plan-info', 'plan-outcome']) element(id).textContent = 'Not recorded for this position.';
       return;
     }
     const p = view.plan, percent = (n: number) => `${(n * 100).toFixed(2)}%`;
-    element('goal-info').textContent = 'Goal proxy: SDK level progress / WIN. Learned from real outcomes. No target image or symbolic rule is recorded.';
+    element('goal-info').textContent = p.goal ?
+      `Goal hypothesis · imagined proposal, created at real position ${p.goal.created_position} · age ${view.age} real actions. Current goal distance (latent MSE): ${distanceText(p.goal.distance)}. Proposal SDK-success score: ${p.goal.proposal_score.toPrecision(6)}. Proximity does not declare SDK success.` :
+      'Goal proxy: SDK level progress / WIN. Learned from real outcomes. Goal image: Not recorded.';
     element('goal-value').textContent = p.state_value.toFixed(4);
-    element('goal-score').textContent = p.selected_score.toFixed(4);
+    element('goal-score').textContent = p.selected_score.toPrecision(6);
     element('goal-progress').textContent = percent(p.steps[0]!.progress);
     element('goal-failure').textContent = percent(p.steps[0]!.game_over);
-    element('plan-info').textContent = `${p.mode === 'q' ? 'Direct Q choice · no imagined trajectory' : 'Latent MPC'} · horizon ${p.horizon} · beam ${p.beam} · discount ${p.discount}. Captured before this action. Later steps are conditional predictions; the agent observes and replans after the first action. Future legality is assumed, not observed.`;
+    element('plan-info').textContent = `${p.mode === 'q' ? 'Direct Q choice · no imagined trajectory' : p.mode === 'goal_mpc' ? 'Goal-conditioned MPC · score = exp(−terminal goal distance), separate from SDK V' : 'Latent MPC'} · horizon ${p.horizon} · beam ${p.beam} · discount ${p.discount}. Captured before this action. Images are imagined successors; only the first action executes, then the agent observes and replans. Future legality is assumed, not observed. The plan endpoint is separate from the goal hypothesis.`;
     element('plan-outcome').textContent = `Real result of the first action: ${view.outcome}.`;
     for (const item of view.steps) {
       const li = document.createElement('li'), title = document.createElement('h4'), status = document.createElement('p');
       title.textContent = item.label; status.textContent = item.status; li.append(title, status);
+      const imageInfo = document.createElement('p');
+      if (item.image) {
+        const screen = document.createElement('div'), canvas = document.createElement('canvas');
+        screen.className = 'diagnostic-screen'; canvas.setAttribute('aria-label', `Imagined successor ${item.label}`);
+        screen.append(canvas); li.append(screen);
+        imageInfo.textContent = drawObservation(canvas, item.image, 0) || 'Decoded imagined successor · before real execution';
+      } else imageInfo.textContent = 'Plan image: Not recorded.';
+      li.append(imageInfo);
+      if (item.goal_distance !== undefined) {
+        const d = document.createElement('p'); d.textContent = `Goal distance (latent MSE): ${distanceText(item.goal_distance)}`; li.append(d);
+      }
       for (const [label, probability] of [['Progress', item.progress], ['Continue', item.continue], ['GAME_OVER', item.game_over]] as const) {
         const row = document.createElement('label'), meter = document.createElement('meter');
         row.textContent = `${label}: ${percent(probability)}`;

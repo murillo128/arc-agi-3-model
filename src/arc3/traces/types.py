@@ -100,18 +100,28 @@ class Learning(TypedDict, total=False):
 PlannedStep = TypedDict('PlannedStep', {
     'action': Action, 'continue': Number, 'progress': Number, 'game_over': Number,
     'successor_value': NotRequired[Number],
+    'frame': NotRequired[Tensor], 'goal_distance': NotRequired[Number],
 })
 
 
+class PlanningGoal(TypedDict):
+    source: Literal['imagined_proposal']
+    created_position: int
+    proposal_score: Number
+    distance: Number
+    frame: Tensor
+
+
 class Planning(TypedDict):
-    objective: Literal['sdk_level_progress']
-    mode: Literal['q', 'mpc']
+    objective: Literal['sdk_level_progress', 'latent_goal']
+    mode: Literal['q', 'mpc', 'goal_mpc']
     horizon: int
     beam: int
     discount: Number
     state_value: Number
     selected_score: Number
     steps: list[PlannedStep]
+    goal: NotRequired[PlanningGoal]
 
 
 class Step(TypedDict):

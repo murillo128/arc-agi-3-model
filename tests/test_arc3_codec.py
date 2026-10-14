@@ -17,7 +17,7 @@ from unittest.mock import patch
 import msgpack
 import pyzstd
 from fixtures.diagnostics_v11 import extend_attempt, f32, invalid_cases, replace
-from fixtures.planning_v11 import with_plan, invalid_plans
+from fixtures.planning_v11 import with_plan, invalid_plans, with_goal, invalid_goals
 
 from arc3.traces import (
     Arc3Error, Arc3ResourceLimitError, MAX_UNCOMPRESSED_BYTES,
@@ -113,6 +113,29 @@ class Arc3MinorExtensionTests(unittest.TestCase):
         p.update(mode='q', horizon=1, steps=p['steps'][:1])
         del p['steps'][0]['successor_value']
         self.assertEqual(decode_attempt(encode_attempt(q, format_minor=1))['steps'][0]['planning']['mode'], 'q')
+
+    def test_goal_planning_roundtrip_and_negative_contracts(self):
+        attempt = with_goal(baseline())
+        self.assertEqual(decode_attempt(encode_attempt(attempt, format_minor=1)), attempt)
+        for name, path, replacement, error in invalid_goals():
+            invalid = deepcopy(attempt)
+            replace(invalid, path, replacement)
+            with self.subTest(name=name), self.assertRaisesRegex(Arc3Error, error):
+                decode_attempt(wire(invalid, minor=1))
+            with self.subTest(encoder=name), self.assertRaises(Arc3Error):
+                encode_attempt(invalid, format_minor=1)
+        for key in ('goal',):
+            invalid = deepcopy(attempt)
+            del invalid['steps'][0]['planning'][key]
+            with self.assertRaises(Arc3Error):
+                decode_attempt(wire(invalid, minor=1))
+        invalid = with_plan(baseline())
+        invalid['steps'][0]['planning']['goal'] = attempt['steps'][0]['planning']['goal']
+        with self.assertRaisesRegex(Arc3Error, 'legacy'):
+            decode_attempt(wire(invalid, minor=1))
+        # Minor zero keeps the group uninterpreted even with a bad known-mode pair.
+        attempt['steps'][0]['planning']['mode'] = 'q'
+        self.assertEqual(decode_attempt(encode_attempt(attempt)), attempt)
 
     def test_opt_in_latent_and_decoder_roundtrips_and_default_minor(self):
         for visual in (False, True):

@@ -1,6 +1,7 @@
 """Small synthetic conformance vectors; no games, backend, or SDK execution.
 
-Valid samples use the production Python encoder. Invalid samples bypass it with
+Valid samples use the production Python encoder. An opt-in CPU network sample
+exercises the frozen exporter when --goal-network is requested. Invalid samples bypass it with
 msgpack/pyzstd and literal mutations from frozen format section 8. Each vector's
 accept/reject expectation is also checked by the Python decoder before emission.
 Generated binary/JSON artifacts stay ignored; expected pixels are spec literals.
@@ -18,11 +19,12 @@ import msgpack
 import pyzstd
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 from fixtures.generate_arc3 import generate  # noqa: E402
 from fixtures.diagnostics_v11 import extend_attempt, invalid_cases, replace  # noqa: E402
-from fixtures.planning_v11 import with_plan, invalid_plans  # noqa: E402
+from fixtures.planning_v11 import with_plan, invalid_plans, with_goal, invalid_goals  # noqa: E402
 from arc3.traces import Arc3Error, decode_attempt, encode_attempt  # noqa: E402
 
 OUTPUT = ROOT / "viewer" / ".fixtures"
@@ -344,9 +346,52 @@ for name, path, replacement, error in invalid_plans():
     invalid = deepcopy(planned)
     replace(invalid, path, replacement)
     add(f'planning-{name}', wire(invalid, minor=1), error=error)
+goal_plan = with_goal(baseline)
+goal_encoded = encode_attempt(goal_plan, format_minor=1)
+add('v11-goal-planning', goal_encoded, True)
+(OUTPUT / 'v11-goal-planning.arc3').write_bytes(goal_encoded)
+for name, path, replacement, error in invalid_goals():
+    invalid = deepcopy(goal_plan)
+    replace(invalid, path, replacement)
+    add(f'goal-planning-{name}', wire(invalid, minor=1), error=error)
+for path in (('goal',), ('steps', 0, 'frame'), ('steps', 0, 'goal_distance')):
+    invalid = deepcopy(goal_plan)
+    target = invalid['steps'][0]['planning']
+    for key in path[:-1]:
+        target = target[key]
+    del target[path[-1]]
+    add(f'goal-missing-{path}', wire(invalid, minor=1), error='map|missing')
+legacy_goal = with_plan(baseline)
+legacy_goal['steps'][0]['planning']['goal'] = goal_plan['steps'][0]['planning']['goal']
+add('legacy-invented-goal', wire(legacy_goal, minor=1), error='legacy')
 unknown_plan = deepcopy(baseline)
 unknown_plan['steps'][0]['planning'] = None
 add('v10-planning-unknown', encode_attempt(unknown_plan), True)
+if '--goal-network' in sys.argv:
+    import torch
+    from model.behavior_trace import record_episode
+    from model.config import NetworkConfig, TrainConfig
+    from model.environment import Factory
+    from model.goal_planning import GoalConfig, GoalPlanner
+    from model.learning import Engine
+    from model.networks import WorldModel
+    from model.planning import GoalValue, fingerprint
+    torch.set_num_threads(2)
+    torch.manual_seed(52)
+    net = WorldModel(NetworkConfig.small())
+    heads = GoalValue(16, 32, width=8)
+    engine = Engine(net, TrainConfig())
+    planner = GoalPlanner(engine, heads, GoalConfig(proposal_horizon=2, horizon=2))
+    before = (fingerprint(net), fingerprint(heads))
+    exported = record_episode(engine, planner, Factory('sc01-v1', ROOT / 'games'), 3, 9426301, 2,
+                              'goal_mpc', before[0])
+    if before != (fingerprint(net), fingerprint(heads)):
+        raise AssertionError('CPU export mutated frozen weights')
+    encoded = encode_attempt(exported, format_minor=1)
+    if decode_attempt(encoded) != exported:
+        raise AssertionError('CPU export roundtrip changed diagnostics')
+    add('v11-goal-network', encoded, True)
+    (OUTPUT / 'v11-goal-network.arc3').write_bytes(encoded)
 (OUTPUT / "vectors.json").write_text(json.dumps(vectors, ensure_ascii=False), encoding="utf-8")
 for name, data in (("one-frame", encode_attempt(baseline)), ("multi-frame", encode_attempt(multi)), ("empty", encode_attempt(empty))):
     (OUTPUT / f"{name}.arc3").write_bytes(data)
