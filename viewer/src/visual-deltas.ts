@@ -37,7 +37,7 @@ export function compareVisualDeltas(prediction: Prediction | undefined, observed
     source = 'Pre-action final frame reference';
   }
   const view = (data: Uint8Array, label: string): ChangeView => ({
-    message: `${label} · real frame ${frame}\n${source}. Checkerboard = no change; colors = replacement pixels.`,
+    message: `${label} · real frame ${frame}\n${source}.`,
     observation: { ...observed, frames: { dtype: 'u8', shape: [1, height, width], data } },
     codes: Array.from(data.subarray(0, 32)),
   });
@@ -87,7 +87,7 @@ export function compareVisualDeltas(prediction: Prediction | undefined, observed
   result.predicted = view(predicted, bundle ? 'Recorded predicted delta' : 'Predicted delta derived from the absolute prediction');
   result.difference = {
     ...view(difference, 'Delta difference'),
-    message: `Delta error: ${(fraction * 100).toFixed(2)}% (${disagreements}/${changedPixels} pixels changed in either delta).\nRed = different delta codes (missed, extra or wrong-color change); checkerboard = matching deltas.\n${source} · real frame ${frame}.`,
+    message: `Delta error: ${(fraction * 100).toFixed(2)}% (${disagreements}/${changedPixels} pixels changed in either delta).\n${source} · real frame ${frame}.`,
   };
   return { ...result, disagreements, changedPixels, fraction };
 }

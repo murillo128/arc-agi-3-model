@@ -1,8 +1,10 @@
 import type { Action, Attempt, Observation, Step } from './types';
 
+const ACTION_LABELS = ['RESET', 'ACTION1 (↑)', 'ACTION2 (↓)', 'ACTION3 (←)', 'ACTION4 (→)', 'ACTION5', 'ACTION6', 'ACTION7'] as const;
+
 export function actionName(action: Action): string {
   const coordinates = 'x' in action.data && 'y' in action.data ? ` (${action.data.x}, ${action.data.y})` : '';
-  return `${action.id === 0 ? 'RESET' : `ACTION${action.id}`}${coordinates}`;
+  return `${ACTION_LABELS[action.id]}${coordinates}`;
 }
 
 export function observationChanges(before: Observation, after: Observation): string {

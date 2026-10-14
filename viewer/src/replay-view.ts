@@ -41,7 +41,7 @@ export class ReplayView {
     document.addEventListener('keydown', event => {
       if (!this.replay || event.altKey || event.ctrlKey || event.metaKey) return;
       const target = event.target as HTMLElement;
-      if (target.closest('input, select, textarea, [contenteditable], #drop-zone, #url-form')) return;
+      if (target.closest('input, select, textarea, summary, [contenteditable], #drop-zone, #url-form')) return;
       if (event.key === ' ' && target.closest('button, a, summary')) return;
       if (event.repeat && event.key === ' ') return;
       if (!['ArrowLeft', 'ArrowRight', ' ', 'Home', 'End'].includes(event.key)) return;
@@ -100,7 +100,7 @@ export class ReplayView {
       dt.textContent = key; dd.textContent = previewText(value); metadata.append(dt, dd);
     }
     element('recorded-fields').textContent = recorded({ termination: attempt.termination, summary: attempt.summary });
-    element('sequence-info').textContent = `Initial observation + ${attempt.steps.length} recorded transitions. Position 0 = initial; position n = result of step n − 1. Frames belong to one action, not extra steps.`;
+    element('sequence-info').textContent = `Initial observation + ${attempt.steps.length} recorded transitions.`;
     element('history-count').textContent = `${attempt.summary.real_actions} real actions`;
     element('history-empty').hidden = this.replay.end !== 0;
     const unrecorded = attempt.summary.real_actions - attempt.steps.length - (attempt.termination.reset_action ? 1 : 0);
@@ -177,7 +177,7 @@ export class ReplayView {
     element('canvas-message').textContent = message; element('canvas-message').hidden = !message;
     element('observation-canvas').setAttribute('aria-label', `${positionLabel} · frame ${replay.frame} · ${o.frames.shape[2]} by ${o.frames.shape[1]} · ${previewText(o.state)}`);
     element('pixels').textContent = pixelPreview(o, replay.frame);
-    element('observation-info').textContent = `${previewText(o.state)} · levels ${o.levels_completed}/${o.win_levels} · shape [${o.frames.shape.join(', ')}] · available actions [${o.available_actions.join(', ')}]` + (step ? ` · ACTION${step.action.id} ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? ' · RESET result unavailable' : ' · Initial observation');
+    element('observation-info').textContent = `${previewText(o.state)} · levels ${o.levels_completed}/${o.win_levels} · shape [${o.frames.shape.join(', ')}] · available actions [${o.available_actions.map(id => actionName({ id, data: {} })).join(', ')}]` + (step ? ` · ${actionName(step.action)} ${JSON.stringify(step.action.data)}` : replay.resetBoundary ? ' · RESET result unavailable' : ' · Initial observation');
     this.diagnostics.render(replay);
     if (this.renderedPosition === replay.position) return;
     this.renderedPosition = replay.position;

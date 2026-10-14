@@ -8,6 +8,24 @@ async function replay(name: string): Promise<Replay> {
   return new Replay(attempt);
 }
 
+describe('display action labels preserve recorded actions', () => {
+  // ARC Prize's reasoning template names 1–4 UP, DOWN, LEFT, RIGHT.
+  it.each([
+    [0, 'RESET'], [1, 'ACTION1 (↑)'], [2, 'ACTION2 (↓)'],
+    [3, 'ACTION3 (←)'], [4, 'ACTION4 (→)'],
+    [5, 'ACTION5'], [6, 'ACTION6'], [7, 'ACTION7'],
+  ])('labels action %i as %s without changing its data', (id, expected) => {
+    const action = { id, data: { recorded: 17 } };
+    expect(actionName(action)).toBe(expected);
+    expect(action).toEqual({ id, data: { recorded: 17 } });
+  });
+  it('keeps click coordinates and additional recorded data intact', () => {
+    const action = { id: 6, data: { x: 63, y: 0, note: 42 } };
+    expect(actionName(action)).toBe('ACTION6 (63, 0)');
+    expect(action).toEqual({ id: 6, data: { x: 63, y: 0, note: 42 } });
+  });
+});
+
 describe('replay chronology from Python-encoded synthetic recordings', () => {
   it('zero steps retain the initial observation and cannot start an episode', async () => {
     const view = await replay('zero-step');

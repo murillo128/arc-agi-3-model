@@ -119,7 +119,7 @@ export function latentStateSummary(attempt: Attempt, position: number, minor = 0
 
 export interface ChangeView { message: string; observation?: Observation; codes?: number[] }
 function changeView(delta: Uint8Array, height: number, width: number, label: string, observation: Observation): ChangeView {
-  return { message: `${label}\nKEEP=16 (cyan); 0..15 are replacement colors. This is not a palette-index board or subtraction.`,
+  return { message: label,
     observation: { ...observation, frames: { dtype: 'u8', shape: [1, height, width], data: delta } },
     codes: Array.from(delta.subarray(0, Math.min(32, delta.length))),
   };
