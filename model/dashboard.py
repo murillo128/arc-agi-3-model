@@ -22,7 +22,8 @@ PROGRESS_KEYS = ('actions', 'updates', 'episodes', 'level_index', 'level_actions
                  'passes', 'collapse_streak', 'actions_per_second', 'replay_episodes', 'gpu_peak_mb',
                  'episode_actions', 'episode_observations', 'device_cache_mb', 'trained_transitions', 'trained_transitions_per_second')
 LOSS_KEYS = ('loss', 'latent_mse', 'sigreg', 'variance_floor', 'decoder_ce',
-             'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm', 'samples', 'seconds')
+             'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm', 'samples', 'seconds',
+             'rollout_mse', 'rollout_samples')
 VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'latent_std',
                    'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs',
                    'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')
@@ -43,8 +44,27 @@ def numbers(source, keys):
     return {k: number(source[k]) for k in keys if k in source}
 
 
+def compact_values(value, depth=0):
+    """Bound small campaign metadata, preserving finite numbers and plain text."""
+    if type(value) is bool or value is None:
+        return value
+    if type(value) in (int, float):
+        return number(value)
+    if isinstance(value, str):
+        return value[:240]
+    if depth >= 5:
+        return None
+    if isinstance(value, list):
+        return [compact_values(v, depth + 1) for v in value[:100]]
+    if isinstance(value, dict):
+        return {str(k)[:80]: compact_values(v, depth + 1) for k, v in list(value.items())[:100]}
+    return None
+
+
 class LogMonitor:
     """Bounded incremental reader shared by browser clients; never writes the log."""
+
+    max_line = MAX_LINE
 
     def __init__(self, path, max_points=2000):
         self.path = Path(path)
@@ -176,14 +196,14 @@ class LogMonitor:
                     if self.skip_line:
                         self.skip_line = False
                         continue
-                    if len(line) > MAX_LINE:
+                    if len(line) > self.max_line:
                         continue
                     try:
                         self._event(json.loads(line))
                     except (ValueError, UnicodeError):
                         # SDK logs, warnings and a malformed record are not metrics.
                         continue
-                if len(self.pending) > MAX_LINE:
+                if len(self.pending) > self.max_line:
                     self.pending = b''
                     self.skip_line = True
                 return {'available': True, 'updated_at': stat.st_mtime,
@@ -266,7 +286,100 @@ class BehaviorMonitor(LogMonitor):
                     'fits': list(self.fits), 'evaluations': list(self.evaluations)}
 
 
-def make_server(address, monitor, behavior=None):
+class CampaignMonitor(LogMonitor):
+    """Independent experiment lifetime; variant counters may restart at zero."""
+
+    # A completed evaluation contains hundreds of episode records. Parse that
+    # bounded line, then expose only the compact summaries above, never traces.
+    max_line = 2 * 1024 * 1024
+
+    def _reset(self):
+        super()._reset()
+        self.evaluations = deque(maxlen=self.max_points)
+        # Small summaries outlive the bounded curve window. They are rebuilt
+        # from the existing log, never a second persistent training history.
+        self.executions = {}
+
+    def _event(self, row):
+        if not isinstance(row, dict):
+            return
+        event = row.get('event')
+        if event not in ('campaign_started', 'campaign_phase', 'campaign_progress', 'campaign_evaluation',
+                         'campaign_finished', 'campaign_error', 'campaign_imagination_gate',
+                         'campaign_variant_deferred'):
+            return
+        if event == 'campaign_started':
+            self._reset()
+            self.run['config'] = compact_values(row.get('config', {}))
+        point = numbers(row, ('seed', 'actions', 'total_actions', 'level', 'updates',
+                              'joint_updates', 'frozen_updates', 'actions_per_second'))
+        for key in ('variant', 'stage', 'game', 'split'):
+            if key in row:
+                point[key] = str(row[key])[:80]
+        if event == 'campaign_phase':
+            if (point.get('variant'), point.get('seed')) != (self.progress.get('variant'), self.progress.get('seed')):
+                self.progress = {}
+            self.progress.update(point)
+            self.progress.pop('actions_per_second', None)
+            self.progress['message'] = str(row.get('message', ''))[:240]
+        elif event == 'campaign_progress':
+            point['loss'] = numbers(row.get('loss'), tuple(row['loss'])[:80]) if isinstance(row.get('loss'), dict) else {}
+            self.progress = point
+            self.progress_points.append(dict(point))
+        elif event == 'campaign_evaluation':
+            point['world'] = numbers(row.get('world'), VALIDATION_KEYS)
+            world = row.get('world')
+            if isinstance(world, dict) and isinstance(world.get('rollouts'), dict):
+                point['world']['rollouts'] = compact_values(world['rollouts'])
+            if isinstance(world, dict) and isinstance(world.get('per_pair'), list):
+                point['world']['per_pair'] = [dict(numbers(r, VALIDATION_KEYS),
+                    game=str(r.get('game', ''))[:80], level=number(r.get('level')))
+                    for r in world['per_pair'][:100] if isinstance(r, dict)]
+            point['behavior'] = numbers(row.get('behavior'),
+                ('win_rate', 'wins', 'episodes', 'actions', 'actions_per_success', 'decision_ms',
+                 'actions_per_second', 'seconds'))
+            behavior = row.get('behavior')
+            if isinstance(behavior, dict) and isinstance(behavior.get('wilson95'), list) and len(behavior['wilson95']) == 2:
+                point['behavior']['wilson95'] = [number(v) for v in behavior['wilson95']]
+            self.evaluations.append(point)
+        elif event == 'campaign_imagination_gate':
+            self.run['imagination_gate'] = {'variant': point.get('variant'), 'seed': point.get('seed'),
+                                            'passed': row.get('passed') is True}
+        elif event == 'campaign_variant_deferred':
+            self.run.setdefault('deferred', {})[point.get('variant', 'unknown')] = {
+                'reason': str(row.get('reason', ''))[:160],
+                'fallback': str(row.get('fallback', ''))[:80]}
+        elif event == 'campaign_finished':
+            self.run['selected'] = compact_values(row.get('selected'))
+            self.run['status'] = str(row.get('status', 'finished'))[:80]
+        elif event == 'campaign_error':
+            self.reason = str(row.get('error', row.get('message', row.get('reason', 'Error sin detalle'))))[:500]
+        key = (point.get('variant'), point.get('seed'))
+        if key[0] is not None and key[1] is not None:
+            summary = self.executions.setdefault(key, {})
+            if event in ('campaign_phase', 'campaign_progress'):
+                summary.update(self.progress)
+            elif event == 'campaign_evaluation':
+                summary.update({k: v for k, v in point.items() if k in ('variant', 'seed', 'actions')})
+            elif event == 'campaign_imagination_gate':
+                summary.update(variant=key[0], seed=key[1], stage='imagination_gate',
+                               admitted=row.get('passed') is True)
+            if len(self.executions) > 100:
+                self.executions.pop(next(iter(self.executions)))
+        self.phase = event
+        self.revision += 1
+
+    def snapshot(self):
+        with self.lock:
+            source = self._read()
+            return {'generation': self.generation, 'revision': self.revision, 'source': source,
+                    'phase': self.phase, 'reason': self.reason, 'run': dict(self.run),
+                    'progress': dict(self.progress), 'progress_points': list(self.progress_points),
+                    'executions': [dict(p) for p in self.executions.values()],
+                    'evaluations': list(self.evaluations), 'max_points': self.max_points}
+
+
+def make_server(address, monitor, behavior=None, campaign=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path).path
@@ -274,6 +387,8 @@ def make_server(address, monitor, behavior=None):
                 state = monitor.snapshot()
                 if behavior is not None:
                     state['behavior'] = behavior.snapshot()
+                if campaign is not None:
+                    state['campaign'] = campaign.snapshot()
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
             elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js'):
@@ -308,6 +423,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--log', type=Path, required=True)
     parser.add_argument('--behavior-log', type=Path, help='Independent goal/planner JSON-line log')
+    parser.add_argument('--campaign-log', type=Path, help='Independent architecture comparison JSON-line log')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
@@ -316,7 +432,8 @@ def main():
         parser.error('--max-points must be between 2 and 10000')
     monitor = LogMonitor(args.log, args.max_points)
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
-    with make_server((args.host, args.port), monitor, behavior) as server:
+    campaign = CampaignMonitor(args.campaign_log, args.max_points) if args.campaign_log else None
+    with make_server((args.host, args.port), monitor, behavior, campaign) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

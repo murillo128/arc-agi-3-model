@@ -4,7 +4,7 @@ import argparse
 import json
 import re
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from textwrap import dedent
 
 from arc3.envs.sdk import SDK_VERSION
@@ -24,11 +24,16 @@ def code_cell(source: str) -> dict:
             "outputs": [], "source": source}
 
 
-def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu") -> dict:
+def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu",
+                   agent_checkpoint: str | None = None) -> dict:
     if max_actions <= 0:
         raise ValueError("max_actions must be positive")
     if accelerator not in ACCELERATORS:
         raise ValueError(f"Unsupported accelerator: {accelerator}")
+    if agent_checkpoint is not None:
+        mount = PurePosixPath(agent_checkpoint)
+        if not mount.is_relative_to('/kaggle/input') or '..' in mount.parts or mount.suffix != '.pt':
+            raise ValueError('Agent checkpoint must be a mounted /kaggle/input/.../*.pt asset')
     accelerator_name, uses_gpu = ACCELERATORS[accelerator]
     sources = {
         "arc3/__init__.py": "",
@@ -37,8 +42,19 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         "my_agent.py": (
             files("arc3.kaggle").joinpath("agent.py").read_text(encoding="utf-8")
             + f"\nMyAgent.SEED = {seed!r}\nMyAgent.MAX_ACTIONS = {max_actions!r}\n"
+            + f"MyAgent.AGENT_CHECKPOINT = {agent_checkpoint!r}\nMyAgent.DEVICE = {'cuda' if uses_gpu else 'cpu'!r}\n"
         ),
     }
+    if agent_checkpoint is not None:
+        # Versioned Python only. The checkpoint remains a separately mounted
+        # offline asset; no host path, training data or weights enter the notebook.
+        for name in ('__init__', 'agent', 'agent_checkpoint', 'checkpoint', 'config',
+                     'data', 'learning', 'networks', 'metrics', 'sequence', 'planning',
+                     'goal_planning', 'proposals'):
+            source = files('model').joinpath(f'{name}.py')
+            if name == 'proposals' and not source.is_file():
+                continue
+            sources[f'model/{name}.py'] = source.read_text(encoding='utf-8')
     install = dedent(f"""\
         import subprocess
         import sys
@@ -49,6 +65,13 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         from importlib.metadata import version
         assert version('arc-agi') == '{SDK_VERSION}', 'Unexpected SDK version'
     """)
+    if agent_checkpoint is not None:
+        install += dedent(f"""\
+            from pathlib import Path
+            import torch
+            import numpy
+            assert Path({agent_checkpoint!r}).is_file(), 'Attach the configured offline agent checkpoint asset'
+        """)
     embed = (
         "from pathlib import Path\n"
         "import tempfile\n"
@@ -118,8 +141,8 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         },
         "cells": [
             {"cell_type": "markdown", "metadata": {}, "source": (
-                "# ARC-AGI-3 seeded random baseline\n\n"
-                f"Generated from versioned Python source. Seed: {seed}; action budget: {max_actions}. "
+                ("# ARC-AGI-3 frozen latent agent\n\n" if agent_checkpoint else "# ARC-AGI-3 seeded random baseline\n\n")
+                + f"Generated from versioned Python source. Seed: {seed}; action budget: {max_actions}. "
                 "No online adaptation is implemented. Competition execution uses only "
                 "the supplied offline wheels, official framework and gateway."
             )},
@@ -135,6 +158,8 @@ def main() -> None:
     parser.add_argument("--accelerator", choices=sorted(ACCELERATORS), default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-actions", type=int, default=80)
+    parser.add_argument("--agent-checkpoint", help="Mounted /kaggle/input/.../agent.pt; weights are never embedded")
+    parser.add_argument("--agent-dataset", help="Optional owner/dataset reference for that mounted checkpoint")
     args = parser.parse_args()
     output = Path(args.output)
     if output.suffix != ".ipynb":
@@ -143,15 +168,23 @@ def main() -> None:
         parser.error("--username must be a nonempty Kaggle handle without a slash")
     if args.max_actions <= 0:
         parser.error("--max-actions must be positive")
-    notebook = build_notebook(args.seed, args.max_actions, accelerator=args.accelerator)
+    if args.agent_dataset is not None and (args.agent_checkpoint is None or
+            not re.fullmatch(r'[A-Za-z0-9_-]+/[A-Za-z0-9_-]+', args.agent_dataset)):
+        parser.error('--agent-dataset requires --agent-checkpoint and owner/dataset syntax')
+    try:
+        notebook = build_notebook(args.seed, args.max_actions, accelerator=args.accelerator,
+                                  agent_checkpoint=args.agent_checkpoint)
+    except ValueError as exc:
+        parser.error(str(exc))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
     if args.username is not None:
+        artifact = 'frozen-agent' if args.agent_checkpoint else 'random-baseline'
         metadata = {
-            "id": f"{args.username}/arc3-random-baseline", "title": "ARC-AGI-3 random baseline",
+            "id": f"{args.username}/arc3-{artifact}", "title": f"ARC-AGI-3 {artifact.replace('-', ' ')}",
             "code_file": output.name, "language": "python", "kernel_type": "notebook",
             "is_private": True, "enable_gpu": ACCELERATORS[args.accelerator][1], "enable_tpu": False,
-            "enable_internet": False, "dataset_sources": [], "kernel_sources": [],
+            "enable_internet": False, "dataset_sources": [args.agent_dataset] if args.agent_dataset else [], "kernel_sources": [],
             "competition_sources": [COMPETITION], "model_sources": [],
         }
         output.with_name("kernel-metadata.json").write_text(

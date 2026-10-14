@@ -81,9 +81,28 @@ class GateTests(unittest.TestCase):
     def test_config_rejects_invalid_policy(self):
         for kwargs in [dict(representation_freeze_error=.02), dict(representation_unfreeze_error=2.),
                        dict(representation_freeze_error=-.1), dict(representation_gate_patience=0),
-                       dict(representation_gate_patience=1.5), dict(auto_representation=1)]:
+                       dict(representation_gate_patience=1.5), dict(auto_representation=1),
+                       dict(auto_representation=True, representation_joint_steps=10),
+                       dict(burn_in_steps=1.5), dict(rollout_weight=-1), dict(decoder_readout='unknown')]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 TrainConfig(**kwargs)
+
+    def test_fixed_stage_schedule_survives_resume_and_freezes_same_modules(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            common = ['--device', 'cpu', '--no-compile', '--output', directory]
+            path = Path(directory) / 'latest.pt'
+            main(['train', '--profile', 'small', '--levels', '1', '--representation-joint-steps', '1',
+                  '--max-steps', '1', *common])
+            joint = checkpoint.load(path)
+            self.assertFalse(joint['training']['freeze_representation'])
+            main(['train', '--checkpoint', str(path), '--max-steps', '2', *common])
+            frozen = checkpoint.load(path)
+            self.assertTrue(frozen['training']['freeze_representation'])
+            for name, value in frozen['weights'].items():
+                if not name.startswith('dynamics.'):
+                    torch.testing.assert_close(value, joint['weights'][name], atol=0, rtol=0)
+            self.assertTrue(any(not torch.equal(frozen['weights'][name], value)
+                for name, value in joint['weights'].items() if name.startswith('dynamics.')))
 
     def exercise_updates(self, device='cpu', compiled=False, bits=32):
         torch.manual_seed(18)

@@ -12,6 +12,7 @@ dependencies = ["arc-agi==0.9.9", "msgpack>=1.1,<2", "pyzstd>=0.16,<0.20"]
 
 [project.optional-dependencies]
 kaggle = ["kaggle>=2.2"]
+model = ["torch==2.6.0", "numpy>=1.26"]
 
 [project.scripts]
 arc3-collect = "arc3.training.collect:main"
@@ -22,7 +23,8 @@ arc3-validate-trace = "arc3.traces.__main__:main"
 [tool.setuptools.package-dir]
 "" = "src"
 games = "games"
+model = "model"
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["arc3*", "games"]
+include = ["arc3*", "games", "model"]

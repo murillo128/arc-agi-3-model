@@ -60,6 +60,14 @@ class TrainConfig:
     updates_per_train: int = 1
     frame_chunk: int = 4
     loss_steps: int = 1
+    rollout_weight: float = 0.
+    decoder_readout: str = 'contextual'
+    backward_mode: str = 'fragmented'
+    rollout_diagnostics: bool = False
+    retain_replay_across_levels: bool = False
+    representation_joint_steps: int = 0
+    burn_in_steps: int = 0
+    cache_frozen_latents: bool = False
     replay_episodes: int = 1
     batch_episodes: int = 1
     replay_bytes: int = 128 * 1024 * 1024
@@ -83,13 +91,20 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
-            if k in {'freeze_representation', 'auto_representation'}:
+            if k in {'decoder_readout', 'backward_mode'}:
+                allowed = {'contextual', 'local'} if k == 'decoder_readout' else {'fragmented', 'ordinary'}
+                if v not in allowed:
+                    raise ValueError(f'Invalid {k}: {v}')
+                continue
+            if k in {'freeze_representation', 'auto_representation', 'rollout_diagnostics',
+                     'retain_replay_across_levels', 'cache_frozen_latents'}:
                 if type(v) is not bool:
                     raise ValueError(f'{k} must be boolean')
                 continue
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
-            if k in {'representation_freeze_error', 'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight'}:
+            if k in {'representation_freeze_error', 'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight',
+                     'rollout_weight', 'representation_joint_steps', 'burn_in_steps'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:
@@ -100,3 +115,7 @@ class TrainConfig:
             raise ValueError('Representation thresholds require 0 <= freeze < unfreeze <= 1')
         if type(self.representation_gate_patience) is not int:
             raise ValueError('representation_gate_patience must be a positive integer')
+        if any(type(v) is not int for v in (self.representation_joint_steps, self.burn_in_steps)):
+            raise ValueError('Representation schedule and burn-in steps must be integers')
+        if self.auto_representation and self.representation_joint_steps:
+            raise ValueError('Choose automatic representation gating or a fixed joint-learning schedule')

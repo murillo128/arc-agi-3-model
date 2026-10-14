@@ -14,6 +14,18 @@ h2 { font-size: 18px; margin-bottom: 4px; }
 .connection span.warn { color: #f5bd79; }
 .notice { padding: 12px 16px; border: 1px solid #6a5130; background: #2c251c; color: #eed7ac; font-size: 13px; border-radius: 8px; }
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.summary-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.world-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.execution-toolbar { margin-top: 0; align-items: center; }
+.execution-toolbar label { min-width: min(440px, 100%); }
+.execution-toolbar p { max-width: 530px; margin-bottom: 0; }
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 28px 0 20px; border-bottom: 1px solid #3c504a; }
+.tabs button { padding: 12px 16px; background: transparent; color: #a8bbb5; border: 0; border-bottom: 3px solid transparent; font: inherit; font-size: 14px; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: #77dabb; border-bottom-color: #77dabb; }
+.tabs button:focus-visible { outline: 2px solid #79deba; outline-offset: -2px; }
+[role="tabpanel"] > .charts { margin-top: 20px; }
+#representation { font-size: clamp(20px, 2.5vw, 29px); }
+#resources { margin-top: 20px; }
 article { background: #172122; border: 1px solid #2b3837; border-radius: 12px; }
 .metrics article { padding: 20px 18px; }
 .metrics h2 { color: #a8bbb5; font-size: 12px; font-weight: 500; margin-bottom: 14px; }

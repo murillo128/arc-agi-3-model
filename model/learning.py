@@ -1,7 +1,10 @@
 """Joint latent dynamics and visual-delta learning from real SDK experience."""
 from contextlib import nullcontext
 from dataclasses import dataclass, replace
+from functools import partial
 import itertools
+import random
+import weakref
 
 import numpy as np
 import torch
@@ -9,7 +12,7 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint as activation_checkpoint
 
 from .networks import sigreg, variance_floor
-from .metrics import visual_delta
+from .metrics import visual_delta, delta_counts
 
 
 @dataclass
@@ -19,12 +22,40 @@ class State:
     geometry: tuple[int, int] | None = None
 
 
+class _CompiledDynamics:
+    """Independent compiled caches for differentiable rollouts and inference.
+
+    Dynamo specializes on grad mode, leaf requires_grad, singleton batches and
+    convolution batch families. Those legitimate variants exceed its default
+    per-frame limit when learning and MPC share a single compiled forward.
+    Separate entry frames retain the normal limit and the same parameters.
+    """
+    def __init__(self, dynamics):
+        self.dynamics = dynamics
+        self.with_grad = torch.compile(self._with_grad, fullgraph=True, dynamic=True)
+        self.without_grad = torch.compile(self._without_grad, fullgraph=True, dynamic=True)
+
+    def _with_grad(self, z, h, action, height, width):
+        return self.dynamics(z, h, action, height, width)
+
+    def _without_grad(self, z, h, action, height, width):
+        return self.dynamics(z, h, action, height, width)
+
+    def __call__(self, z, h, action, height=None, width=None):
+        # Selected, expanded and stacked states have the same semantics. Avoid
+        # extra compiled variants solely for the caller's tensor layout.
+        function = self.with_grad if torch.is_grad_enabled() else self.without_grad
+        return function(z.contiguous(), h.contiguous(), action.contiguous(), height, width)
+
+
 class Engine:
     def __init__(self, model, config, compile_model=False, *, fp8=False, optimizer_bits=32):
         self.model, self.config = model, config
         self.device = next(model.parameters()).device
         self.optimizer_bits = optimizer_bits
         self.fp8_layers = 0
+        self._latent_cache_epoch = 0
+        self._latent_caches = weakref.WeakSet()
         if fp8:
             if self.device.type != 'cuda' or torch.cuda.get_device_capability(self.device) < (8, 9):
                 raise ValueError('FP8 requires CUDA compute capability >= 8.9')
@@ -48,13 +79,14 @@ class Engine:
         self.aggregate = model.encoder.aggregate
         self.predict = model.dynamics.forward
         self.advance = model.dynamics.advance
-        self.decode = model.decoder.forward
+        self.decode = partial(model.decoder.forward, local=config.decoder_readout == 'local')
         if compile_model:
             # Keep original parameter names and checkpoint objects. Compilation
             # failure is an error, never an unreported eager fallback.
-            self.spatial, self.aggregate, self.predict, self.advance, self.decode = [
+            self.spatial, self.aggregate, self.advance, self.decode = [
                 torch.compile(f, fullgraph=True, dynamic=True) for f in
-                (self.spatial, self.aggregate, self.predict, self.advance, self.decode)]
+                (self.spatial, self.aggregate, self.advance, self.decode)]
+            self.predict = _CompiledDynamics(model.dynamics)
 
     def autocast(self):
         return torch.autocast('cuda', dtype=torch.bfloat16) if self.amp else nullcontext()
@@ -65,6 +97,39 @@ class Engine:
     def encode(self, observations, training=False, prepared=None):
         return self.model.encode(observations, self.spatial, self.config.frame_chunk,
                                  checkpoint_blocks=training, prepared=prepared, aggregate=self.aggregate)
+
+    def invalidate_latent_cache(self):
+        """Call when replacing encoder weights/configuration or changing phase."""
+        self._latent_cache_epoch += 1
+        for cache in self._latent_caches:
+            cache.clear()
+
+    @torch.no_grad()
+    def encode_frozen_episode(self, episode):
+        """Cache z only. Recurrent h is always recomputed with current dynamics."""
+        if not self.config.freeze_representation:
+            raise ValueError('Learned latent caches require a frozen encoder')
+        if not self.config.cache_frozen_latents or self.config.burn_in_steps:
+            return self.encode(episode.observations, prepared=episode.prepared)
+        cache = episode.latent_cache
+        self._latent_caches.add(cache)
+        # Parameter versions also catch in-place checkpoint loads and external
+        # weight copies between calls, even if explicit invalidation was missed.
+        token = (id(self), self._latent_cache_epoch, self.amp, str(self.device),
+                 tuple(p._version for p in self.model.encoder.parameters()))
+        if cache.token != token:
+            cache.clear()
+            cache.token = token
+        prefix = cache.values[:len(episode.observations)]
+        missing = self.encode(episode.observations[len(prefix):],
+            prepared=episode.prepared[len(prefix):]) if len(prefix) < len(episode.observations) else []
+        owner = episode.replay_owner() if episode.replay_owner else None
+        used = sum(ep.device_bytes for ep in owner.episodes) if owner else episode.device_bytes
+        limit = owner.byte_limit if owner else self.config.replay_bytes
+        extra = sum(z.numel() * z.element_size() for z in missing if z is not None)
+        if used + extra <= limit:
+            cache.values.extend(missing)
+        return prefix + missing
 
     @torch.no_grad()
     def initial(self, observation):
@@ -174,6 +239,87 @@ def soft_delta_error(color_logits, reference, actual):
                        false_changes / (actual.shape[1] * actual.shape[2]))
 
 
+@torch.no_grad()
+def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
+    """Frozen real-action rollouts; diagnostics never replace one-step scores.
+
+    Each anchor starts from its real posterior memory. Subsequent steps consume
+    only predicted latents and memory. Identity and action permutation use the
+    exact same anchors and final targets. Both readouts see those same latents.
+    """
+    if len(episode.observations) != len(episode.actions) + 1:
+        raise ValueError('Rollout diagnostics require aligned observations and actions')
+    if any(obs.terminal for obs in episode.observations[:-1]) or any(
+            after.starts_new_level(before) for before, after in
+            zip(episode.observations, episode.observations[1:])):
+        raise ValueError('Rollout diagnostics require a single level episode')
+    if any(type(h) is not int or h < 1 for h in horizons):
+        raise ValueError('Rollout horizons must be positive integers')
+    was_training = engine.model.training
+    engine.model.eval()
+    try:
+        with engine.autocast():
+            zs = engine.encode(episode.observations, prepared=episode.prepared)
+            h = torch.zeros(1, engine.model.config.memory, device=engine.device)
+            memories, current = [], zs[0]
+            action_features = engine.actions(episode.actions)
+            for t in range(len(episode.actions)):
+                memories.append(h)
+                if current is not None:
+                    h, _ = engine.advance(current[None], h, action_features[t:t + 1])
+                if zs[t + 1] is not None:
+                    current = zs[t + 1]
+            shuffled = list(episode.actions)
+            random.Random(seed).shuffle(shuffled)
+            shuffled_features = engine.actions(shuffled)
+            result = {}
+            for horizon in horizons:
+                samples, latent, identity, shuffled_mse, sensitivity = 0, 0., 0., 0., 0.
+                readouts = {name: {'prediction_wrong': 0, 'prediction_union': 0,
+                                   'reconstruction_wrong': 0, 'reconstruction_union': 0}
+                            for name in ('contextual', 'local')}
+                for start in range(len(episode.actions) - horizon + 1):
+                    window = episode.observations[start:start + horizon + 1]
+                    if any(obs.final is None for obs in window):
+                        continue
+                    shape = window[0].final.shape
+                    if any(obs.final.shape != shape for obs in window):
+                        continue
+                    predicted, counterfactual = zs[start][None], zs[start][None]
+                    predicted_h, counterfactual_h = memories[start], memories[start]
+                    for t in range(start, start + horizon):
+                        predicted, predicted_h, _ = engine.predict(
+                            predicted, predicted_h, action_features[t:t + 1], *shape)
+                        counterfactual, counterfactual_h, _ = engine.predict(
+                            counterfactual, counterfactual_h, shuffled_features[t:t + 1], *shape)
+                    actual_z = zs[start + horizon][None]
+                    latent += float(F.mse_loss(predicted.float(), actual_z.float()))
+                    identity += float(F.mse_loss(zs[start][None].float(), actual_z.float()))
+                    shuffled_mse += float(F.mse_loss(counterfactual.float(), actual_z.float()))
+                    sensitivity += float(F.mse_loss(counterfactual.float(), predicted.float()))
+                    reference, actual = window[0].final, window[-1].final
+                    for name, counts in readouts.items():
+                        decoded = engine.decode(torch.cat((predicted, actual_z)), *shape,
+                                                local=name == 'local').argmax(-1).cpu().numpy()
+                        for branch, board in zip(('prediction', 'reconstruction'), decoded):
+                            wrong, union, _ = delta_counts(reference, actual, board)
+                            counts[branch + '_wrong'] += wrong
+                            counts[branch + '_union'] += union
+                    samples += 1
+                result[str(horizon)] = {'samples': samples,
+                    'latent_mse': latent / samples if samples else None,
+                    'identity_latent_mse': identity / samples if samples else None,
+                    'shuffled_action_latent_mse': shuffled_mse / samples if samples else None,
+                    'action_sensitivity_mse': sensitivity / samples if samples else None,
+                    'readouts': {name: counts | {
+                        branch + '_delta_error': counts[branch + '_wrong'] / max(1, counts[branch + '_union'])
+                        if samples else None for branch in ('prediction', 'reconstruction')}
+                        for name, counts in readouts.items()}}
+            return result
+    finally:
+        engine.model.train(was_training)
+
+
 class Learner:
     def __init__(self, engine):
         self.engine = engine
@@ -187,6 +333,7 @@ class Learner:
     def set_representation_frozen(self, frozen):
         """Call between updates; keep parameter identity and optimizer moments."""
         self.engine.config = replace(self.engine.config, freeze_representation=frozen)
+        self.engine.invalidate_latent_cache()
         for module in (self.model.encoder, self.model.decoder):
             for parameter in module.parameters():
                 parameter.grad = None
@@ -198,23 +345,40 @@ class Learner:
         if any(after.starts_new_level(before) for episode in episodes
                for before, after in zip(episode.observations, episode.observations[1:])):
             raise ValueError('Training prefixes must not cross a native level boundary')
+        if any(len(ep.observations) != len(ep.actions) + 1 or
+               any(obs.terminal for obs in ep.observations[:-1]) for ep in episodes):
+            raise ValueError('Training episodes require aligned actions and cannot continue after a terminal')
         e, c = self.engine, self.engine.config
         self.model.train()
         for opt in self.optimizers:
             opt.zero_grad(set_to_none=True)
         real_z, states, memories, actions, targets, boards, references, successors = {}, [], [], [], [], [], [], []
+        rollout_pairs = []
         with e.autocast():
             for episode in episodes:
+                burn_in = 0
+                if c.burn_in_steps:
+                    # Optional truncated history, explicitly approximate: start
+                    # memory at zero, warm it on real inputs without gradients,
+                    # then retain the graph for the supervised anchors only.
+                    anchor = max(0, len(episode.actions) - c.loss_steps - int(c.rollout_weight > 0))
+                    start = max(0, anchor - c.burn_in_steps)
+                    burn_in = anchor - start
+                    episode = replace(episode, observations=episode.observations[start:],
+                        actions=episode.actions[start:], prepared=episode.prepared[start:] if episode.prepared else [])
                 # Keep episode outputs, not all encoder intermediates across
                 # every sampled prefix. Recompute one episode at a time during
                 # backward; all branches still receive the same joint gradients.
                 if c.freeze_representation:
                     with torch.no_grad():
-                        zs = e.encode(episode.observations, prepared=episode.prepared)
+                        zs = e.encode_frozen_episode(episode)
                 else:
-                    zs = activation_checkpoint(e.encode, episode.observations,
-                                               training=True, prepared=episode.prepared, use_reentrant=False)
-                for obs, z in zip(episode.observations, zs):
+                    with torch.no_grad():
+                        warm_z = e.encode(episode.observations[:burn_in],
+                            prepared=episode.prepared[:burn_in]) if burn_in else []
+                    zs = warm_z + activation_checkpoint(e.encode, episode.observations[burn_in:],
+                        training=True, prepared=episode.prepared[burn_in:], use_reentrant=False)
+                for obs, z in zip(episode.observations[burn_in:], zs[burn_in:]):
                     if z is not None:
                         real_z.setdefault(obs.final.shape, []).append(z)
                 # Match recurrent states' autograd metadata from the first step.
@@ -225,7 +389,9 @@ class Learner:
                 episode_actions = (torch.stack([item[2] for item in episode.prepared[1:]])
                                    if episode.prepared else e.actions(episode.actions))
                 first_loss = max(0, len(episode.actions) - c.loss_steps)
+                history_h = []
                 for t, action in enumerate(episode.actions):
+                    history_h.append(h)
                     next_z = zs[t + 1]
                     before, after = episode.observations[t].final, episode.observations[t + 1].final
                     if (t >= first_loss and current is not None and next_z is not None and
@@ -239,8 +405,26 @@ class Learner:
                                       torch.tensor(np.array(after, copy=True), device=e.device, dtype=torch.long))
                         references.append(episode.prepared[t][0][-1] if episode.prepared else
                                           torch.tensor(np.array(before, copy=True), device=e.device, dtype=torch.long))
+                        # loss_steps counts supervised ENDPOINTS. The last one
+                        # still has a two-step rollout when loss_steps == 1.
+                        if c.rollout_weight and t >= 1:
+                            anchor = episode.observations[t - 1].final
+                            if anchor is not None and anchor.shape == before.shape and zs[t - 1] is not None:
+                                rollout_pairs.append((zs[t - 1], history_h[t - 1][0],
+                                    episode_actions[t - 1], episode_actions[t], next_z, before.shape))
                     if current is not None:
-                        h, _ = e.advance(current[None], h, episode_actions[t:t + 1])
+                        if t < burn_in:
+                            with torch.no_grad():
+                                h, _ = e.advance(current[None], h, episode_actions[t:t + 1])
+                        else:
+                            # Compiled BF16 recurrence otherwise saves a fresh
+                            # cast of its large matrices for every history step.
+                            # Recompute those intermediates during backward;
+                            # preserve the complete recurrent gradient chain.
+                            h, _ = activation_checkpoint(e.advance, current[None], h,
+                                episode_actions[t:t + 1], use_reentrant=False)
+                        if t + 1 == burn_in:
+                            h = h.detach().requires_grad_(True)
                     if next_z is not None:
                         current = next_z
             if not states:
@@ -249,9 +433,23 @@ class Learner:
         for i, board in enumerate(boards):
             buckets.setdefault(board.shape, []).append(i)
         prediction_loss = torch.zeros((), device=e.device)
+        rollout_loss = torch.zeros((), device=e.device)
+        rollout_buckets = {}
+        for pair in rollout_pairs:
+            rollout_buckets.setdefault(pair[-1], []).append(pair)
+        for shape, pairs in rollout_buckets.items():
+            with e.autocast():
+                z1, h1, _ = e.predict(torch.stack([p[0] for p in pairs]),
+                    torch.stack([p[1] for p in pairs]), torch.stack([p[2] for p in pairs]), *shape)
+                # Both successor state and memory come from the prediction;
+                # no real intermediate latent is injected and no gradient cut.
+                z2, _, _ = e.predict(z1, h1, torch.stack([p[3] for p in pairs]), *shape)
+            rollout_loss = rollout_loss + len(pairs) / len(rollout_pairs) * F.mse_loss(
+                z2.float(), torch.stack([p[4] for p in pairs]).float())
         visual_losses = [0., 0., 0.]
         overlap_losses = [0., 0., 0.]
         backward_values, backward_gradients = [], []
+        ordinary_visual_loss = torch.zeros((), device=e.device)
         for shape, indices in buckets.items():
             with e.autocast():
                 predicted_z, _, delta = e.predict(torch.stack([states[i] for i in indices]),
@@ -262,7 +460,9 @@ class Learner:
             # Each decoder microbatch releases its graph; accumulated latent
             # gradients are explicitly propagated through BOTH source branches.
             source_values = (predicted_z,) if c.freeze_representation else (predicted_z, real_successors)
-            decoder_inputs = torch.cat(source_values).detach().requires_grad_(True)
+            decoder_inputs = torch.cat(source_values)
+            if c.backward_mode == 'fragmented':
+                decoder_inputs = decoder_inputs.detach().requires_grad_(True)
             for branch in range(len(source_values)):
                 for start in range(0, len(indices), c.frame_chunk):
                     selected = indices[start:start + c.frame_chunk]
@@ -275,21 +475,28 @@ class Learner:
                     part_loss = visual_delta_loss(logits, before, actual,
                         c.false_change_weight if branch == 0 else 1.).sum() / len(boards)
                     overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
-                    (part_loss + overlap).backward()
+                    if c.backward_mode == 'fragmented':
+                        (part_loss + overlap).backward()
+                    else:
+                        ordinary_visual_loss = ordinary_visual_loss + part_loss + overlap
                     visual_losses[branch] += float(part_loss.detach())
                     overlap_losses[branch] += float(overlap.detach())
-                    if branch == 1 and c.local_reconstruction_weight:
+                    if branch == 1 and c.local_reconstruction_weight and c.decoder_readout != 'local':
                         with e.autocast():
                             local_logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape, local=True)
                         local_loss = c.local_reconstruction_weight * visual_delta_loss(
                             local_logits, before, actual).sum() / len(boards)
                         local_overlap = c.local_reconstruction_weight * c.delta_overlap_weight * soft_delta_error(
                             local_logits, before, actual).sum() / len(boards)
-                        (local_loss + local_overlap).backward()
+                        if c.backward_mode == 'fragmented':
+                            (local_loss + local_overlap).backward()
+                        else:
+                            ordinary_visual_loss = ordinary_visual_loss + local_loss + local_overlap
                         visual_losses[2] += float(local_loss.detach())
                         overlap_losses[2] += float(local_overlap.detach())
-            backward_values.extend(source_values)
-            backward_gradients.extend(decoder_inputs.grad.chunk(len(source_values)))
+            if c.backward_mode == 'fragmented':
+                backward_values.extend(source_values)
+                backward_gradients.extend(decoder_inputs.grad.chunk(len(source_values)))
         # Match positions only within the same native canvas geometry. A single
         # observation cannot establish diversity, regardless of patch count.
         eligible = [] if c.freeze_representation else [zs for zs in real_z.values() if len(zs) >= c.min_observations]
@@ -297,8 +504,9 @@ class Learner:
         regularization = sum(len(zs) * sigreg(torch.stack(zs), self.model.config.sigreg_slices)
                              for zs in eligible) / count if count else prediction_loss * 0
         variance = sum(len(zs) * variance_floor(torch.stack(zs)) for zs in eligible) / count if count else prediction_loss * 0
-        loss = (1 - c.sigreg_weight) * prediction_loss + c.sigreg_weight * regularization + c.variance_weight * variance
-        torch.autograd.backward((loss, *backward_values), (None, *backward_gradients))
+        loss = ((1 - c.sigreg_weight) * prediction_loss + c.sigreg_weight * regularization
+                + c.variance_weight * variance + c.rollout_weight * rollout_loss)
+        torch.autograd.backward((loss + ordinary_visual_loss, *backward_values), (None, *backward_gradients))
         # Validate both gradient sets before either optimizer mutates weights.
         norms = [torch.nn.utils.clip_grad_norm_(p, 1., error_if_nonfinite=True)
                  for p in (self.primary, self.visual)]
@@ -312,4 +520,5 @@ class Learner:
                 'decoder_overlap': overlap_losses[0],
                 'reconstruction_overlap': None if c.freeze_representation else overlap_losses[1],
                 'local_reconstruction_overlap': None if c.freeze_representation else overlap_losses[2],
+                'rollout_mse': float(rollout_loss.detach()), 'rollout_samples': len(rollout_pairs),
                 'gradient_norm': float(norms[0]), 'samples': len(states)}
