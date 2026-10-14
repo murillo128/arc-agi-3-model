@@ -38,8 +38,12 @@ def episode_seeds(split, count, offset=0):
 def collect(engine, factory, level, seeds, steps, discount, records, policy=None, mode='q', epsilon=.25, round_index=None):
     """Store only causal pre-action latents; labels arrive from actual steps."""
     started, wins, actions = time.monotonic(), 0, 0
+    levels = [level] if isinstance(level, int) else level
+    counts = {lv: {'episodes': 0, 'wins': 0, 'actions': 0} for lv in levels}
     for index, seed in enumerate(seeds):
-        env, rng = factory.make(seed, level), random.Random(seed)
+        current_level = levels[index % len(levels)]
+        bucket = records[current_level] if isinstance(records, dict) else records
+        env, rng = factory.make(seed, current_level), random.Random(seed)
         obs = env.observation
         observations, chosen, events = [], [], []
         state = engine.initial(obs) if policy else None
@@ -71,17 +75,24 @@ def collect(engine, factory, level, seeds, steps, discount, records, policy=None
                         last_z, geometry = z, tuple(obs.final.shape)
                     if last_z is None:
                         continue
-                    records.append((last_z.to(device='cpu', dtype=torch.float16),
+                    bucket.append((last_z.to(device='cpu', dtype=torch.float16),
                                     h[0].to(device='cpu', dtype=torch.float16),
                                     torch.tensor(action.features()), event, target, geometry))
                     h, _ = engine.advance(last_z[None], h, engine.actions([action]))
+        counts[current_level]['episodes'] += 1
+        counts[current_level]['actions'] += len(chosen)
+        counts[current_level]['wins'] += bool(events and events[-1] == 1)
         if (index + 1) % 16 == 0 or index + 1 == len(seeds):
             emit('behavior_collection', round=round_index, episodes=index + 1, wins=wins, actions=actions,
-                 records=len(records), seconds=round(time.monotonic() - started, 2))
-    return {'episodes': len(seeds), 'wins': wins, 'actions': actions}
+                 level=current_level, per_level=counts,
+                 records=sum(map(len, records.values())) if isinstance(records, dict) else len(records),
+                 seconds=round(time.monotonic() - started, 2))
+    return {'episodes': len(seeds), 'wins': wins, 'actions': actions, 'per_level': counts}
 
 
 def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compiled=False, round_index=None):
+    if isinstance(records, dict):
+        records = [row for bucket in records.values() for row in bucket]
     if not records:
         raise ValueError('No real training records')
     heads.train()
@@ -125,8 +136,11 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
 @torch.no_grad()
 def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None, role='candidate'):
     results, started = [], time.monotonic()
+    levels = [level] if isinstance(level, int) else level
     for index, seed in enumerate(seeds):
-        rng, env = random.Random(seed), factory.make(seed, level)
+        current_level = levels[index % len(levels)]
+        episode_start = time.monotonic()
+        rng, env = random.Random(seed), factory.make(seed, current_level)
         obs, actions, event = env.observation, 0, 0
         state = engine.initial(obs) if mode != 'random' else None
         decision_seconds = 0.
@@ -145,28 +159,40 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
             if mode != 'random':
                 state = engine.observe(state, action, after)
             obs = after
-        results.append({'seed': seed, 'success': event == 1, 'game_over': event == 2,
+        results.append({'seed': seed, 'level': current_level, 'success': event == 1, 'game_over': event == 2,
                         'truncated': event == 0 and not obs.terminal, 'actions': actions,
-                        'decision_seconds': decision_seconds})
+                        'decision_seconds': decision_seconds, 'seconds': time.monotonic() - episode_start})
         if (index + 1) % 16 == 0:
             emit('behavior_evaluation_progress', split=split, round=round_index, role=role, policy=mode, horizon=planner.config.horizon,
-                 episodes=index + 1, wins=sum(r['success'] for r in results))
+                 level=current_level, episodes=index + 1, wins=sum(r['success'] for r in results))
+    context = {'split': split, 'round': round_index, 'role': role, 'policy': mode, 'horizon': planner.config.horizon}
+    report = {**context, 'level': levels[0] if len(levels) == 1 else None,
+              **evaluation_summary(results, time.monotonic() - started)}
+    if len(levels) > 1:
+        report['per_level'] = []
+        for lv in levels:
+            subset = [r for r in results if r['level'] == lv]
+            item = {**context, 'level': lv, **evaluation_summary(subset, sum(r['seconds'] for r in subset))}
+            report['per_level'].append(item)
+            emit('behavior_evaluation', **{k: v for k, v in item.items() if k != 'results'})
+    emit('behavior_evaluation', **{k: v for k, v in report.items() if k not in {'results', 'per_level'}})
+    return report
+
+
+def evaluation_summary(results, seconds):
     total_actions = sum(r['actions'] for r in results)
     wins = sum(r['success'] for r in results)
-    seconds = time.monotonic() - started
     # Wilson interval over episodes, not over pixels or actions.
     n, z = len(results), 1.96
     rate = wins / n
     center = (rate + z*z/(2*n)) / (1 + z*z/n)
     radius = z * (rate*(1-rate)/n + z*z/(4*n*n))**.5 / (1+z*z/n)
-    report = {'split': split, 'round': round_index, 'role': role, 'policy': mode, 'horizon': planner.config.horizon, 'episodes': n, 'wins': wins,
+    return {'episodes': n, 'wins': wins,
               'win_rate': rate, 'wilson95': [center-radius, center+radius], 'actions': total_actions,
               'actions_per_success': total_actions / wins if wins else None,
               'seconds': seconds, 'actions_per_second': total_actions / max(seconds, 1e-9),
               'decision_ms': 1000 * sum(r['decision_seconds'] for r in results) / max(total_actions, 1),
               'results': results}
-    emit('behavior_evaluation', **{k: v for k, v in report.items() if k != 'results'})
-    return report
 
 
 def save_heads(path, heads, source, config, report):
@@ -174,12 +200,15 @@ def save_heads(path, heads, source, config, report):
                             'planner': asdict(config), 'report': report})
 
 
-def load_heads(path, heads, source, *, game=None, level=None):
+def load_heads(path, heads, source, *, game=None, level=None, levels=None):
     payload = checkpoint.load(path)
     if payload['source_fingerprint'] != source:
         raise ValueError('Behavior checkpoint belongs to different world-model weights')
     context = payload['report'].get('config', {})
-    if game is not None and (context.get('game') != game or context.get('level') != level):
+    # Explicit multi-level training admits same-game transfer; the old implicit
+    # single-level continuation still refuses accidental context changes.
+    if game is not None and (context.get('game') != game or
+                             (levels is None and context.get('level') != level)):
         raise ValueError('Behavior continuation requires the same game and level')
     heads.load_state_dict(payload['weights'])
     return payload
@@ -198,7 +227,9 @@ def main(argv=None):
     parser.add_argument('--checkpoint', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--game', default='sc01-v1')
-    parser.add_argument('--level', type=int, default=2)
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument('--level', type=int, default=2)
+    scope.add_argument('--levels', type=int, nargs='+', help='Joint training; episode budgets apply per level; permits same-game head transfer')
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
     parser.add_argument('--train-episodes', type=int, default=128)
     parser.add_argument('--rounds', type=int, default=2)
@@ -217,11 +248,18 @@ def main(argv=None):
     initialization.add_argument('--heads', type=Path, help='Saved behavior heads for evaluation only')
     initialization.add_argument('--init-heads', type=Path, help='Initialize training weights; fresh optimizer and real experience')
     args = parser.parse_args(argv)
-    if args.game not in SYNTHETIC_LEVELS or args.level not in range(1, SYNTHETIC_LEVELS.get(args.game, 0) + 1):
+    levels = args.levels or [args.level]
+    level = levels if len(levels) > 1 else levels[0]
+    if args.levels:
+        args.level = levels[0] if len(levels) == 1 else None
+    if (args.game not in SYNTHETIC_LEVELS or len(set(levels)) != len(levels) or
+            any(lv not in range(1, SYNTHETIC_LEVELS.get(args.game, 0) + 1) for lv in levels)):
         parser.error('This prototype admits bundled synthetic training games only; public-game split admission is not implemented')
     for key in ('train_episodes', 'rounds', 'epochs', 'batch_size', 'max_records', 'steps', 'dev_episodes', 'final_episodes'):
         if getattr(args, key) < 1:
             parser.error(f'{key} must be positive')
+    if args.max_records < len(levels):
+        parser.error('max-records must retain at least one record per level')
     if args.output.resolve() == args.checkpoint.resolve().parent:
         parser.error('Behavior output must be separate from the world-model checkpoint directory')
     PlanConfig(beam=args.beam)
@@ -231,7 +269,7 @@ def main(argv=None):
         parser.error('learning rate must lie in (0, 1)')
     for split, count in [('train', args.train_episodes * args.rounds),
                          ('dev', args.dev_episodes), ('final', args.final_episodes)]:
-        episode_seeds(split, count, args.seed_offset)
+        episode_seeds(split, count * len(levels), args.seed_offset)
     if (args.output / 'heads.pt').exists() or (args.output / 'report.json').exists():
         parser.error('Output already contains an experiment; choose a fresh output directory')
     torch.set_num_threads(4)
@@ -250,7 +288,7 @@ def main(argv=None):
     config = PlanConfig(beam=args.beam)
     initial_weights, initial_policy, initial_config = None, None, None
     if args.init_heads:
-        saved = load_heads(args.init_heads, heads, source, game=args.game, level=args.level)
+        saved = load_heads(args.init_heads, heads, source, game=args.game, level=args.level, levels=args.levels)
         initial_config = PlanConfig(**saved['planner'])
         initial_policy = saved['report']['selected']['policy']
         if initial_policy not in {'q', 'mpc'}:
@@ -258,23 +296,25 @@ def main(argv=None):
         initial_weights = copy_weights(heads)
         config = replace(initial_config, beam=args.beam)
     planner = Planner(engine, heads, config, compile_heads=args.device == 'cuda')
-    records = deque(maxlen=args.max_records)
+    records = (deque(maxlen=args.max_records) if len(levels) == 1 else
+               {lv: deque(maxlen=args.max_records // len(levels) + (i < args.max_records % len(levels)))
+                for i, lv in enumerate(levels)})
     report = {'source_fingerprint': source, 'source_actions': source_actions,
               'config': {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
               'development': [], 'collection': []}
     if initial_weights is not None:
         report['initial_head_fingerprint'] = fingerprint(heads)
-    emit('behavior_started', game=args.game, level=args.level, device=args.device,
+    emit('behavior_started', game=args.game, level=args.level, levels=levels, device=args.device,
          compile=args.device == 'cuda', mode='evaluation_only' if args.heads else 'training',
          source=source, source_actions=source_actions, world_trainable=sum(p.numel() for p in net.parameters() if p.requires_grad))
     if args.heads:
         saved = load_heads(args.heads, heads, source)
         planner.config = PlanConfig(**saved['planner'])
-        seeds = episode_seeds('final', args.final_episodes, args.seed_offset)
+        seeds = episode_seeds('final', args.final_episodes * len(levels), args.seed_offset)
         mode = saved['report']['selected']['policy']
         report['selected'] = saved['report']['selected']
-        report['final_random'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, 'random', split='evaluation_only')
-        report['final_learned'] = evaluate(engine, planner, factory, args.level, seeds, args.steps, mode, split='evaluation_only')
+        report['final_random'] = evaluate(engine, planner, factory, level, seeds, args.steps, 'random', split='evaluation_only')
+        report['final_learned'] = evaluate(engine, planner, factory, level, seeds, args.steps, mode, split='evaluation_only')
         report['world_unchanged'] = fingerprint(net) == source
         if not report['world_unchanged']:
             raise RuntimeError('Frozen world-model invariant violated')
@@ -282,13 +322,13 @@ def main(argv=None):
         emit('behavior_finished', evaluation_only=True, world_unchanged=True,
              random_wins=report['final_random']['wins'], learned_wins=report['final_learned']['wins'])
         return
-    development = episode_seeds('dev', args.dev_episodes, args.seed_offset)
-    baseline = evaluate(engine, planner, factory, args.level, development, args.steps, 'random', split='development')
+    development = episode_seeds('dev', args.dev_episodes * len(levels), args.seed_offset)
+    baseline = evaluate(engine, planner, factory, level, development, args.steps, 'random', split='development')
     report['development_random'] = baseline
     best, best_weights, chosen, best_config = None, None, None, None
     if initial_weights is not None:
         planner.config = initial_config
-        result = evaluate(engine, planner, factory, args.level, development, args.steps, initial_policy,
+        result = evaluate(engine, planner, factory, level, development, args.steps, initial_policy,
                           split='development', round_index=0, role='initial')
         result['iteration'] = 0
         report['development_initial'] = result
@@ -300,16 +340,19 @@ def main(argv=None):
         if best_weights is not None:
             heads.load_state_dict(best_weights)
             planner.config = best_config
-        collection = collect(engine, factory, args.level,
-                             episode_seeds('train', args.train_episodes, args.seed_offset + iteration * args.train_episodes),
+        collection = collect(engine, factory, level,
+                             episode_seeds('train', args.train_episodes * len(levels), args.seed_offset + iteration * args.train_episodes * len(levels)),
                              args.steps, config.discount, records, policy,
                              mode=chosen['policy'] if chosen else 'q', round_index=iteration + 1)
         report['collection'].append(collection)
         fit(engine, heads, records, args.epochs, args.batch_size, args.learning_rate,
             123 + iteration, compiled=args.device == 'cuda', round_index=iteration + 1)
+        if fingerprint(net) != source or any(p.grad is not None for p in net.parameters()):
+            raise RuntimeError('Frozen world-model invariant violated after head fitting')
+        emit('behavior_world_verified', round=iteration + 1, world_unchanged=True, source=source)
         for mode, horizon in [('q', 1)] + [('mpc', h) for h in args.horizons]:
             planner.config = replace(config, horizon=horizon)
-            result = evaluate(engine, planner, factory, args.level, development, args.steps, mode, split='development', round_index=iteration + 1)
+            result = evaluate(engine, planner, factory, level, development, args.steps, mode, split='development', round_index=iteration + 1)
             result['iteration'] = iteration + 1
             report['development'].append(result)
             key = selection_key(result)
@@ -323,16 +366,16 @@ def main(argv=None):
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     heads.load_state_dict(best_weights)
     planner.config = best_config
-    final_seeds = episode_seeds('final', args.final_episodes, args.seed_offset)
-    report['final_random'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, 'random', split='final')
+    final_seeds = episode_seeds('final', args.final_episodes * len(levels), args.seed_offset)
+    report['final_random'] = evaluate(engine, planner, factory, level, final_seeds, args.steps, 'random', split='final')
     if initial_weights is not None:
         heads.load_state_dict(initial_weights)
         planner.config = initial_config
-        report['final_initial'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps,
+        report['final_initial'] = evaluate(engine, planner, factory, level, final_seeds, args.steps,
                                           initial_policy, split='final', role='initial')
         heads.load_state_dict(best_weights)
         planner.config = best_config
-    report['final_learned'] = evaluate(engine, planner, factory, args.level, final_seeds, args.steps, chosen['policy'], split='final')
+    report['final_learned'] = evaluate(engine, planner, factory, level, final_seeds, args.steps, chosen['policy'], split='final')
     report['world_unchanged'] = fingerprint(net) == source
     if not report['world_unchanged'] or any(p.grad is not None for p in net.parameters()):
         raise RuntimeError('Frozen world-model invariant violated')

@@ -217,21 +217,26 @@ class BehaviorMonitor(LogMonitor):
             return
         event = row.get('event')
         if event not in ('behavior_started', 'behavior_collection', 'behavior_fit',
-                         'behavior_evaluation_progress', 'behavior_evaluation', 'behavior_finished'):
+                         'behavior_evaluation_progress', 'behavior_evaluation', 'behavior_world_verified', 'behavior_finished'):
             return
         if event == 'behavior_started':
             self._reset()
             self.run = {k: str(row[k])[:80] for k in ('game', 'device', 'mode', 'source') if k in row}
             self.run.update(numbers(row, ('level', 'source_actions', 'world_trainable')))
+            if isinstance(row.get('levels'), list):
+                self.run['levels'] = [v for v in row['levels'][:100] if type(v) is int and v > 0]
             self.run['compile'] = row.get('compile') is True
         point = numbers(row, ('round', 'epoch', 'epochs', 'updates', 'records', 'loss', 'event_ce',
                               'value_bce', 'q_bce', 'episodes', 'wins', 'actions', 'seconds', 'horizon',
-                              'win_rate', 'actions_per_success', 'actions_per_second', 'decision_ms'))
+                              'win_rate', 'actions_per_success', 'actions_per_second', 'decision_ms', 'level'))
         for key in ('policy', 'split', 'role'):
             if key in row:
                 point[key] = str(row[key])[:40]
         if event == 'behavior_collection':
             # Counts are local to this collection round, never added to evaluation.
+            if isinstance(row.get('per_level'), dict):
+                point['per_level'] = {str(k)[:10]: numbers(v, ('episodes', 'wins', 'actions'))
+                                      for k, v in list(row['per_level'].items())[:100] if isinstance(v, dict)}
             self.progress['collection'] = point
         elif event == 'behavior_fit':
             self.fits.append(point)
@@ -244,7 +249,7 @@ class BehaviorMonitor(LogMonitor):
             self.progress['evaluation'] = point
             if event == 'behavior_evaluation':
                 self.evaluations.append(point)
-        elif event == 'behavior_finished':
+        elif event in ('behavior_world_verified', 'behavior_finished'):
             self.run['world_unchanged'] = row.get('world_unchanged') if type(row.get('world_unchanged')) is bool else None
             selected = row.get('selected')
             if isinstance(selected, dict):

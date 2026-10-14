@@ -112,7 +112,7 @@ con `--heads` (que sigue siendo solo evaluación):
   --dev-episodes 64 --final-episodes 256 --horizons 1 2
 ```
 
-Se exige la misma huella del mundo, juego y nivel. El optimizador y la memoria de
+Con `--level` se exige la misma huella del mundo, juego y nivel. El optimizador y la memoria de
 experiencia empiezan vacíos: es una continuación desde pesos, no la restauración
 exacta de una ejecución interrumpida. La política inicial conserva su configuración
 y participa como candidata (iteración 0); las nuevas usan el beam solicitado y el
@@ -125,6 +125,41 @@ y política elegida, sin actualizaciones. La fila/serie **Inicial** del panel es
 una referencia separada; no sustituye el resultado del candidato nuevo.
 `initial_head_fingerprint` y `head_fingerprint` identifican los pesos comparados.
 El mundo, encoder y decoder siguen completamente congelados.
+
+Para entrenar **unas mismas cabezas en varios niveles**, `--levels` sustituye a
+`--level` y permite transferir las cabezas entre niveles del mismo juego:
+
+```sh
+.venv/bin/python -u -m model.behavior_experiment \
+  --checkpoint model/runs/active-training/latest.pt \
+  --init-heads model/runs/goal-planner/continuation/heads.pt \
+  --output model/runs/goal-planner/multilevel \
+  --game sc01-v1 --levels 3 4 5 --device cuda --seed-offset 40000 \
+  --train-episodes 128 --rounds 2 --epochs 12 --max-records 16384 \
+  --dev-episodes 32 --final-episodes 128 --horizons 1 2
+```
+
+Los presupuestos de partidas se aplican **por nivel**: este comando recoge 768
+partidas entre las dos rondas, evalúa 96 partidas por candidato en desarrollo y
+384 por política al final. Alterna los niveles por partida y reinicia la memoria
+recurrente en cada una. El ID del nivel se usa para el entorno y las métricas;
+no entra en la red. Solo hay una política y un checkpoint compartidos.
+
+El máximo de registros se reparte en cuotas FIFO por nivel (5462/5461/5461 con
+este comando), que después se mezclan para el ajuste. Así ningún nivel expulsa
+las experiencias de los demás. Sigue siendo memoria temporal, sin grabaciones
+de replay en disco. El mundo debe coincidir con la huella de las cabezas iniciales
+y permanece congelado; se comprueba su huella y la ausencia de gradientes después
+de cada ajuste y al terminar.
+
+Desarrollo y evaluación final presentan resultados `per_level` y un agregado
+con el mismo número de partidas por nivel. La selección usa las victorias del
+agregado de desarrollo, con coste de acciones/decisión para desempatar, conservando
+la política inicial como candidata. Un agregado mejor puede esconder un retroceso
+en un nivel: el selector **Nivel** del panel permite ver ambos. Cada política se
+evalúa sobre los mismos pares nivel/semilla; la evaluación final nunca decide
+qué checkpoint guardar. Los pesos iniciales no se sobrescriben. No cambia la
+arquitectura de inferencia ni `architecture.json`.
 
 Se rechaza una huella de mundo distinta y un output que ya contenga resultados.
 Para nuevas iteraciones, elegir semillas nuevas con `--seed-offset`; no tratar
