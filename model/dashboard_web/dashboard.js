@@ -225,6 +225,22 @@ function groupedLines(rows, fields, key, x = row => row.actions) {
   return groups.flatMap(group => fields.map(([name, value]) =>
     line(`${name} · ${group}`, rows.filter(r => key(r) === group), value, x)));
 }
+function aggregateDiagnostics(row) {
+  const result = {...row}, pairs = row.per_pair || [];
+  if (!pairs.length) return result;
+  for (const key of ['extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes']) {
+    // Prefer an explicit total; never count it again alongside its per-level detail.
+    if (!finite(result[key]) && pairs.every(p => finite(p[key])))
+      result[key] = pairs.reduce((sum, p) => sum + p[key], 0);
+  }
+  if (!finite(result.latent_std) && pairs.every(p => finite(p.transitions) && p.transitions >= 0)) {
+    const measured = pairs.filter(p => p.transitions > 0);
+    const count = measured.reduce((sum, p) => sum + p.transitions, 0);
+    if (count && measured.every(p => finite(p.latent_std)))
+      result.latent_std = measured.reduce((sum, p) => sum + p.latent_std * p.transitions, 0) / count;
+  }
+  return result;
+}
 function render(data) {
   const {views, current} = executionCatalogue(data);
   const select = $('execution-select');
@@ -295,10 +311,11 @@ function render(data) {
   charts.rollouts.set(groupedLines(visualRows, [
     ...[1, 2, 4].map(h => [`${h} paso${h > 1 ? 's' : ''}`, r => r.rollouts?.[String(h)]?.latent_mse]),
     ['Identidad · 4 pasos', r => r.rollouts?.['4']?.identity_latent_mse]], curveGroup));
-  const breakdown = validations.filter(r => ['extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes'].some(k => finite(r[k])));
-  charts.changes.set(groupedLines(breakdown, [['Inventados', r => r.extra_changes], ['Omitidos', r => r.missed_changes],
-    ['Color incorrecto', r => r.wrong_replacement_colors], ['Acertados', r => r.correct_changes]], curveGroup), undefined, ' px');
-  charts.spread.set(groupedLines(validations.filter(r => finite(r.latent_std)), [['Diversidad', r => r.latent_std]], curveGroup), config.min_latent_std);
+  const diagnostics = visualRows.map(aggregateDiagnostics);
+  charts.changes.set([['Inventados', 'extra_changes'], ['Omitidos', 'missed_changes'],
+    ['Color incorrecto', 'wrong_replacement_colors'], ['Acertados', 'correct_changes']]
+    .map(([name, key]) => line(name, diagnostics, r => r[key])), undefined, ' px');
+  charts.spread.set([line('Diversidad media', diagnostics, r => r.latent_std)], config.min_latent_std);
   charts.total.set([line('Pérdida total', worldPoints, r => r.loss?.loss)]);
   charts.speed.set([line('Media de la ejecución', view?.kind === 'campaign'
     ? (raw.progress_points || []).filter(r => campaignKey(r) === campaignKey(p)) : worldPoints, r => r.actions_per_second)]);
