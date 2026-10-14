@@ -18,7 +18,8 @@ const reasons = {encoder_collapsed: 'colapso sostenido del encoder', level_conve
   curriculum_converged: 'currículo completado', interrupted: 'interrupción', action_limit: 'límite de acciones',
   level_limit_without_convergence: 'límite de acciones del nivel'};
 let state = null;
-let chartRevision = '';
+let selectedExecution = 'current';
+let selectedTab = 'world';
 
 class Chart {
   constructor(id) {
@@ -57,18 +58,19 @@ class Chart {
     if (!points.length) {
       this.bounds = null;
       ctx.fillStyle = '#8da39a'; ctx.font = '12px system-ui'; ctx.textAlign = 'center';
-      ctx.fillText('Esperando suficientes datos de esta serie…', width / 2, height / 2); return;
+      ctx.fillText('Sin datos registrados en esta ejecución', width / 2, height / 2); return;
     }
     const left = 62, top = 16, right = width - 16, bottom = height - 32;
     const minX = Math.min(...points.map(p => p.x));
     const maxX = Math.max(minX + 1, ...points.map(p => p.x));
     const maxY = Math.max(.000001, finite(this.threshold) ? this.threshold : 0, ...points.map(p => p.y)) * 1.12;
+    const minY = Math.min(0, ...points.map(p => p.y)) * 1.12;
     const x = value => left + (value - minX) / (maxX - minX) * (right - left);
-    const y = value => bottom - value / maxY * (bottom - top);
+    const y = value => bottom - (value - minY) / (maxY - minY) * (bottom - top);
     this.bounds = {left, right, minX, maxX};
     ctx.font = '10px system-ui';
     for (let i = 0; i <= 4; i++) {
-      const value = maxY * i / 4, py = y(value);
+      const value = minY + (maxY - minY) * i / 4, py = y(value);
       ctx.strokeStyle = '#2a3835'; ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(right, py); ctx.stroke();
       ctx.fillStyle = '#8da39a'; ctx.textAlign = 'right'; ctx.fillText(scalar(value) + this.suffix, left - 9, py + 3);
       const vx = minX + (maxX - minX) * i / 4;
@@ -107,317 +109,269 @@ class Chart {
     this.tip.textContent = lines.join('\n'); this.tip.hidden = false;
   }
 }
-const charts = Object.fromEntries(['delta', 'changes', 'loss', 'speed', 'spread', 'latent', 'total'].map(id => [id, new Chart(id)]));
-
-function render(data) {
-  renderCampaign(data.campaign);
-  renderBehavior(data.behavior);
-  const p = data.progress, run = data.run, config = run.training || {};
-  const clean = run.statistics_origin === 'after_first_action';
-  $('statistics-origin').textContent = clean
-    ? finite(p.elapsed_seconds)
-      ? `Estadísticas desde el final de la primera jugada · ${fmt(p.elapsed_seconds, 1)} s medidos`
-      : 'Preparando el punto limpio: esperando a que termine la primera jugada…'
-    : 'Log anterior: contadores acumulados y velocidad media desde el arranque';
-  $('tps-period').textContent = clean ? 'Media desde el punto limpio' : 'Media desde el arranque del proceso';
-  $('axis-origin').textContent = clean ? 'Eje horizontal: acciones desde el punto limpio' : 'Eje horizontal: acciones acumuladas';
-  $('speed-period').textContent = clean
-    ? 'Media desde el punto limpio; incluye las pausas posteriores de validación y guardado.'
-    : 'Media desde el arranque; incluye validación y guardado de checkpoints.';
-  const currentLevel = Object.hasOwn(p, 'level') ? p.level : run.levels?.[p.level_index || 0];
-  const latest = [...data.validations].reverse().find(v => v.level === currentLevel);
-  $('run-info').textContent = [run.game || 'Juego pendiente', run.device?.toUpperCase(),
-    finite(run.parameters) ? `${fmt(run.parameters / 1e6, 1)} M parámetros` : null,
-    run.compile === true ? 'torch.compile' : run.compile === false ? 'Eager' : null,
-    config.auto_representation === true ? 'Gate automático' : null,
-    config.freeze_representation === true ? 'Solo predictor · encoder y decoder congelados' :
-      config.freeze_representation === false ? 'Aprendizaje conjunto' : null].filter(Boolean).join(' · ');
-  const gate = run.representation_gate;
-  const gateReasons = {insufficient_evidence: 'Evidencia insuficiente', hold: 'Mantiene el modo',
-    reconstruction_high: 'Reactivados encoder y decoder', reconstruction_low: 'Congelados encoder y decoder'};
-  $('representation-gate').textContent = config.auto_representation === true
-    ? gate ? `${gateReasons[gate.reason] || 'Esperando validación'} · reconstrucción ${pct(gate.reconstruction_error)} · activar > ${pct(gate.unfreeze_error)}, congelar ≤ ${pct(gate.freeze_error)} · racha ${fmt(Math.max(gate.open_streak || 0, gate.close_streak || 0))}/${fmt(gate.patience)}`
-      : `Esperando validación · activar > ${pct(config.representation_unfreeze_error)}, congelar ≤ ${pct(config.representation_freeze_error)}`
-    : 'Manual';
-  $('loss-note').textContent = config.freeze_representation === true
-    ? 'Solo se entrena el predictor. La reconstrucción se sigue midiendo en validación; no tiene pérdida de entrenamiento activa.'
-    : 'Supervisión del predictor y las dos reconstrucciones. Son pérdidas de aprendizaje, no porcentajes de error.';
-  $('level').textContent = currentLevel === undefined ? '—' : levelName(currentLevel);
-  $('level-actions').textContent = `${fmt(p.level_actions)} acciones en este nivel`;
-  $('actions').textContent = fmt(p.actions); $('episodes').textContent = `${fmt(p.episodes)} ${clean ? 'partidas nuevas desde el punto limpio' : 'partidas iniciadas'}`;
-  $('tps').textContent = fmt(p.actions_per_second, 2); $('updates').textContent = fmt(p.updates);
-  if (finite(p.trained_transitions_per_second)) $('tps-period').textContent += ` · ${fmt(p.trained_transitions_per_second, 1)} transiciones entrenadas/s`;
-  $('replay').textContent = `${fmt(p.replay_episodes)} partidas en memoria · ${fmt(p.device_cache_mb, 1)} MiB de entradas`;
-  $('prediction').textContent = pct(latest?.delta_error); $('reconstruction').textContent = pct(latest?.decoder_delta_error);
-  $('prediction-note').textContent = latest ? `Validado en acción ${fmt(latest.actions)}` : 'Todavía sin validación de este nivel';
-  $('gpu').textContent = finite(p.gpu_peak_mb) ? `${fmt(p.gpu_peak_mb / 1024, 2)} GiB` : '—';
-  $('learning-rate').textContent = scalar(config.learning_rate);
-  $('false-change-weight').textContent = finite(config.false_change_weight) ? `×${fmt(config.false_change_weight, 2)}` : '—';
-  $('passes').textContent = `${fmt(p.passes)} / ${fmt(config.consecutive_passes)}`;
-  const checkpoint = [...data.events].reverse().find(e => e.event === 'checkpoint' || e.event === 'stopped');
-  $('checkpoint').textContent = checkpoint ? `Acción ${fmt(checkpoint.actions)}` : 'Sin evento reciente';
-  const event = data.events.at(-1);
-  $('event').textContent = event ? (events[event.event] || event.event) : '—';
-  renderStatus(data);
-  $('gate-info').textContent = `Validación cada ${fmt(config.validate_every)} acciones. Umbrales: errores visuales ≤ ${pct(config.delta_error)}, MSE latente ≤ ${scalar(config.latent_delta_mse)}, diversidad ≥ ${scalar(config.min_latent_std)}; también se exige cobertura suficiente.`;
-  $('retention').textContent = `Lee el log existente · hasta ${fmt(data.max_points)} puntos por tipo en memoria · no guarda un historial adicional.`;
-
-  const levels = [...new Set([...(run.levels || []), ...data.validations.map(v => v.level)])];
-  const levelSelect = $('validation-level'), selected = levelSelect.value;
-  const values = ['current', ...levels.map(String)];
-  if (JSON.stringify([...levelSelect.options].map(o => o.value)) !== JSON.stringify(values)) {
-    levelSelect.replaceChildren(new Option('Actual', 'current'), ...levels.map(level => new Option(levelName(level), String(level))));
-    if (values.includes(selected)) levelSelect.value = selected;
-  }
-  const lastByLevel = new Map(); for (const v of data.validations) lastByLevel.set(v.level, v);
-  const rows = [...lastByLevel.values()].map(v => {
-    const tr = document.createElement('tr');
-    for (const value of [levelName(v.level), fmt(v.actions), pct(v.delta_error), pct(v.decoder_delta_error), fmt(v.transitions), v.passes ? 'Sí' : 'No']) {
-      const td = document.createElement('td'); td.textContent = value; tr.append(td);
-    }
-    return tr;
-  });
-  if (rows.length) $('validation-table').replaceChildren(...rows);
-  else { const tr = document.createElement('tr'), td = document.createElement('td'); td.colSpan = 6; td.textContent = 'Todavía no hay validaciones.'; tr.append(td); $('validation-table').replaceChildren(tr); }
-  const revision = `${data.generation}:${data.revision}:${levelSelect.value}:${$('window').value}`;
-  if (revision !== chartRevision) { chartRevision = revision; drawCharts(currentLevel); }
-}
-
-function renderStatus(data) {
-  $('world-status').textContent = !data.source.available ? 'Log del mundo no disponible.' : data.phase === 'stopped'
-    ? `Entrenamiento del mundo detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}. Las métricas de esta sección corresponden a esa ejecución.`
-    : `Mundo: ${phases[data.phase] || 'Recibiendo métricas'}.`;
-  const behavior = data.behavior?.source.available ? data.behavior : null;
-  const campaign = data.campaign || null;
-  const current = campaign || behavior || data, source = current.source;
-  const finished = campaign ? ['campaign_finished', 'campaign_error'].includes(current.phase)
-    : behavior ? current.phase === 'behavior_finished' : current.phase === 'stopped';
-  const stale = source.age_seconds > 60 && !finished;
-  $('connection').textContent = !source.available ? 'Log no disponible' : source.catching_up ? 'Leyendo métricas…' :
-    stale ? campaign ? `${campaignStatus(campaign)} · sin datos recientes` : 'Sin datos recientes'
-    : campaign ? campaignStatus(campaign) : ((behavior ? behaviorPhases : phases)[current.phase] || 'Recibiendo datos');
-  $('connection').className = !source.available || stale || current.phase === 'campaign_error' || (!campaign && !behavior && finished) ? 'warn' : '';
-  $('freshness').textContent = source.available ? `Última escritura del log hace ${fmt(source.age_seconds)} s · consulta cada 2 s` : 'Reintentando automáticamente cada 2 s';
-  const messages = [];
-  if (!source.available) messages.push('No se puede leer el log. Los valores visibles son los últimos recibidos.');
-  if (campaign?.phase === 'campaign_error') messages.push(`Campaña detenida por un error: ${campaign.reason || 'sin detalle'}.`);
-  else if (!campaign && !behavior && finished) messages.push(`Entrenamiento detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}.`);
-  else if (stale) messages.push('El log no recibe datos recientes. Puede estar validando, guardando pesos o detenido; el panel no confirma que el proceso siga activo.');
-  if (source.tail_limited) messages.push('Se muestra el tramo reciente del log; los datos anteriores quedan fuera de la ventana de lectura.');
-  $('notice').hidden = messages.length === 0; $('notice').textContent = messages.join(' ');
-  if (campaign) {
-    $('run-info').textContent = ['Campaña de arquitectura', campaign.progress.variant,
-      campaignStages[campaign.progress.stage], campaign.progress.game,
-      campaign.run.config?.device?.toUpperCase()].filter(Boolean).join(' · ');
-    $('statistics-origin').textContent = 'Contadores propios por variante y semilla · evaluación separada del aprendizaje';
-  } else if (behavior) {
-    const levels = behavior.run.levels || (finite(behavior.run.level) ? [behavior.run.level] : []);
-    $('run-info').textContent = ['Goal y planner', behavior.run.game, levels.length ? `Niveles ${levels.join(', ')}` : null,
-      behavior.run.device?.toUpperCase(), behavior.run.compile ? 'torch.compile' : null].filter(Boolean).join(' · ');
-    $('statistics-origin').textContent = 'Recogida y ajuste por rondas · las evaluaciones se cuentan por separado';
-  }
-}
-
-function drawCharts(currentLevel) {
-  if (!state) return;
-  const p = state.progress, config = state.run.training || {};
-  if (currentLevel === undefined) currentLevel = Object.hasOwn(p, 'level') ? p.level : state.run.levels?.[p.level_index || 0];
-  const selected = $('validation-level').value;
-  const level = selected === 'current' ? currentLevel : selected === 'null' ? null : Number(selected);
-  const windowSize = $('window').value === 'all' ? Infinity : Number($('window').value);
-  const cutoff = (p.actions || 0) - windowSize;
-  const progress = state.progress_points.filter(row => row.actions >= cutoff);
-  const validation = state.validations.filter(row => row.level === level && finite(row.actions) && row.actions >= cutoff);
-  const series = (name, rows, value) => ({name, points: rows.map(row => ({x: row.actions, y: value(row)}))});
-  charts.delta.set([series('Predictor', validation, r => percentValue(r.delta_error)), series('Decoder · latente real', validation, r => percentValue(r.decoder_delta_error))], percentValue(config.delta_error), ' %');
-  const changeSeries = [['Inventados', 'extra_changes'], ['Omitidos', 'missed_changes'],
-    ['Color incorrecto', 'wrong_replacement_colors'], ['Acertados', 'correct_changes']];
-  charts.changes.set(changeSeries.map(([name, key]) => series(name, validation, r => r[key])), undefined, ' px');
-  const detailed = validation.at(-1);
-  $('changes-summary').textContent = detailed && changeSeries.every(([, key]) => finite(detailed[key]))
-    ? `Última validación · ${fmt(detailed.validation_actions)} acciones: ${changeSeries.map(([name, key]) => `${name.toLowerCase()} ${fmt(detailed[key])}`).join(' · ')}.`
-    : 'Esperando una validación con desglose de errores; los registros anteriores no contienen estos datos.';
-  charts.loss.set([series('Predictor', progress, r => r.loss?.decoder_ce), series('Reconstrucción', progress, r => r.loss?.reconstruction_ce), series('Reconstrucción local', progress, r => r.loss?.local_reconstruction_ce)]);
-  charts.speed.set([series(state.run.statistics_origin === 'after_first_action' ? 'Media desde el punto limpio' : 'Media del proceso', progress, r => r.actions_per_second)]);
-  charts.spread.set([series('Diversidad observada', validation, r => r.latent_std)], config.min_latent_std);
-  charts.latent.set([series('MSE del delta', validation, r => r.latent_delta_mse)], config.latent_delta_mse);
-  charts.total.set([series('Pérdida total', progress, r => r.loss?.loss)]);
-}
-const behaviorCharts = {loss: new Chart('behavior-loss-chart'), wins: new Chart('behavior-win-chart')};
-const splitNames = {final: 'Final', development: 'Desarrollo', evaluation_only: 'Aislada', unspecified: 'No registrada'};
+const charts = Object.fromEntries(['delta', 'changes', 'loss', 'speed', 'spread', 'latent', 'total',
+  'rollouts', 'wins', 'behaviorLoss', 'actor'].map(id => [id, new Chart(id)]));
+const splitNames = {dev: 'Desarrollo', development: 'Desarrollo', intermediate: 'Intermedia', final: 'Final',
+  validation: 'Validación', evaluation_only: 'Aislada', unspecified: 'Fase no registrada'};
+const stages = {initializing: 'Inicializando / compilando', world: 'Aprendiendo dinámica',
+  head_calibration: 'Calibrando progreso y valor', world_evaluation: 'Evaluando el mundo',
+  behavior_evaluation: 'Evaluando comportamiento', behavior: 'Aprendiendo valor y planificación',
+  actor: 'Aprendiendo actor y crítico', imagination_gate: 'Comprobación de imaginación'};
 const behaviorPhases = {behavior_started: 'Preparando', behavior_collection: 'Recogiendo experiencia real',
-  behavior_fit: 'Entrenando goal / valor', behavior_evaluation_progress: 'Evaluando',
-  behavior_evaluation: 'Evaluación recibida', behavior_world_verified: 'Pesos del mundo verificados',
-  behavior_finished: 'Experimento terminado', waiting: 'Esperando datos'};
+  behavior_fit: 'Aprendiendo progreso y valor', behavior_evaluation_progress: 'Evaluando comportamiento',
+  behavior_evaluation: 'Evaluación recibida', behavior_finished: 'Experimento terminado',
+  behavior_world_verified: 'Pesos del mundo verificados'};
+const campaignKey = row => JSON.stringify([row.variant || 'preparando', row.seed ?? null]);
+const scope = row => [row.game, finite(row.level) ? `Nivel ${fmt(row.level)}` : 'Conjunto'].filter(Boolean).join(' / ');
+const splitName = row => splitNames[row.split] || row.split || 'Fase no registrada';
 function policyName(row) {
-  const name = row.policy === 'random' ? 'Azar' : row.policy === 'q' ? 'Q' : `MPC · ${fmt(row.horizon)} pasos`;
-  return row.role === 'initial' ? `Inicial · ${name}` : name;
+  const policy = row.policy === 'random' ? 'Azar' : row.policy === 'q' ? 'Q'
+    : finite(row.horizon) ? `MPC · ${fmt(row.horizon)} pasos` : row.policy || 'Agente';
+  return row.role === 'initial' ? `Inicial · ${policy}` : policy;
 }
-let behaviorFilterManual = false;
-function renderBehavior(b) {
-  const levels = b?.run.levels || (finite(b?.run.level) ? [b.run.level] : []);
-  const levelSelect = $('behavior-level');
-  const options = ['all', ...levels.map(String)];
-  if ([...levelSelect.options].map(o => o.value).join(',') !== options.join(',')) {
-    const previous = levelSelect.value;
-    levelSelect.replaceChildren(...options.map(v => new Option(v === 'all' ? 'Conjunto' : `Nivel ${v}`, v)));
-    levelSelect.value = options.includes(previous) ? previous : 'all';
-  }
-  const levelRows = (b?.evaluations || []).filter(r =>
-    levelSelect.value === 'all' ? levels.length < 2 || !finite(r.level) : r.level === Number(levelSelect.value));
-  const evaluation = b?.progress.evaluation;
-  if (!behaviorFilterManual) {
-    const latest = levelRows.findLast(r => r.policy !== 'random' && r.role !== 'initial');
-    const availableSplit = latest?.split
-      || evaluation?.split || levelRows.at(-1)?.split
-      || ({training: 'development', evaluation_only: 'evaluation_only'})[b?.run.mode];
-    if (availableSplit) $('behavior-split').value = availableSplit;
-  }
-  const split = $('behavior-split').value;
-  const rows = levelRows.filter(r => r.split === split);
-  const learned = rows.findLast(r => r.policy !== 'random' && r.role !== 'initial'), baseline = rows.findLast(r => r.policy === 'random');
-  const collection = b?.progress.collection, fit = b?.progress.fit;
-  const complete = b?.phase === 'behavior_finished';
-  const stale = b?.source.age_seconds > 60;
-  $('behavior-status').textContent = !b ? 'No se ha configurado un log de comportamiento.' : !b.source.available
-    ? 'Log de comportamiento no disponible; se reintentará.' : complete ? 'Experimento terminado'
-    : stale ? 'Sin datos recientes; el log no confirma que siga activo.' : behaviorPhases[b.phase] || 'Recibiendo métricas';
-  $('behavior-info').textContent = b ? [b.run.game, levels.length ? `Niveles ${levels.join(', ')}` : null,
-    b.run.device?.toUpperCase(), b.run.world_trainable === 0 ? 'Encoder, predictor y decoder congelados' : null,
-    b.run.world_unchanged === true ? 'Pesos del mundo verificados sin cambios' : null,
-    b.run.world_unchanged === false ? 'FALLO: cambiaron los pesos del mundo' : null,
-    b.source.available ? `Log actualizado hace ${fmt(b.source.age_seconds)} s` : null,
-    b.phase === 'behavior_evaluation_progress' ? `${splitNames[evaluation?.split] || 'Fase no registrada'} · ${policyName(evaluation || {})} · ${fmt(evaluation?.wins)}/${fmt(evaluation?.episodes)} victorias` : null,
-    b.source.tail_limited ? 'Solo tramo reciente del log' : null].filter(Boolean).join(' · ') : '';
-  $('behavior-actions').textContent = fmt(collection?.actions);
-  const perLevel = Object.entries(collection?.per_level || {}).map(([lv, c]) => `N${lv}: ${fmt(c.episodes)} partidas`).join(' · ');
-  $('behavior-episodes').textContent = `Ronda ${fmt(collection?.round)} · ${fmt(collection?.episodes)} partidas · ${fmt(collection?.wins)} victorias · ${fmt(collection?.records)} transiciones en memoria${perLevel ? ' · ' + perLevel : ''}`;
-  $('behavior-loss').textContent = scalar(fit?.loss);
-  $('behavior-epoch').textContent = `Ronda ${fmt(fit?.round)} · época ${fmt(fit?.epoch)}/${fmt(fit?.epochs)} · ${fmt(fit?.updates)} actualizaciones de la ronda`;
-  const evaluating = !learned && b?.source.available && b.phase === 'behavior_evaluation_progress' && evaluation?.split === split;
-  const awaiting = !learned && b?.source.available && ['behavior_started', 'behavior_collection', 'behavior_fit',
-    'behavior_world_verified', 'behavior_evaluation'].includes(b.phase);
-  $('behavior-win').textContent = evaluating ? 'En curso' : awaiting ? 'Pendiente' : pct(learned?.win_rate);
-  $('behavior-wins').textContent = learned ? `${policyName(learned)} · ${fmt(learned.wins)}/${fmt(learned.episodes)} · ${splitNames[split]}`
-    : evaluating ? `Esperando el resultado completo de ${splitNames[split]}; progreso de la evaluación indicado arriba`
-    : awaiting ? `Evaluación aprendida pendiente de ${splitNames[split]}; aún no se ha registrado un resultado completo para este nivel y fase`
-    : 'Sin evaluación aprendida en esta fase';
-  $('behavior-random').textContent = pct(baseline?.win_rate);
-  $('behavior-random-wins').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitNames[split]}` : 'Sin evaluación al azar en esta fase';
-  $('behavior-ms').textContent = fmt(learned?.decision_ms, 2);
-  $('behavior-tps').textContent = fmt(learned?.actions_per_second, 2);
-  const fits = b?.fits || [];
-  behaviorCharts.loss.set([['Total', 'loss'], ['Eventos', 'event_ce'], ['Valor V', 'value_bce'], ['Acción Q', 'q_bce']].map(([name, key]) =>
-    ({name, points: fits.map((r, i) => ({x: i + 1, y: r[key]}))})), undefined, '', 'época registrada');
-  behaviorCharts.wins.set([...new Set(rows.map(policyName))].map(name =>
-    ({name, points: rows.flatMap((r, i) => policyName(r) === name ? [{x: i + 1, y: percentValue(r.win_rate)}] : [])})), undefined, ' %', 'evaluación');
-  const body = $('behavior-table'); body.replaceChildren();
-  for (const r of rows.slice(-100)) {
-    const tr = document.createElement('tr');
-    for (const value of [`${splitNames[r.split] || 'No registrada'} / ${fmt(r.round)}`, finite(r.level) ? fmt(r.level) : 'Conjunto', policyName(r),
-      `${fmt(r.wins)}/${fmt(r.episodes)}`, `${pct(r.win_rate)} · ${r.wilson95?.map(pct).join('–') || '—'}`,
-      fmt(r.actions_per_success, 1), fmt(r.decision_ms, 2), fmt(r.actions_per_second, 2)]) {
-      const td = document.createElement('td'); td.textContent = value; tr.append(td);
-    }
-    body.append(tr);
-  }
-  if (!rows.length) { const tr = document.createElement('tr'), td = document.createElement('td');
-    td.colSpan = 8; td.textContent = 'Sin evaluaciones para este nivel y fase. Los logs antiguos se muestran en «fase no registrada».'; tr.append(td); body.append(tr); }
-}
-$('behavior-split').addEventListener('change', () => { behaviorFilterManual = true; renderBehavior(state?.behavior); });
-$('behavior-level').addEventListener('change', () => renderBehavior(state?.behavior));
 
-const campaignPhases = {campaign_started: 'Campaña · preparando', campaign_progress: 'Campaña · en curso según el log',
-  campaign_evaluation: 'Campaña · evaluación recibida', campaign_finished: 'Campaña terminada',
-  campaign_imagination_gate: 'Campaña · comprobación de imaginación recibida',
-  campaign_variant_deferred: 'Campaña · variante aplazada por el control de calidad',
-  campaign_error: 'Campaña detenida por error', waiting: 'Campaña · esperando datos'};
-const campaignStages = {initializing: 'Inicializando / compilando', world: 'Aprendizaje del mundo',
-  head_calibration: 'Calibrando valor y eventos', world_evaluation: 'Evaluando el mundo',
-  behavior_evaluation: 'Evaluando comportamiento', behavior: 'Valor y planificación', actor: 'Actor y crítico'};
-const campaignStatus = campaign => campaign.phase === 'campaign_phase'
-  ? `Campaña · ${campaignStages[campaign.progress.stage] || campaign.progress.stage || 'Preparando etapa'}`
-  : campaignPhases[campaign.phase] || 'Campaña · recibiendo métricas';
-const campaignCharts = {loss: new Chart('campaign-loss-chart'), rollouts: new Chart('campaign-rollout-chart'),
-  wins: new Chart('campaign-win-chart'), actor: new Chart('campaign-actor-chart')};
-const campaignKey = row => JSON.stringify([row.variant || 'sin variante', row.seed ?? null]);
-function renderCampaign(campaign) {
-  $('campaign-panel').hidden = !campaign;
-  if (!campaign) return;
-  const p = campaign.progress || {}, config = campaign.run.config || {};
-  const configuredBudget = config.actions ?? config.actions_per_variant;
-  const complete = ['campaign_finished', 'campaign_error'].includes(campaign.phase);
-  $('campaign-status').textContent = !campaign.source.available ? 'Log de campaña no disponible; esperando datos.'
-    : campaign.source.age_seconds > 60 && !complete ? `${campaignStatus(campaign)} · sin datos recientes; el log no confirma que siga activa.`
-    : campaignStatus(campaign);
-  $('campaign-info').textContent = [Array.isArray(config.variants) ? `${config.variants.length} variantes` : null,
-    Array.isArray(config.seeds) ? `Semillas ${config.seeds.join(', ')}` : null,
-    finite(configuredBudget) ? `${fmt(configuredBudget)} acciones por variante y semilla` : null,
-    p.message || null,
-    campaign.source.available ? `Log actualizado hace ${fmt(campaign.source.age_seconds)} s` : null].filter(Boolean).join(' · ');
-  $('campaign-variant').textContent = p.variant || 'Preparando';
-  $('campaign-stage').textContent = `${campaignStages[p.stage] || p.stage || 'Etapa pendiente'} · semilla ${fmt(p.seed)}`;
-  $('campaign-actions').textContent = fmt(p.actions);
-  $('campaign-budget').textContent = `De ${fmt(p.total_actions ?? configuredBudget)} acciones de aprendizaje`;
-  $('campaign-tps').textContent = fmt(p.actions_per_second, 2);
-  $('campaign-updates').textContent = fmt(p.updates);
-  $('campaign-location').textContent = [p.game, finite(p.level) ? `Nivel ${fmt(p.level)}` : null,
-    finite(p.joint_updates) ? `${fmt(p.joint_updates)} conjuntas / ${fmt(p.frozen_updates)} con representación congelada` : null]
-    .filter(Boolean).join(' · ') || 'Juego y nivel pendientes';
-  const evaluations = campaign.evaluations || [], progress = campaign.progress_points || [];
-  const currentKey = campaignKey(p), currentRows = evaluations.filter(r => campaignKey(r) === currentKey);
-  const latestWorld = currentRows.findLast(r => finite(r.world?.delta_error));
-  const latestBehavior = currentRows.findLast(r => finite(r.behavior?.win_rate));
-  $('campaign-delta').textContent = pct(latestWorld?.world.delta_error);
-  $('campaign-delta-note').textContent = latestWorld ? `${splitNames[latestWorld.split] || latestWorld.split || 'Evaluación'} · acción ${fmt(latestWorld.actions)}` : 'Sin evaluación de esta variante y semilla';
-  $('campaign-win').textContent = pct(latestBehavior?.behavior.win_rate);
-  $('campaign-decision').textContent = latestBehavior ? `${fmt(latestBehavior.behavior.decision_ms, 2)} ms / decisión · ${splitNames[latestBehavior.split] || latestBehavior.split || 'Evaluación'}` : 'Sin evaluación de comportamiento';
-  const select = $('campaign-run'), keys = [...new Set([...progress, ...evaluations].map(campaignKey))];
-  const options = ['current', ...keys];
-  if ([...select.options].map(o => o.value).join('|') !== options.join('|')) {
-    const previous = select.value;
-    select.replaceChildren(new Option('En curso', 'current'), ...keys.map(key => {
-      const [variant, seed] = JSON.parse(key); return new Option(`${variant} · semilla ${fmt(seed)}`, key);
-    }));
-    select.value = options.includes(previous) ? previous : 'current';
+// One catalogue and one selected view: no renderer reads another run's state.
+// Only records already available in the configured logs are selectable.
+function executionCatalogue(data) {
+  const views = [];
+  const base = (kind, raw, label) => ({kind, raw, label, source: raw.source || {}, phase: raw.phase,
+    reason: raw.reason, config: raw.run?.training || {}, progress: raw.progress || {},
+    worldPoints: [], validations: [], behaviorPoints: [], evaluations: [], fitAxis: 'acción',
+    maxPoints: raw.max_points || 2000});
+  const world = base('world', data, `Mundo · ${data.run?.game || 'registro disponible'}`);
+  world.id = `world:${data.generation || 0}`;
+  world.worldPoints = data.progress_points || [];
+  world.validations = (data.validations || []).map(r => ({split: 'validation', game: data.run?.game, ...r}));
+  views.push(world);
+  if (data.behavior) {
+    const raw = data.behavior;
+    const behavior = base('behavior', raw, `Comportamiento · ${raw.run?.game || 'registro disponible'}`);
+    behavior.id = `behavior:${raw.generation || 0}`;
+    behavior.progress = {...raw.progress?.collection, updates: raw.progress?.fit?.updates};
+    behavior.behaviorPoints = (raw.fits || []).map((loss, index) => ({actions: index + 1, loss}));
+    behavior.fitAxis = 'época registrada';
+    behavior.evaluations = (raw.evaluations || []).map((r, index) => ({...r, game: raw.run?.game, evaluationIndex: index + 1}));
+    views.push(behavior);
   }
-  const selectedKey = select.value === 'current' ? currentKey : select.value;
-  const points = progress.filter(r => campaignKey(r) === selectedKey);
-  const rows = evaluations.filter(r => campaignKey(r) === selectedKey);
-  const series = (name, source, value) => ({name, points: source.map(r => ({x: r.actions, y: value(r)}))});
-  campaignCharts.loss.set([['Latente · 1 paso', 'latent_mse'], ['Latente · 2 pasos', 'rollout_mse'], ['Delta visual', 'decoder_ce']]
-    .map(([name, key]) => series(name, points, r => r.loss?.[key])));
-  campaignCharts.rollouts.set([1, 2, 4].map(h => series(`${h} paso${h > 1 ? 's' : ''}`, rows,
-    r => r.world?.rollouts?.[String(h)]?.latent_mse)).concat([
-      series('Identidad · 4 pasos', rows, r => r.world?.rollouts?.['4']?.identity_latent_mse)]));
-  campaignCharts.wins.set([...new Set(rows.map(r => r.split || 'unspecified'))].map(split =>
-    series(splitNames[split] || split, rows.filter(r => (r.split || 'unspecified') === split), r => percentValue(r.behavior?.win_rate))), undefined, ' %');
-  campaignCharts.actor.set([['Imitación', 'imitation_loss'], ['Política', 'actor_loss'], ['Crítico', 'critic_loss']]
-    .map(([name, key]) => series(name, points, r => r.loss?.[key])));
-  const table = $('campaign-table'); table.replaceChildren();
-  for (const row of evaluations.slice(-100)) {
-    const tr = document.createElement('tr');
-    for (const value of [`${row.variant || '—'} / ${fmt(row.seed)}`, `${row.game || '—'} / ${levelName(row.level)}`,
-      splitNames[row.split] || row.split || '—', fmt(row.actions), pct(row.world?.delta_error),
-      scalar(row.world?.rollouts?.['2']?.latent_mse), pct(row.behavior?.win_rate),
-      fmt(row.behavior?.actions), fmt(row.behavior?.decision_ms, 2)]) {
-      const td = document.createElement('td'); td.textContent = value; tr.append(td);
+  if (data.campaign) {
+    const raw = data.campaign, summaries = new Map();
+    for (const row of raw.progress_points || []) summaries.set(campaignKey(row), row);
+    for (const row of raw.evaluations || []) {
+      const key = campaignKey(row);
+      summaries.set(key, {...summaries.get(key), variant: row.variant, seed: row.seed, actions: row.actions});
     }
+    for (const row of raw.executions || []) summaries.set(campaignKey(row), row);
+    summaries.set(campaignKey(raw.progress || {}), raw.progress || {});
+    for (const [key, progress] of summaries) {
+      const view = base('campaign', raw, `${progress.variant || 'Preparando'} · semilla ${fmt(progress.seed)}`);
+      view.id = `campaign:${raw.generation || 0}:${key}`;
+      view.progress = progress;
+      view.currentCell = key === campaignKey(raw.progress || {});
+      if (!view.currentCell) { view.phase = 'archived'; view.reason = null; }
+      if (progress.admitted === false) view.reason = 'Imaginación aplazada: el mundo no superó la comprobación de calidad a dos pasos.';
+      const points = (raw.progress_points || []).filter(r => campaignKey(r) === key);
+      view.worldPoints = points.filter(r => r.stage === 'world' || Object.hasOwn(r.loss || {}, 'latent_mse'));
+      view.behaviorPoints = points.filter(r => ['behavior', 'actor'].includes(r.stage)
+        || ['event_ce', 'value_bce', 'q_bce', 'imitation_loss', 'actor_loss', 'critic_loss'].some(k => Object.hasOwn(r.loss || {}, k)));
+      for (const r of (raw.evaluations || []).filter(r => campaignKey(r) === key)) {
+        if (Object.keys(r.world || {}).length) {
+          view.validations.push({...r.world, actions: r.actions, split: r.split, aggregate: true});
+          for (const pair of r.world.per_pair || []) view.validations.push({...pair, actions: r.actions, split: r.split});
+        }
+        if (Object.keys(r.behavior || {}).length) view.evaluations.push({...r.behavior,
+          split: r.split, trainingActions: r.actions, policy: 'MPC'});
+      }
+      views.push(view);
+    }
+  }
+  // Follow the most recently written configured source, even after it stops.
+  // Missing logs keep their last-known identity; never substitute another run's metrics.
+  const currentCandidates = views.filter(v => v.kind !== 'campaign' || v.currentCell);
+  const current = currentCandidates.reduce((best, v) =>
+    !best || (v.source.updated_at || 0) >= (best.source.updated_at || 0) ? v : best, null);
+  return {views, current};
+}
+
+function statusFor(view, archived) {
+  if (!view) return 'Registro no disponible';
+  if (!view.source.available) return 'Log no disponible';
+  if (archived) return 'Registro anterior · consulta';
+  if (view.phase === 'campaign_error') return 'Ejecución detenida por error';
+  if (view.phase === 'campaign_finished') return 'Campaña terminada';
+  if (view.phase === 'behavior_finished') return 'Experimento terminado';
+  if (view.phase === 'stopped') return 'Entrenamiento detenido';
+  const status = view.kind === 'campaign' ? stages[view.progress.stage] || 'Ejecución en curso según el log'
+    : behaviorPhases[view.phase] || phases[view.phase] || 'Esperando datos';
+  return view.source.age_seconds > 60 ? `${status} · sin datos recientes` : status;
+}
+function setTable(id, rows, columns) {
+  const table = $(id); table.replaceChildren();
+  for (const values of rows) {
+    const tr = document.createElement('tr');
+    for (const value of values) { const td = document.createElement('td'); td.textContent = value; tr.append(td); }
     table.append(tr);
   }
-  if (!evaluations.length) { const tr = document.createElement('tr'), td = document.createElement('td');
-    td.colSpan = 9; td.textContent = 'Todavía no se ha completado ninguna evaluación de la campaña.'; tr.append(td); table.append(tr); }
-  $('campaign-selection').textContent = campaign.phase === 'campaign_error' ? `Error: ${campaign.reason || 'sin detalle'}`
-    : campaign.phase === 'campaign_finished' ? `Resultado: ${campaign.run.status || 'terminado'} · selección: ${JSON.stringify(campaign.run.selected ?? null)}`
-    : 'La selección se publicará cuando termine la comparación; los resultados parciales no son una promoción.';
-  const deferred = Object.entries(campaign.run.deferred || {});
-  if (deferred.length) $('campaign-selection').textContent += ' Aplazadas por la comprobación H2: '
-    + deferred.map(([name, row]) => `${name} (alternativa: ${row.fallback})`).join(', ') + '.';
+  if (!rows.length) {
+    const tr = document.createElement('tr'), td = document.createElement('td');
+    td.colSpan = columns; td.textContent = 'Sin evaluaciones registradas para esta ejecución.';
+    tr.append(td); table.append(tr);
+  }
 }
-$('campaign-run').addEventListener('change', () => renderCampaign(state?.campaign));
+function line(name, points, value, x = row => row.actions) {
+  return {name, points: points.map(row => ({x: x(row), y: value(row)}))};
+}
+function groupedLines(rows, fields, key, x = row => row.actions) {
+  const groups = [...new Set(rows.map(key))];
+  return groups.flatMap(group => fields.map(([name, value]) =>
+    line(`${name} · ${group}`, rows.filter(r => key(r) === group), value, x)));
+}
+function render(data) {
+  const {views, current} = executionCatalogue(data);
+  const select = $('execution-select');
+  const options = [new Option('En curso · seguimiento automático', 'current'),
+    ...views.map(v => new Option(`${v.label}${v.id === current?.id ? ' · última ejecución' : ' · anterior'}`, v.id))];
+  if (selectedExecution !== 'current' && !views.some(v => v.id === selectedExecution))
+    options.push(new Option('Registro no disponible', selectedExecution));
+  if (JSON.stringify([...select.options].map(o => [o.value, o.textContent])) !==
+      JSON.stringify(options.map(o => [o.value, o.textContent]))) select.replaceChildren(...options);
+  select.value = selectedExecution;
+  const view = selectedExecution === 'current' ? current : views.find(v => v.id === selectedExecution);
+  const archived = view && view.id !== current?.id;
+  const p = view?.progress || {}, raw = view?.raw || {}, config = view?.config || {};
+  const worldPoints = view?.worldPoints || [], validations = view?.validations || [];
+  const fits = view?.behaviorPoints || [], evaluations = view?.evaluations || [];
+  $('run-info').textContent = view?.label || 'Registro no disponible';
+  $('connection').textContent = statusFor(view, archived);
+  $('connection').className = !view || !view.source.available || view.phase === 'campaign_error'
+    || (!archived && view.source.age_seconds > 60 && !['stopped', 'behavior_finished', 'campaign_finished'].includes(view.phase)) ? 'warn' : '';
+  $('freshness').textContent = archived ? 'Datos de la ejecución seleccionada'
+    : `Última escritura hace ${fmt(view?.source.age_seconds)} s · consulta cada 2 s`;
+  $('selection-note').textContent = selectedExecution === 'current'
+    ? 'Toda la página sigue la ejecución más reciente. Las evaluaciones tienen contadores separados.'
+    : 'Selección fija: todas las pestañas muestran este entrenamiento. No modifica el proceso en curso.';
+  const reason = view?.reason;
+  $('notice').textContent = reason ? `Ejecución seleccionada: ${reasons[reason] || reason}` : '';
+  $('notice').hidden = !reason;
+  $('actions').textContent = fmt(p.actions);
+  $('updates').textContent = fmt(p.updates);
+  $('tps').textContent = fmt(p.actions_per_second, 2);
+  $('level').textContent = finite(p.level) ? `Nivel ${fmt(p.level)}` : '—';
+  $('game').textContent = p.game || raw.run?.game || 'Sin juego actual registrado';
+  const budget = p.total_actions ?? raw.run?.config?.actions;
+  $('actions-note').textContent = finite(budget) ? `De ${fmt(budget)} · variante y semilla seleccionadas`
+    : view?.kind === 'behavior' ? 'Ronda de recogida registrada · evaluación excluida'
+    : raw.run?.statistics_origin === 'after_first_action' ? 'Desde el punto limpio · evaluación excluida' : 'Evaluación excluida';
+  if (finite(p.episodes)) $('actions-note').textContent += ` · ${fmt(p.episodes)} partidas`;
+  $('updates-note').textContent = finite(p.joint_updates)
+    ? `${fmt(p.joint_updates)} conjuntas / ${fmt(p.frozen_updates)} con representación congelada`
+    : view?.kind === 'behavior' ? 'Ronda de aprendizaje registrada' : 'Pasos del optimizador registrados';
+  $('speed-note').textContent = `acciones/s · ${view?.kind === 'behavior' ? 'recogida' : 'aprendizaje'}`;
+  const aggregates = validations.filter(r => r.aggregate);
+  const visualRows = aggregates.length ? aggregates : validations;
+  const latestWorld = visualRows.at(-1);
+  $('prediction').textContent = pct(latestWorld?.delta_error);
+  $('reconstruction').textContent = pct(latestWorld?.decoder_delta_error);
+  $('prediction-note').textContent = latestWorld
+    ? `${splitName(latestWorld)} · ${scope(latestWorld)} · acción ${fmt(latestWorld.actions)}` : 'Sin evaluación del mundo en esta ejecución';
+  const lastWorldPoint = worldPoints.findLast(r => finite(r.loss?.decoder_ce))
+    || (p.stage === 'world' && finite(p.loss?.decoder_ce) ? p : null);
+  const frozen = typeof config.freeze_representation === 'boolean' ? config.freeze_representation
+    : raw.run?.world_trainable === 0 || ['behavior', 'actor'].includes(p.stage) ? true
+    : lastWorldPoint ? !finite(lastWorldPoint.loss.reconstruction_ce) : null;
+  $('representation').textContent = frozen === null ? 'Sin datos' : frozen ? 'Congelada' : 'Aprendiendo';
+  $('representation-note').textContent = frozen === null ? 'El log no registra su estado'
+    : 'Encoder y decoder · último estado registrado';
+  $('world-status').textContent = worldPoints.length
+    ? 'Métricas del predictor de esta ejecución. La reconstrucción se mide aparte, incluso con encoder y decoder congelados.'
+    : validations.length ? 'Hay evaluaciones del mundo; no hay pasos de entrenamiento del mundo en el tramo disponible.'
+    : 'Esta ejecución no tiene métricas del mundo registradas. No se usan datos de otros entrenamientos.';
+  const curveGroup = r => `${splitName(r)} · ${scope(r)}`;
+  charts.delta.set(groupedLines(visualRows, [['Predictor', r => percentValue(r.delta_error)],
+    ['Decoder', r => percentValue(r.decoder_delta_error)]], curveGroup), finite(config.delta_error) ? config.delta_error * 100 : undefined, ' %');
+  charts.loss.set([['Predicción', 'decoder_ce'], ['Reconstrucción', 'reconstruction_ce'], ['Reconstrucción local', 'local_reconstruction_ce']]
+    .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));
+  charts.latent.set([['1 paso', 'latent_mse'], ['2 pasos', 'rollout_mse']]
+    .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));
+  charts.rollouts.set(groupedLines(visualRows, [
+    ...[1, 2, 4].map(h => [`${h} paso${h > 1 ? 's' : ''}`, r => r.rollouts?.[String(h)]?.latent_mse]),
+    ['Identidad · 4 pasos', r => r.rollouts?.['4']?.identity_latent_mse]], curveGroup));
+  const breakdown = validations.filter(r => ['extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes'].some(k => finite(r[k])));
+  charts.changes.set(groupedLines(breakdown, [['Inventados', r => r.extra_changes], ['Omitidos', r => r.missed_changes],
+    ['Color incorrecto', r => r.wrong_replacement_colors], ['Acertados', r => r.correct_changes]], curveGroup), undefined, ' px');
+  charts.spread.set(groupedLines(validations.filter(r => finite(r.latent_std)), [['Diversidad', r => r.latent_std]], curveGroup), config.min_latent_std);
+  charts.total.set([line('Pérdida total', worldPoints, r => r.loss?.loss)]);
+  charts.speed.set([line('Media de la ejecución', view?.kind === 'campaign'
+    ? (raw.progress_points || []).filter(r => campaignKey(r) === campaignKey(p)) : worldPoints, r => r.actions_per_second)]);
+  $('resources').textContent = [finite(p.gpu_peak_mb) ? `Pico GPU del trainer: ${fmt(p.gpu_peak_mb)} MiB` : null,
+    finite(p.replay_episodes) ? `Memoria: ${fmt(p.replay_episodes)} partidas` : null,
+    finite(p.device_cache_mb) ? `Caché GPU: ${fmt(p.device_cache_mb)} MiB` : null,
+    finite(p.trained_transitions_per_second) ? `Transiciones entrenadas/s: ${fmt(p.trained_transitions_per_second, 2)}` : null,
+    finite(p.passes) ? `Validaciones consecutivas aprobadas: ${fmt(p.passes)}` : null,
+    finite(config.learning_rate) ? `Learning rate: ${scalar(config.learning_rate)}` : null,
+    finite(config.false_change_weight) ? `Penalización de cambios inventados: ${scalar(config.false_change_weight)}` : null,
+    raw.run?.representation_gate ? `Gate: ${raw.run.representation_gate.reason}` : null].filter(Boolean).join(' · ');
 
-for (const id of ['window', 'validation-level']) $(id).addEventListener('change', () => { chartRevision = ''; if (state) render(state); });
-
+  const learned = evaluations.filter(r => r.policy !== 'random' && r.role !== 'initial');
+  const aggregateLearned = learned.filter(r => !finite(r.level));
+  const latest = (aggregateLearned.length ? aggregateLearned : learned).at(-1);
+  const pending = view?.kind === 'behavior' ? raw.progress?.evaluation : null;
+  const completed = ['behavior_finished', 'campaign_finished', 'campaign_error', 'stopped'].includes(view?.phase) || archived;
+  const ongoing = view?.source.available && !completed && view?.kind === 'behavior';
+  const evaluating = ongoing && view.phase === 'behavior_evaluation_progress';
+  const baseline = evaluations.findLast(r => r.policy === 'random' && r.split === (latest?.split || pending?.split)
+    && (r.level ?? null) === (latest?.level ?? null) && (r.game ?? null) === (latest?.game ?? raw.run?.game ?? null));
+  $('behavior-win').textContent = latest ? pct(latest.win_rate) : evaluating ? 'En curso' : ongoing ? 'Pendiente' : '—';
+  $('behavior-wins').textContent = latest ? `${fmt(latest.wins)}/${fmt(latest.episodes)} · ${splitName(latest)} · ${scope(latest)} · ${policyName(latest)}`
+    : evaluating ? `Evaluación ${splitName(pending || {})} en curso; esperando el resultado completo`
+    : ongoing ? 'Evaluación aprendida pendiente' : 'Sin evaluación aprendida registrada';
+  $('behavior-random').textContent = pct(baseline?.win_rate);
+  $('behavior-random-note').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitName(baseline)} · ${scope(baseline)}`
+    : 'Sin referencia al azar para la misma fase y nivel';
+  $('behavior-ms').textContent = fmt(latest?.decision_ms, 2);
+  $('behavior-tps').textContent = fmt(latest?.actions_per_second, 2);
+  $('behavior-status').textContent = fits.length ? `Aprendizaje de comportamiento de esta ejecución. Eje de pérdidas: ${view.fitAxis}.`
+    : evaluations.length ? 'Resultados de evaluación; sin aprendizaje de comportamiento registrado en el tramo disponible.'
+    : 'Sin métricas de comportamiento registradas en esta ejecución. El panel se completará si esta ejecución las produce.';
+  charts.wins.set(groupedLines(evaluations, [['Éxito', r => percentValue(r.win_rate)]],
+    r => `${policyName(r)} · ${splitName(r)} · ${scope(r)}`,
+    r => view?.kind === 'behavior' ? r.evaluationIndex : r.trainingActions), undefined, ' %', view?.kind === 'behavior' ? 'evaluación' : 'acción');
+  charts.behaviorLoss.set([['Total', 'loss'], ['Eventos', 'event_ce'], ['Estado V', 'value_bce'], ['Acción Q', 'q_bce']]
+    .map(([name, key]) => line(name, fits, r => r.loss?.[key])), undefined, '', view?.fitAxis || 'acción');
+  charts.actor.set([['Imitación', 'imitation_loss'], ['Política', 'actor_loss'], ['Crítico', 'critic_loss']]
+    .map(([name, key]) => line(name, fits, r => r.loss?.[key])), undefined, '', view?.fitAxis || 'acción');
+  setTable('world-table', validations.slice(-200).map(r => [splitName(r), scope(r), fmt(r.actions),
+    pct(r.delta_error), pct(r.decoder_delta_error), scalar(r.latent_delta_mse), fmt(r.transitions)]), 7);
+  setTable('behavior-table', evaluations.slice(-200).map(r => [splitName(r), scope(r), policyName(r),
+    `${fmt(r.wins)}/${fmt(r.episodes)}`, `${pct(r.win_rate)}${r.wilson95 ? ` · ${r.wilson95.map(pct).join('–')}` : ''}`,
+    fmt(r.actions), fmt(r.actions_per_success, 1), fmt(r.decision_ms, 2)]), 8);
+  $('retention').textContent = `Logs disponibles · curvas limitadas a ${fmt(view?.maxPoints)} puntos recientes por fuente; los registros anteriores pueden conservar sólo resúmenes y evaluaciones. No se crea un historial adicional.${view?.source.tail_limited ? ' Lectura parcial: sólo el tramo reciente del log está disponible.' : ''}`;
+  showTab(selectedTab);
+}
+function showTab(name, focus = false) {
+  selectedTab = name;
+  for (const tab of ['world', 'behavior', 'evaluations']) {
+    const active = name === tab;
+    $(`panel-${tab}`).hidden = !active;
+    $(`tab-${tab}`).setAttribute('aria-selected', String(active));
+    $(`tab-${tab}`).setAttribute('tabindex', active ? '0' : '-1');
+  }
+  if (focus) $(`tab-${name}`).focus();
+  for (const chart of Object.values(charts)) chart.draw();
+}
+$('execution-select').addEventListener('change', () => {
+  selectedExecution = $('execution-select').value;
+  if (state) render(state);
+});
+const tabs = ['world', 'behavior', 'evaluations'];
+for (const [index, name] of tabs.entries()) {
+  $(`tab-${name}`).addEventListener('click', () => showTab(name));
+  $(`tab-${name}`).addEventListener('keydown', event => {
+    const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+      : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null;
+    if (next !== null) { event.preventDefault(); showTab(tabs[next], true); }
+  });
+}
 async function poll() {
   try {
     const response = await fetch('api/state', {cache: 'no-store', signal: AbortSignal.timeout(10000)});

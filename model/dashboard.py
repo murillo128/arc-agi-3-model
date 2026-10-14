@@ -64,6 +64,8 @@ def compact_values(value, depth=0):
 class LogMonitor:
     """Bounded incremental reader shared by browser clients; never writes the log."""
 
+    max_line = MAX_LINE
+
     def __init__(self, path, max_points=2000):
         self.path = Path(path)
         self.max_points = max_points
@@ -194,14 +196,14 @@ class LogMonitor:
                     if self.skip_line:
                         self.skip_line = False
                         continue
-                    if len(line) > MAX_LINE:
+                    if len(line) > self.max_line:
                         continue
                     try:
                         self._event(json.loads(line))
                     except (ValueError, UnicodeError):
                         # SDK logs, warnings and a malformed record are not metrics.
                         continue
-                if len(self.pending) > MAX_LINE:
+                if len(self.pending) > self.max_line:
                     self.pending = b''
                     self.skip_line = True
                 return {'available': True, 'updated_at': stat.st_mtime,
@@ -287,9 +289,16 @@ class BehaviorMonitor(LogMonitor):
 class CampaignMonitor(LogMonitor):
     """Independent experiment lifetime; variant counters may restart at zero."""
 
+    # A completed evaluation contains hundreds of episode records. Parse that
+    # bounded line, then expose only the compact summaries above, never traces.
+    max_line = 2 * 1024 * 1024
+
     def _reset(self):
         super()._reset()
         self.evaluations = deque(maxlen=self.max_points)
+        # Small summaries outlive the bounded curve window. They are rebuilt
+        # from the existing log, never a second persistent training history.
+        self.executions = {}
 
     def _event(self, row):
         if not isinstance(row, dict):
@@ -318,12 +327,20 @@ class CampaignMonitor(LogMonitor):
             self.progress = point
             self.progress_points.append(dict(point))
         elif event == 'campaign_evaluation':
-            point['world'] = numbers(row.get('world'), ('delta_error', 'decoder_delta_error', 'latent_delta_mse'))
+            point['world'] = numbers(row.get('world'), VALIDATION_KEYS)
             world = row.get('world')
             if isinstance(world, dict) and isinstance(world.get('rollouts'), dict):
                 point['world']['rollouts'] = compact_values(world['rollouts'])
+            if isinstance(world, dict) and isinstance(world.get('per_pair'), list):
+                point['world']['per_pair'] = [dict(numbers(r, VALIDATION_KEYS),
+                    game=str(r.get('game', ''))[:80], level=number(r.get('level')))
+                    for r in world['per_pair'][:100] if isinstance(r, dict)]
             point['behavior'] = numbers(row.get('behavior'),
-                ('win_rate', 'wins', 'episodes', 'actions', 'actions_per_success', 'decision_ms'))
+                ('win_rate', 'wins', 'episodes', 'actions', 'actions_per_success', 'decision_ms',
+                 'actions_per_second', 'seconds'))
+            behavior = row.get('behavior')
+            if isinstance(behavior, dict) and isinstance(behavior.get('wilson95'), list) and len(behavior['wilson95']) == 2:
+                point['behavior']['wilson95'] = [number(v) for v in behavior['wilson95']]
             self.evaluations.append(point)
         elif event == 'campaign_imagination_gate':
             self.run['imagination_gate'] = {'variant': point.get('variant'), 'seed': point.get('seed'),
@@ -337,6 +354,18 @@ class CampaignMonitor(LogMonitor):
             self.run['status'] = str(row.get('status', 'finished'))[:80]
         elif event == 'campaign_error':
             self.reason = str(row.get('error', row.get('message', row.get('reason', 'Error sin detalle'))))[:500]
+        key = (point.get('variant'), point.get('seed'))
+        if key[0] is not None and key[1] is not None:
+            summary = self.executions.setdefault(key, {})
+            if event in ('campaign_phase', 'campaign_progress'):
+                summary.update(self.progress)
+            elif event == 'campaign_evaluation':
+                summary.update({k: v for k, v in point.items() if k in ('variant', 'seed', 'actions')})
+            elif event == 'campaign_imagination_gate':
+                summary.update(variant=key[0], seed=key[1], stage='imagination_gate',
+                               admitted=row.get('passed') is True)
+            if len(self.executions) > 100:
+                self.executions.pop(next(iter(self.executions)))
         self.phase = event
         self.revision += 1
 
@@ -346,6 +375,7 @@ class CampaignMonitor(LogMonitor):
             return {'generation': self.generation, 'revision': self.revision, 'source': source,
                     'phase': self.phase, 'reason': self.reason, 'run': dict(self.run),
                     'progress': dict(self.progress), 'progress_points': list(self.progress_points),
+                    'executions': [dict(p) for p in self.executions.values()],
                     'evaluations': list(self.evaluations), 'max_points': self.max_points}
 
 

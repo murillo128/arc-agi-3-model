@@ -317,7 +317,7 @@ Desarrollo y evaluación final presentan resultados `per_level` y un agregado
 con el mismo número de partidas por nivel. La selección usa las victorias del
 agregado de desarrollo, con coste de acciones/decisión para desempatar, conservando
 la política inicial como candidata. Un agregado mejor puede esconder un retroceso
-en un nivel: el selector **Nivel** del panel permite ver ambos. Cada política se
+en un nivel: la tabla de **Evaluaciones** del panel muestra ambos. Cada política se
 evalúa sobre los mismos pares nivel/semilla; la evaluación final nunca decide
 qué checkpoint guardar. Los pesos iniciales no se sobrescriben. No cambia la
 arquitectura de inferencia ni `architecture.json`.
@@ -907,11 +907,26 @@ Para mostrar también goal y planner, pasa ambos logs independientes:
   --behavior-log model/runs/goal-planner/current.log
 ```
 
-La sección de comportamiento muestra recogida de acciones/partidas por ronda,
+Un único selector **Entrenamiento** gobierna cabecera, contadores, gráficas y tablas.
+**En curso** sigue automáticamente la fuente que escribió más recientemente y,
+en una campaña, su variante y semilla actuales. Una selección explícita queda fija
+aunque el proceso pase a otra variante. Las pestañas **Predictor y representación**,
+**Planner y actor** y **Evaluaciones** comparten esa selección; no tienen selectores
+independientes de nivel, fase o ejecución. Las series/tablas identifican fase,
+política y juego/nivel; una métrica ausente nunca se rellena desde otro entrenamiento.
+
+Se pueden consultar las ejecuciones disponibles en los logs configurados, incluidas
+las variantes/semillas anteriores de la campaña. Se conservan hasta cien resúmenes
+de campaña en memoria, reconstruibles desde el log; las curvas siguen limitadas
+a la ventana de puntos disponible. No es un archivo permanente de todos los
+entrenamientos: si el log se reemplaza o se lee sólo su tramo final, el panel lo
+indica y no sustituye silenciosamente una selección desaparecida por la activa.
+
+La pestaña de comportamiento muestra recogida de acciones/partidas por ronda,
 época y actualizaciones, pérdidas de eventos (CE), V y Q (BCE), victorias frente
 al azar, intervalo de Wilson, acciones por victoria, ms de decisión y acciones/s.
-Las pérdidas no son porcentajes de error. Se filtran desarrollo, evaluación final
-y evaluación aislada; sus acciones nunca se suman al contador del mundo ni a la
+Las pérdidas no son porcentajes de error. Desarrollo, evaluación final y evaluación
+aislada tienen series y filas identificadas; sus acciones nunca se suman al contador del mundo ni a la
 recogida. Los nuevos eventos incluyen ronda y fase, y se actualizan al completar
 cada bloque de 16 partidas o cada época. El estado terminado sigue siendo
 terminado aunque el log envejezca. Cada log reinicia su ventana por separado.
@@ -1056,8 +1071,8 @@ TPS significa **acciones por segundo desde el punto limpio**: excluye la carga y
 la primera acción, pero incluye validación, checkpoints y cualquier compilación
 posterior. No son tokens/s ni una medida instantánea. Los errores de predictor
 y decoder se actualizan cuando termina cada validación, a la cadencia configurada.
-Las acciones de validación no se suman al contador de entrenamiento. El selector
-de nivel evita mezclar validaciones de niveles distintos en una curva.
+Las acciones de validación no se suman al contador de entrenamiento. Las series
+separadas por nivel y fase evitan unir evaluaciones distintas en una curva.
 
 El eje horizontal usa acciones reales. El panel mantiene hasta 2.000 puntos por
 tipo en RAM (`--max-points`) y al abrir un log grande lee los últimos 8 MiB.

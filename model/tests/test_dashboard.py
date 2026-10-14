@@ -264,6 +264,41 @@ class DashboardTests(unittest.TestCase):
         self.path.write_text('{"event":"campaign_progress","variant":"new","seed":2,"actions":1}\n')
         self.assertEqual(monitor.snapshot()['evaluations'], [])
 
+    def test_campaign_summaries_survive_curve_eviction_without_mixing_runs(self):
+        monitor = CampaignMonitor(self.path, max_points=2)
+        self.append({'event': 'campaign_progress', 'variant': 'reference', 'seed': 0,
+                     'actions': 100, 'updates': 12, 'loss': {'latent_mse': .2}},
+                    {'event': 'campaign_evaluation', 'variant': 'reference', 'seed': 0,
+                     'actions': 100, 'world': {'delta_error': .3, 'per_pair': [
+                         {'game': 'a', 'level': 1, 'latent_std': .6, 'extra_changes': 7},
+                         {'game': 'b', 'level': 1, 'latent_std': .9, 'extra_changes': 0}]}})
+        for action in (1, 2, 3):
+            self.append({'event': 'campaign_progress', 'variant': 'rollout', 'seed': 1,
+                         'actions': action, 'updates': action, 'loss': {'latent_mse': .5}})
+        data = monitor.snapshot()
+        self.assertEqual([p['actions'] for p in data['progress_points']], [2, 3])
+        self.assertEqual([(p['variant'], p['seed'], p['actions'], p['updates'])
+                          for p in data['executions']], [('reference', 0, 100, 12), ('rollout', 1, 3, 3)])
+        self.assertEqual(data['executions'][0]['loss']['latent_mse'], .2)
+        self.assertEqual(data['evaluations'][0]['world']['per_pair'], [
+            {'game': 'a', 'level': 1, 'latent_std': .6, 'extra_changes': 7},
+            {'game': 'b', 'level': 1, 'latent_std': .9, 'extra_changes': 0}])
+        # Restarting the dashboard reconstructs summaries from the same log.
+        self.assertEqual(CampaignMonitor(self.path, max_points=2).snapshot()['executions'], data['executions'])
+        self.append({'event': 'campaign_started', 'config': {'actions': 200}})
+        self.assertEqual(monitor.snapshot()['executions'], [])
+
+    def test_large_campaign_evaluation_keeps_metrics_but_not_episode_payload(self):
+        self.append({'event': 'campaign_evaluation', 'variant': 'reference', 'seed': 0,
+                     'actions': 16384, 'world': {'delta_error': .2},
+                     'behavior': {'win_rate': .5, 'actions_per_second': 12., 'wilson95': [.4, .6],
+                                  'results': [{'payload': 'x' * (MAX_LINE + 1)}]}})
+        data = CampaignMonitor(self.path).snapshot()
+        self.assertEqual(data['evaluations'][0]['world']['delta_error'], .2)
+        self.assertEqual(data['evaluations'][0]['behavior'],
+                         {'win_rate': .5, 'actions_per_second': 12., 'wilson95': [.4, .6]})
+        self.assertNotIn('payload', json.dumps(data))
+
     def test_campaign_phase_changes_status_without_fabricating_progress_points(self):
         monitor = CampaignMonitor(self.path)
         self.append({'event': 'campaign_started', 'config': {'actions': 40}},
