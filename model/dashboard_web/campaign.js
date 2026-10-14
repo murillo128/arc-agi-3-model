@@ -18,10 +18,61 @@ function mean(cells, section, key) {
   return values.length && values.every(finite) ? values.reduce((a, b) => a + b, 0) / values.length : null;
 }
 function cell(text) { const td = document.createElement('td'); td.textContent = text; return td; }
+function actionsPerWin(cells) {
+  if (!cells.length || !cells.every(r => finite(r.behavior?.wins) && finite(r.behavior?.actions))) return null;
+  const wins = cells.reduce((sum, r) => sum + r.behavior.wins, 0);
+  return wins > 0 ? cells.reduce((sum, r) => sum + r.behavior.actions, 0) / wins : null;
+}
+function comparisonBars(id, variants, fields, totalSeeds, unit, fixedMax) {
+  const host = $(id); host.replaceChildren();
+  const maximum = fixedMax ?? Math.max(1, ...variants.flatMap(v => fields.map(f => f.value(v.cells))).filter(finite));
+  const axis = document.createElement('p'); axis.className = 'comparison-axis';
+  axis.textContent = `Escala: 0–${fmt(maximum, 2)} ${unit}`; host.append(axis);
+  for (const variant of variants) {
+    const group = document.createElement('div'); group.className = 'comparison-group';
+    const heading = document.createElement('p');
+    heading.textContent = `${title(variant.name)} · ${variant.cells.length}/${totalSeeds} semillas`
+      + (variant.cells.length < totalSeeds ? ' · parcial' : '');
+    group.append(heading);
+    for (const [index, field] of fields.entries()) {
+      const value = field.value(variant.cells);
+      const row = document.createElement('div'); row.className = `comparison-series comparison-series-${index}`;
+      const label = document.createElement('span'); label.textContent = field.name;
+      const display = document.createElement('span'); display.textContent = finite(value) ? `${fmt(value, 2)} ${unit}` : 'Sin datos';
+      row.append(label);
+      if (finite(value)) {
+        const meter = document.createElement('meter'); meter.min = 0; meter.max = maximum; meter.value = value;
+        meter.setAttribute('aria-label', `${title(variant.name)} · ${field.name}`);
+        meter.setAttribute('aria-valuetext', display.textContent);
+        meter.title = `${heading.textContent} · ${field.name}: ${display.textContent}`;
+        row.append(meter);
+      } else { const gap = document.createElement('span'); row.append(gap); }
+      row.append(display); group.append(row);
+    }
+    host.append(group);
+  }
+}
+function renderComparisonCharts(report) {
+  const variants = (report.config?.variants || []).map(name => ({name,
+    cells: (report.cells || []).filter(r => r.variant === name)})).filter(v => v.cells.length);
+  const seeds = report.config?.seeds?.length || 0;
+  $('campaign-charts').hidden = !variants.length;
+  $('campaign-charts-empty').hidden = !!variants.length;
+  const percent = (cells, section, key) => { const value = mean(cells, section, key); return finite(value) ? value * 100 : null; };
+  comparisonBars('campaign-success-chart', variants, [
+    {name: 'Éxito', value: c => percent(c, 'behavior', 'win_rate')}], seeds, '%', 100);
+  comparisonBars('campaign-error-chart', variants, [
+    {name: 'Predictor', value: c => percent(c, 'world', 'delta_error')},
+    {name: 'Decoder', value: c => percent(c, 'world', 'decoder_delta_error')}], seeds, '%', 100);
+  comparisonBars('campaign-actions-chart', variants, [{name: 'Acciones', value: actionsPerWin}], seeds, 'acciones');
+  comparisonBars('campaign-latency-chart', variants, [
+    {name: 'Decisión', value: c => mean(c, 'behavior', 'decision_ms')}], seeds, 'ms');
+}
 function renderCampaign(data) {
   const campaign = data.campaign || {}, report = campaign.report || {}, source = campaign.source || {};
   const available = report.available === true;
   const p = campaign.progress || {}, config = report.config || {}, rows = report.cells || [];
+  renderComparisonCharts(available ? report : {});
   const terminal = ['complete', 'pilot_complete', 'failed', 'interrupted'].includes(report.status);
   const failed = ['failed', 'interrupted'].includes(report.status) || campaign.phase === 'campaign_error';
   const finished = ['complete', 'pilot_complete'].includes(report.status);
@@ -65,9 +116,6 @@ function renderCampaign(data) {
       if (deferred.some(r => r.seed === seed)) return `S${seed}: aplazada`;
       return active && p.seed === seed ? `S${seed}: ${stages[p.stage] || p.stage} · ${fmt(p.actions)} acciones` : `S${seed}: pendiente`;
     }).join('\n'); progress.append(details);
-    const wins = completed.reduce((s, r) => s + (r.behavior?.wins || 0), 0);
-    const totalActions = completed.every(r => finite(r.behavior?.actions))
-      ? completed.reduce((s, r) => s + r.behavior.actions, 0) : null;
     let verdict = done && !comparison ? 'Referencia / sin comparación controlada' : 'Esperando semillas';
     if (deferred.length) verdict = 'Control de imaginación no superado';
     if (comparison) verdict = `vs ${title(comparison.control)}: ${fmt(comparison.success_delta * 100, 2)} pp\n`
@@ -75,7 +123,7 @@ function renderCampaign(data) {
       + (reasons[comparison.reason] || comparison.reason || 'Resultado disponible');
     tr.append(label, progress, cell(state), cell(pct(mean(completed, 'world', 'delta_error'))),
       cell(pct(mean(completed, 'world', 'decoder_delta_error'))), cell(pct(mean(completed, 'behavior', 'win_rate'))),
-      cell(fmt(wins > 0 && finite(totalActions) ? totalActions / wins : null, 1)),
+      cell(fmt(actionsPerWin(completed), 1)),
       cell(fmt(mean(completed, 'behavior', 'decision_ms'), 2)), cell(verdict));
     table.append(tr);
   }

@@ -20,6 +20,17 @@
     <article><h2>Candidata provisional</h2><strong id="campaign-candidate">Pendiente</strong><small>No confirmada hasta la evaluación final.</small></article>
     <article><h2>Confirmación final</h2><strong id="campaign-confirmation">Pendiente</strong><small>Referencia y candidata · episodios separados de desarrollo.</small></article>
   </section>
+  <section class="campaign-results" aria-label="Gráficas de comparación">
+    <h2>Comparación visual</h2>
+    <p class="muted">Medias de las semillas terminadas. Cada variante indica cuántas aporta; las pendientes no se dibujan como cero. Las barras comparan resultados, no la evolución temporal.</p>
+    <p id="campaign-charts-empty" class="muted">Las gráficas aparecerán al terminar la primera evaluación de desarrollo.</p>
+    <div id="campaign-charts" class="charts" hidden>
+      <article class="chart-card"><h3>Éxito en el juego <span>más alto es mejor · 0–100 %</span></h3><div id="campaign-success-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Error visual <span>más bajo es mejor · 0–100 %</span></h3><div id="campaign-error-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Acciones por victoria <span>más bajo es mejor</span></h3><p>Acciones de evaluación / victorias. Sin victorias, el cociente no está definido.</p><div id="campaign-actions-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Coste de decidir <span>ms / decisión · más bajo es mejor</span></h3><p>Tiempo observado; puede incluir efectos de compilación y caché. No demuestra por sí solo una mejora de velocidad.</p><div id="campaign-latency-chart" class="comparison-bars"></div></article>
+    </div>
+  </section>
   <section class="campaign-results">
     <h2>Resultados de desarrollo</h2>
     <p class="muted">Sólo evaluaciones completas de cada semilla. Errores y éxito: media entre semillas terminadas; resultados parciales hasta completar todas. Las acciones por victoria usan el total de acciones y victorias. Las acciones de evaluación no cuentan como entrenamiento.</p>

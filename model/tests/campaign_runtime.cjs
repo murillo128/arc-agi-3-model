@@ -25,6 +25,7 @@ const context = vm.createContext({console, AbortSignal, setTimeout: () => {},
   fetch: async () => { if (offline) throw new Error('offline'); return {ok: true, json: async () => data}; }});
 const text = id => nodes.get(id).textContent;
 const row = n => nodes.get('campaign-table').children[n].children;
+const bars = id => nodes.get(id).children.slice(1); // axis followed by measured variants
 (async () => {
   vm.runInContext(script, context);
   await new Promise(resolve => setImmediate(resolve));
@@ -36,6 +37,14 @@ const row = n => nodes.get('campaign-table').children[n].children;
   assert.equal(row(0)[6].textContent, '10');
   assert.match(row(0)[1].children[1].textContent, /S1: Entrenando predictor.*40/);
   assert.equal(row(1)[3].textContent, '—', 'no borrowing reference metrics for pending variants');
+  assert.equal(nodes.get('campaign-charts').hidden, false);
+  assert.equal(bars('campaign-success-chart').length, 1, 'pending variants have no zero bars');
+  assert.match(bars('campaign-success-chart')[0].children[0].textContent, /1\/2 semillas.*parcial/);
+  assert.equal(bars('campaign-success-chart')[0].children[1].children[1].value, 50);
+  assert.equal(bars('campaign-success-chart')[0].children[1].children[1].max, 100);
+  assert.equal(bars('campaign-error-chart')[0].children[2].children[1].value, 0, 'true zero decoder error remains measurable');
+  assert.equal(bars('campaign-actions-chart')[0].children[1].children[1].value, 10);
+  assert.equal(vm.runInContext('actionsPerWin([{behavior: {wins: 0, actions: 20}}])', context), null);
   report.cells.push({variant: 'world_reference', seed: 1, world: {delta_error: .4, decoder_delta_error: 0},
     behavior: {wins: 1, episodes: 4, win_rate: .25, actions: 40, decision_ms: 5}});
   report.selected = 'world_reference';
@@ -47,6 +56,10 @@ const row = n => nodes.get('campaign-table').children[n].children;
   assert.equal(row(0)[5].textContent, '37,5 %');
   assert.equal(row(0)[6].textContent, '20', 'ratio of summed evaluation actions and wins');
   assert.equal(row(0)[7].textContent, '4');
+  assert.equal(bars('campaign-success-chart')[0].children[1].children[1].value, 37.5);
+  assert.equal(bars('campaign-actions-chart')[0].children[1].children[1].value, 20);
+  assert.equal(bars('campaign-latency-chart')[0].children[1].children[1].value, 4);
+  assert.doesNotMatch(bars('campaign-success-chart')[0].children[0].textContent, /parcial/);
   report.controlled_comparisons = {rollout2: {control: 'world_reference', success_delta: .05,
     paired95: [-.01, .11], reason: 'inconclusive_or_inferior', promote: false}};
   report.deferred_cells = [{variant: 'actor_imagined', seed: 0}];
@@ -70,5 +83,7 @@ const row = n => nodes.get('campaign-table').children[n].children;
   assert.equal(text('campaign-completed'), '—');
   assert.equal(nodes.get('campaign-final').hidden, true);
   assert.match(text('campaign-connection'), /Informe no disponible/);
+  assert.equal(nodes.get('campaign-charts').hidden, true);
+  assert.equal(bars('campaign-success-chart').length, 0, 'unavailable report clears stale chart data');
   console.log('Campaign partial/completed/deferred results, comparisons, confirmation and refresh passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

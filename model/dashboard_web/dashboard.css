@@ -67,6 +67,18 @@ a { color: #77dabb; font-size: 13px; }
 #campaign-table progress { display: block; width: 150px; height: 8px; margin-top: 8px; accent-color: #77dabb; }
 .campaign-active { background: #20312d; }
 #campaign-current, #campaign-candidate { font-size: 22px; }
+.comparison-bars { margin: 20px 0; }
+.comparison-axis { text-align: right; }
+.comparison-group { margin: 18px 0; }
+.comparison-group p { min-height: 0; margin-bottom: 8px; color: #d7e5df; }
+.comparison-series { display: grid; grid-template-columns: 65px minmax(40px, 1fr) 90px; align-items: center; gap: 10px; margin: 6px 0; font-size: 11px; font-variant-numeric: tabular-nums; }
+.comparison-series > span:last-child { text-align: right; }
+.comparison-series meter { width: 100%; height: 18px; border: 0; background: #293733; border-radius: 4px; }
+.comparison-series meter::-webkit-meter-bar { background: #293733; border: 0; }
+.comparison-series meter::-webkit-meter-optimum-value { background: #77dabb; }
+.comparison-series meter::-moz-meter-bar { background: #77dabb; }
+.comparison-series-1 meter::-webkit-meter-optimum-value { background: #f4b979; }
+.comparison-series-1 meter::-moz-meter-bar { background: #f4b979; }
 [hidden] { display: none !important; }
 @media (max-width: 1150px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .details { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { main { padding: 22px 14px; } header, .toolbar { align-items: start; flex-direction: column; } .connection { text-align: left; } .charts { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-card { padding: 18px 14px 10px; } h3 span { float: none; display: block; margin-top: 6px; } .plot { height: 220px; } .controls { width: 100%; } }
