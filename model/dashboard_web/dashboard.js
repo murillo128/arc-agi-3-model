@@ -110,6 +110,7 @@ class Chart {
 const charts = Object.fromEntries(['delta', 'changes', 'loss', 'speed', 'spread', 'latent', 'total'].map(id => [id, new Chart(id)]));
 
 function render(data) {
+  renderCampaign(data.campaign);
   renderBehavior(data.behavior);
   const p = data.progress, run = data.run, config = run.training || {};
   const clean = run.statistics_origin === 'after_first_action';
@@ -187,20 +188,29 @@ function renderStatus(data) {
     ? `Entrenamiento del mundo detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}. Las métricas de esta sección corresponden a esa ejecución.`
     : `Mundo: ${phases[data.phase] || 'Recibiendo métricas'}.`;
   const behavior = data.behavior?.source.available ? data.behavior : null;
-  const current = behavior || data, source = current.source;
-  const finished = behavior ? current.phase === 'behavior_finished' : current.phase === 'stopped';
+  const campaign = data.campaign || null;
+  const current = campaign || behavior || data, source = current.source;
+  const finished = campaign ? ['campaign_finished', 'campaign_error'].includes(current.phase)
+    : behavior ? current.phase === 'behavior_finished' : current.phase === 'stopped';
   const stale = source.age_seconds > 60 && !finished;
   $('connection').textContent = !source.available ? 'Log no disponible' : source.catching_up ? 'Leyendo métricas…' :
-    stale ? 'Sin datos recientes' : ((behavior ? behaviorPhases : phases)[current.phase] || 'Recibiendo datos');
-  $('connection').className = !source.available || stale || (!behavior && finished) ? 'warn' : '';
+    stale ? campaign ? `${campaignStatus(campaign)} · sin datos recientes` : 'Sin datos recientes'
+    : campaign ? campaignStatus(campaign) : ((behavior ? behaviorPhases : phases)[current.phase] || 'Recibiendo datos');
+  $('connection').className = !source.available || stale || current.phase === 'campaign_error' || (!campaign && !behavior && finished) ? 'warn' : '';
   $('freshness').textContent = source.available ? `Última escritura del log hace ${fmt(source.age_seconds)} s · consulta cada 2 s` : 'Reintentando automáticamente cada 2 s';
   const messages = [];
   if (!source.available) messages.push('No se puede leer el log. Los valores visibles son los últimos recibidos.');
-  if (!behavior && finished) messages.push(`Entrenamiento detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}.`);
+  if (campaign?.phase === 'campaign_error') messages.push(`Campaña detenida por un error: ${campaign.reason || 'sin detalle'}.`);
+  else if (!campaign && !behavior && finished) messages.push(`Entrenamiento detenido: ${reasons[data.reason] || data.reason || 'motivo no indicado'}.`);
   else if (stale) messages.push('El log no recibe datos recientes. Puede estar validando, guardando pesos o detenido; el panel no confirma que el proceso siga activo.');
   if (source.tail_limited) messages.push('Se muestra el tramo reciente del log; los datos anteriores quedan fuera de la ventana de lectura.');
   $('notice').hidden = messages.length === 0; $('notice').textContent = messages.join(' ');
-  if (behavior) {
+  if (campaign) {
+    $('run-info').textContent = ['Campaña de arquitectura', campaign.progress.variant,
+      campaignStages[campaign.progress.stage], campaign.progress.game,
+      campaign.run.config?.device?.toUpperCase()].filter(Boolean).join(' · ');
+    $('statistics-origin').textContent = 'Contadores propios por variante y semilla · evaluación separada del aprendizaje';
+  } else if (behavior) {
     const levels = behavior.run.levels || (finite(behavior.run.level) ? [behavior.run.level] : []);
     $('run-info').textContent = ['Goal y planner', behavior.run.game, levels.length ? `Niveles ${levels.join(', ')}` : null,
       behavior.run.device?.toUpperCase(), behavior.run.compile ? 'torch.compile' : null].filter(Boolean).join(' · ');
@@ -316,6 +326,95 @@ function renderBehavior(b) {
 }
 $('behavior-split').addEventListener('change', () => { behaviorFilterManual = true; renderBehavior(state?.behavior); });
 $('behavior-level').addEventListener('change', () => renderBehavior(state?.behavior));
+
+const campaignPhases = {campaign_started: 'Campaña · preparando', campaign_progress: 'Campaña · en curso según el log',
+  campaign_evaluation: 'Campaña · evaluación recibida', campaign_finished: 'Campaña terminada',
+  campaign_imagination_gate: 'Campaña · comprobación de imaginación recibida',
+  campaign_variant_deferred: 'Campaña · variante aplazada por el control de calidad',
+  campaign_error: 'Campaña detenida por error', waiting: 'Campaña · esperando datos'};
+const campaignStages = {initializing: 'Inicializando / compilando', world: 'Aprendizaje del mundo',
+  head_calibration: 'Calibrando valor y eventos', world_evaluation: 'Evaluando el mundo',
+  behavior_evaluation: 'Evaluando comportamiento', behavior: 'Valor y planificación', actor: 'Actor y crítico'};
+const campaignStatus = campaign => campaign.phase === 'campaign_phase'
+  ? `Campaña · ${campaignStages[campaign.progress.stage] || campaign.progress.stage || 'Preparando etapa'}`
+  : campaignPhases[campaign.phase] || 'Campaña · recibiendo métricas';
+const campaignCharts = {loss: new Chart('campaign-loss-chart'), rollouts: new Chart('campaign-rollout-chart'),
+  wins: new Chart('campaign-win-chart'), actor: new Chart('campaign-actor-chart')};
+const campaignKey = row => JSON.stringify([row.variant || 'sin variante', row.seed ?? null]);
+function renderCampaign(campaign) {
+  $('campaign-panel').hidden = !campaign;
+  if (!campaign) return;
+  const p = campaign.progress || {}, config = campaign.run.config || {};
+  const configuredBudget = config.actions ?? config.actions_per_variant;
+  const complete = ['campaign_finished', 'campaign_error'].includes(campaign.phase);
+  $('campaign-status').textContent = !campaign.source.available ? 'Log de campaña no disponible; esperando datos.'
+    : campaign.source.age_seconds > 60 && !complete ? `${campaignStatus(campaign)} · sin datos recientes; el log no confirma que siga activa.`
+    : campaignStatus(campaign);
+  $('campaign-info').textContent = [Array.isArray(config.variants) ? `${config.variants.length} variantes` : null,
+    Array.isArray(config.seeds) ? `Semillas ${config.seeds.join(', ')}` : null,
+    finite(configuredBudget) ? `${fmt(configuredBudget)} acciones por variante y semilla` : null,
+    p.message || null,
+    campaign.source.available ? `Log actualizado hace ${fmt(campaign.source.age_seconds)} s` : null].filter(Boolean).join(' · ');
+  $('campaign-variant').textContent = p.variant || 'Preparando';
+  $('campaign-stage').textContent = `${campaignStages[p.stage] || p.stage || 'Etapa pendiente'} · semilla ${fmt(p.seed)}`;
+  $('campaign-actions').textContent = fmt(p.actions);
+  $('campaign-budget').textContent = `De ${fmt(p.total_actions ?? configuredBudget)} acciones de aprendizaje`;
+  $('campaign-tps').textContent = fmt(p.actions_per_second, 2);
+  $('campaign-updates').textContent = fmt(p.updates);
+  $('campaign-location').textContent = [p.game, finite(p.level) ? `Nivel ${fmt(p.level)}` : null,
+    finite(p.joint_updates) ? `${fmt(p.joint_updates)} conjuntas / ${fmt(p.frozen_updates)} con representación congelada` : null]
+    .filter(Boolean).join(' · ') || 'Juego y nivel pendientes';
+  const evaluations = campaign.evaluations || [], progress = campaign.progress_points || [];
+  const currentKey = campaignKey(p), currentRows = evaluations.filter(r => campaignKey(r) === currentKey);
+  const latestWorld = currentRows.findLast(r => finite(r.world?.delta_error));
+  const latestBehavior = currentRows.findLast(r => finite(r.behavior?.win_rate));
+  $('campaign-delta').textContent = pct(latestWorld?.world.delta_error);
+  $('campaign-delta-note').textContent = latestWorld ? `${splitNames[latestWorld.split] || latestWorld.split || 'Evaluación'} · acción ${fmt(latestWorld.actions)}` : 'Sin evaluación de esta variante y semilla';
+  $('campaign-win').textContent = pct(latestBehavior?.behavior.win_rate);
+  $('campaign-decision').textContent = latestBehavior ? `${fmt(latestBehavior.behavior.decision_ms, 2)} ms / decisión · ${splitNames[latestBehavior.split] || latestBehavior.split || 'Evaluación'}` : 'Sin evaluación de comportamiento';
+  const select = $('campaign-run'), keys = [...new Set([...progress, ...evaluations].map(campaignKey))];
+  const options = ['current', ...keys];
+  if ([...select.options].map(o => o.value).join('|') !== options.join('|')) {
+    const previous = select.value;
+    select.replaceChildren(new Option('En curso', 'current'), ...keys.map(key => {
+      const [variant, seed] = JSON.parse(key); return new Option(`${variant} · semilla ${fmt(seed)}`, key);
+    }));
+    select.value = options.includes(previous) ? previous : 'current';
+  }
+  const selectedKey = select.value === 'current' ? currentKey : select.value;
+  const points = progress.filter(r => campaignKey(r) === selectedKey);
+  const rows = evaluations.filter(r => campaignKey(r) === selectedKey);
+  const series = (name, source, value) => ({name, points: source.map(r => ({x: r.actions, y: value(r)}))});
+  campaignCharts.loss.set([['Latente · 1 paso', 'latent_mse'], ['Latente · 2 pasos', 'rollout_mse'], ['Delta visual', 'decoder_ce']]
+    .map(([name, key]) => series(name, points, r => r.loss?.[key])));
+  campaignCharts.rollouts.set([1, 2, 4].map(h => series(`${h} paso${h > 1 ? 's' : ''}`, rows,
+    r => r.world?.rollouts?.[String(h)]?.latent_mse)).concat([
+      series('Identidad · 4 pasos', rows, r => r.world?.rollouts?.['4']?.identity_latent_mse)]));
+  campaignCharts.wins.set([...new Set(rows.map(r => r.split || 'unspecified'))].map(split =>
+    series(splitNames[split] || split, rows.filter(r => (r.split || 'unspecified') === split), r => percentValue(r.behavior?.win_rate))), undefined, ' %');
+  campaignCharts.actor.set([['Imitación', 'imitation_loss'], ['Política', 'actor_loss'], ['Crítico', 'critic_loss']]
+    .map(([name, key]) => series(name, points, r => r.loss?.[key])));
+  const table = $('campaign-table'); table.replaceChildren();
+  for (const row of evaluations.slice(-100)) {
+    const tr = document.createElement('tr');
+    for (const value of [`${row.variant || '—'} / ${fmt(row.seed)}`, `${row.game || '—'} / ${levelName(row.level)}`,
+      splitNames[row.split] || row.split || '—', fmt(row.actions), pct(row.world?.delta_error),
+      scalar(row.world?.rollouts?.['2']?.latent_mse), pct(row.behavior?.win_rate),
+      fmt(row.behavior?.actions), fmt(row.behavior?.decision_ms, 2)]) {
+      const td = document.createElement('td'); td.textContent = value; tr.append(td);
+    }
+    table.append(tr);
+  }
+  if (!evaluations.length) { const tr = document.createElement('tr'), td = document.createElement('td');
+    td.colSpan = 9; td.textContent = 'Todavía no se ha completado ninguna evaluación de la campaña.'; tr.append(td); table.append(tr); }
+  $('campaign-selection').textContent = campaign.phase === 'campaign_error' ? `Error: ${campaign.reason || 'sin detalle'}`
+    : campaign.phase === 'campaign_finished' ? `Resultado: ${campaign.run.status || 'terminado'} · selección: ${JSON.stringify(campaign.run.selected ?? null)}`
+    : 'La selección se publicará cuando termine la comparación; los resultados parciales no son una promoción.';
+  const deferred = Object.entries(campaign.run.deferred || {});
+  if (deferred.length) $('campaign-selection').textContent += ' Aplazadas por la comprobación H2: '
+    + deferred.map(([name, row]) => `${name} (alternativa: ${row.fallback})`).join(', ') + '.';
+}
+$('campaign-run').addEventListener('change', () => renderCampaign(state?.campaign));
 
 for (const id of ['window', 'validation-level']) $(id).addEventListener('change', () => { chartRevision = ''; if (state) render(state); });
 

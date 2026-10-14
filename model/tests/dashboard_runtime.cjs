@@ -199,5 +199,48 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {available: true,
   await vm.runInContext('poll()', context);
   assert.match(text('connection'), /Entrenamiento detenido/);
   assert.match(text('notice'), /interrupción/);
+  const campaign = {phase: 'campaign_progress', source: {available: true, age_seconds: 2},
+    run: {config: {variants: ['baseline', 'rollout'], seeds: [0], actions_per_variant: 100, device: 'cuda'}},
+    progress: {variant: 'rollout', seed: 0, actions: 10, total_actions: 100, updates: 5,
+      actions_per_second: 2, stage: 'world', game: 'synthetic', level: 2},
+    progress_points: [{variant: 'baseline', seed: 0, actions: 100, loss: {latent_mse: .9}},
+      {variant: 'rollout', seed: 0, actions: 10, loss: {latent_mse: .2, rollout_mse: .3}}],
+    evaluations: [{variant: 'baseline', seed: 0, actions: 100, split: 'final',
+      world: {delta_error: .5}, behavior: {win_rate: .25, actions: 88}},
+      {variant: 'rollout', seed: 0, actions: 10, split: 'development',
+        world: {delta_error: .1, rollouts: {'2': {latent_mse: .3}}},
+        behavior: {win_rate: .75, actions: 18, decision_ms: 2}}]};
+  const campaignData = {...data, campaign, behavior};
+  const comparison = await dashboard(campaignData);
+  assert.match(comparison.text('connection'), /Campaña.*en curso/);
+  assert.equal(comparison.nodes.get('campaign-panel').hidden, false);
+  assert.equal(comparison.text('campaign-actions'), '10');
+  assert.equal(comparison.text('campaign-delta'), '10 %');
+  assert.equal(comparison.text('campaign-win'), '75 %');
+  assert.match(comparison.text('run-info'), /Campaña.*rollout/);
+  assert.equal(vm.runInContext('campaignCharts.loss.series[0].points.length', comparison.context), 1);
+  assert.equal(vm.runInContext('campaignCharts.loss.series[0].points[0].y', comparison.context), .2);
+  comparison.change('campaign-run', JSON.stringify(['baseline', 0]));
+  assert.equal(vm.runInContext('campaignCharts.loss.series[0].points[0].y', comparison.context), .9);
+  assert.equal(comparison.text('campaign-actions'), '10', 'chart filter must not replace live counters');
+  campaign.progress = {variant: 'rollout', seed: 1, actions: 0, total_actions: 100};
+  await vm.runInContext('poll()', comparison.context);
+  assert.equal(comparison.text('campaign-win'), '—', 'previous seed cannot masquerade as current evaluation');
+  campaign.source.available = false;
+  await vm.runInContext('poll()', comparison.context);
+  assert.equal(comparison.text('connection'), 'Log no disponible', 'missing campaign cannot present an old trainer as active');
+  campaign.source.available = true;
+  campaign.phase = 'campaign_error'; campaign.reason = 'expected test error';
+  await vm.runInContext('poll()', comparison.context);
+  assert.match(comparison.text('connection'), /Campaña detenida por error/);
+  assert.match(comparison.text('notice'), /expected test error/);
+  campaign.phase = 'campaign_phase';
+  campaign.source.age_seconds = 80;
+  campaign.run.config = {actions: 40};
+  campaign.progress = {variant: 'rollout', seed: 1, actions: 0, stage: 'initializing', message: 'Compiling kernels'};
+  await vm.runInContext('poll()', comparison.context);
+  assert.match(comparison.text('connection'), /Inicializando.*compilando.*sin datos recientes/);
+  assert.equal(comparison.text('campaign-budget'), 'De 40 acciones de aprendizaje');
+  assert.match(comparison.text('campaign-info'), /Compiling kernels/);
   console.log('Dashboard full poll/render: startup pending, active run, phase handover, level isolation and world-only fallback passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

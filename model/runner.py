@@ -13,7 +13,7 @@ from .config import NetworkConfig, TrainConfig
 from .representation_gate import representation_gate
 from .data import Episode, Replay, random_action
 from .environment import Factory, training_boundary
-from .learning import Engine, Learner
+from .learning import Engine, Learner, evaluate_rollouts
 from .metrics import Metrics, VisualQuality, delta_counts
 from .networks import WorldModel
 
@@ -25,11 +25,33 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}, allow_nan=False), flush=True)
 
 
-def validation(engine, factory, levels, seed):
+def merge_rollout_reports(reports):
+    """Weight errors by their actual anchors/pixels, not equally by episode."""
+    combined = {}
+    for horizon in ('1', '2', '4'):
+        groups = [report[horizon] for report in reports]
+        samples = sum(group['samples'] for group in groups)
+        combined[horizon] = {'samples': samples}
+        for key in ('latent_mse', 'identity_latent_mse', 'shuffled_action_latent_mse', 'action_sensitivity_mse'):
+            combined[horizon][key] = (sum(group[key] * group['samples'] for group in groups
+                if group['samples']) / samples) if samples else None
+        combined[horizon]['readouts'] = {}
+        for readout in ('contextual', 'local'):
+            counts = {branch + '_' + name: sum(group['readouts'][readout][branch + '_' + name]
+                for group in groups) for branch in ('prediction', 'reconstruction') for name in ('wrong', 'union')}
+            combined[horizon]['readouts'][readout] = counts | {
+                branch + '_delta_error': counts[branch + '_wrong'] / max(1, counts[branch + '_union'])
+                if samples else None for branch in ('prediction', 'reconstruction')}
+    return combined
+
+
+def validation(engine, factory, levels, seed, *, diagnostic_episode_limit=None, diagnostic_max_actions=None,
+               stop_on_progress=False):
     """Frozen, no replay writes; include the very first action in every episode."""
     c, results = engine.config, {}
     start = time.monotonic()
     for level in levels:
+        diagnostic_episodes = []
         metrics, wins, losses, actions, level_advances = Metrics(), 0, 0, 0, 0
         reserved_boundaries, native_levels, native = 0, None, {}
         reserve = getattr(factory, 'reserve_final_level', False)
@@ -45,6 +67,8 @@ def validation(engine, factory, levels, seed):
             rng = random.Random(episode_seed)
             env = factory.make(episode_seed, level)
             observation = env.observation
+            diagnostic_episode = (Episode([observation]) if c.rollout_diagnostics and
+                (diagnostic_episode_limit is None or index < diagnostic_episode_limit) else None)
             if training_boundary(factory, observation):
                 raise ValueError('Initial observation is already in a reserved level')
             if reserve:
@@ -71,6 +95,19 @@ def validation(engine, factory, levels, seed):
                     observation = next_observation
                     break
                 level_advance = next_observation.starts_new_level(observation)
+                if diagnostic_episode is not None:
+                    if level_advance:
+                        diagnostic_episodes.append((episode_seed, diagnostic_episode))
+                        diagnostic_episode = Episode([next_observation.level_initial()])
+                    elif diagnostic_max_actions is None or len(diagnostic_episode.actions) < diagnostic_max_actions:
+                        diagnostic_episode.append(action, next_observation)
+                if stop_on_progress and level_advance:
+                    # Campaign comparisons end at first progress. Do not encode
+                    # the new-level initialization as part of this level's data.
+                    level_advances += 1
+                    actions += 1
+                    observation = next_observation
+                    break
                 next_state = (engine.initial(next_observation.level_initial()) if level_advance
                               else engine.observe(state, action, next_observation))
                 after = next_observation.final
@@ -111,6 +148,8 @@ def validation(engine, factory, levels, seed):
                 actions += 1
             wins += observation.state == 'WIN'
             losses += observation.state == 'GAME_OVER'
+            if diagnostic_episode is not None:
+                diagnostic_episodes.append((episode_seed, diagnostic_episode))
         reconstruction_error = reconstruction_wrong / max(1, reconstruction_union)
         passes = (metrics.passes(c) and reconstruction_transitions >= c.min_validation_transitions
                   and reconstruction_error <= c.delta_error)
@@ -134,6 +173,12 @@ def validation(engine, factory, levels, seed):
                                       'decoder_transitions': reconstruction_transitions,
                                       'prediction_quality': prediction_quality.report(),
                                       'reconstruction_quality': reconstruction_quality.report()}
+        if c.rollout_diagnostics:
+            report['rollouts'] = merge_rollout_reports([
+                evaluate_rollouts(engine, episode, seed=episode_seed)
+                for episode_seed, episode in diagnostic_episodes if episode.actions])
+            report['rollout_diagnostic_episodes'] = sum(bool(ep.actions) for _, ep in diagnostic_episodes)
+            report['rollout_diagnostic_actions'] = sum(len(ep.actions) for _, ep in diagnostic_episodes)
         results[str(level)] = report
         emit('validation', level=level, **report)
     emit('validation_finished', seconds=round(time.monotonic() - start, 3))
@@ -167,6 +212,14 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
 
     try:
         while (not c.max_steps or progress['actions'] < c.max_steps) and progress['level_index'] < len(levels):
+            if c.representation_joint_steps:
+                frozen = progress['actions'] >= c.representation_joint_steps
+                if engine.config.freeze_representation != frozen:
+                    learner.set_representation_frozen(frozen)
+                    c = engine.config
+                    progress['passes'] = 0
+                    emit('representation_stage', actions=progress['actions'],
+                         freeze_representation=frozen, joint_steps=c.representation_joint_steps)
             level = levels[progress['level_index']]
             if c.max_level_steps and progress['level_actions'] >= c.max_level_steps:
                 reason = 'level_limit_without_convergence'
@@ -222,12 +275,14 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
             if reserved:
                 # The crossing action counts, but its response never enters memory.
                 episode = None
-                replay = Replay(c.replay_episodes, c.replay_bytes)
+                if not c.retain_replay_across_levels:
+                    replay = Replay(c.replay_episodes, c.replay_bytes)
                 emit('reserved_level_boundary', actions=progress['actions'])
             elif level_advance:
                 # Flush the old valid prefix above, then release all old-level
                 # replay. Continue the same SDK game from its new board only.
-                replay = Replay(c.replay_episodes, c.replay_bytes)
+                if not c.retain_replay_across_levels:
+                    replay = Replay(c.replay_episodes, c.replay_bytes)
                 episode = Episode([observation.level_initial()])
                 progress['episodes'] += 1
                 emit('native_level_advance', actions=progress['actions'],
@@ -273,7 +328,8 @@ def train(engine, learner, factory, run, progress, rng, output, stop_after_level
                                     healthy_latent_seen=False)
                     # A new level never inherits the previous episode's memory.
                     episode = None
-                    replay = Replay(c.replay_episodes, c.replay_bytes)
+                    if not c.retain_replay_across_levels:
+                        replay = Replay(c.replay_episodes, c.replay_bytes)
                     if stop_after_level:
                         reason = 'level_converged'
                         break
@@ -415,7 +471,7 @@ def main(argv=None):
             progress['best_error'] = 1.
         if changed_training & {'freeze_representation', 'auto_representation',
                             'representation_unfreeze_error', 'representation_freeze_error',
-                            'representation_gate_patience'}:
+                            'representation_gate_patience', 'representation_joint_steps'}:
             progress.pop('representation_gate', None)
         emit('resumed', **progress, freeze_representation=training.freeze_representation,
              note='Fresh seeded episode and empty device input cache')

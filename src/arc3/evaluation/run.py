@@ -20,6 +20,8 @@ def main() -> None:
     parser.add_argument("--environments-dir", default="environment_files")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-actions", type=int, default=80)
+    parser.add_argument("--agent-checkpoint", type=Path, help="Frozen whole-agent checkpoint; omit for random baseline")
+    parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--trace-dir", help="Opt in to one .arc3 v1 file per evaluation attempt")
     parser.add_argument("--timeout-seconds", type=float, help="Per-game elapsed allowance, checked between actions")
     args = parser.parse_args()
@@ -39,24 +41,34 @@ def main() -> None:
 
         Path(args.trace_dir).mkdir(parents=True, exist_ok=True)
         run_id = uuid4().hex
+    learned = None
+    if args.agent_checkpoint is not None:
+        from model.agent_checkpoint import load
+
+        learned = load(args.agent_checkpoint, device=args.device, max_actions=args.max_actions)
     arcade = open_arcade(args.mode, args.environments_dir)
     try:
         summaries = []
         for game_id in split.evaluation:
             env = SDKEnvironment(arcade, game_id, args.seed)
+            if learned is not None:
+                learned.reset(seed=f"{args.seed}:{env.observation.game_id}")
+            policy = learned if learned is not None else RandomPolicy(args.seed, env.observation.game_id)
             recorder = None
             if run_id is not None:
                 recorder = EvaluationRecorder(
                     args.trace_dir, run_id=run_id, seed=args.seed, sdk_version=SDK_VERSION,
                 )
             summaries.append(run_game(
-                env, RandomPolicy(args.seed, env.observation.game_id), args.max_actions,
+                env, policy, args.max_actions,
                 attempt_observer=recorder, timeout_seconds=args.timeout_seconds,
             ))
     finally:
         arcade.close_scorecard()
     metrics = {"lifecycle": "evaluation", "sdk_version": SDK_VERSION,
                "seed": args.seed, "max_actions": args.max_actions, "games": summaries}
+    if learned is not None:
+        metrics["policy"] = learned.config.mode
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(metrics, indent=2) + "\n")

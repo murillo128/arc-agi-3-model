@@ -20,7 +20,8 @@ from model.data import Observation
 from model.environment import Factory
 from model.learning import Engine, State
 from model.networks import WorldModel
-from model.planning import GoalValue, PlanConfig, Planner, candidates, fingerprint, freeze, outcome, returns
+from model.planning import GoalValue, PlanConfig, Planner, candidates, fingerprint, freeze, outcome, returns, head_loss
+from model.value_learning import RealRecord, double_q_targets, update_target
 from model.behavior_trace import record_episode
 from model import checkpoint
 from arc3.traces import encode_attempt, decode_attempt
@@ -354,6 +355,194 @@ class Contracts(unittest.TestCase):
         self.assertNotIn('successor_value', q_trace['planning']['steps'][0])
         self.assertEqual(state.z.item(), 0.)
         self.assertEqual(state.h.item(), 0.)
+
+
+class BudgetAndTargets(unittest.TestCase):
+    def setUp(self):
+        torch.set_num_threads(2)
+
+    def test_budget_changes_values_but_never_event_logits_and_legacy_conversion_is_exact(self):
+        head = GoalValue(16, 32, width=8)
+        z, h, action = torch.randn(2, 4, 16), torch.randn(2, 32), torch.zeros(2, 12)
+        before = head(z, h, action, 2, 2)
+        legacy = {k: v.clone() for k, v in head.state_dict().items()
+                  if not k.startswith(('budget.', 'budget_action.', 'availability.')) and k != 'availability_trained'}
+        other = GoalValue(16, 32, width=8)
+        self.assertEqual(other.load_compatible(legacy), 'legacy_outcome_value_to_budget_v1')
+        for actual, expected in zip(other(z, h, action, 2, 2, remaining_budget=5), before):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        with torch.no_grad():
+            head.budget[0].weight.zero_()
+            head.budget[0].bias.zero_()
+            head.budget[0].weight[0, -1] = 1
+            head.budget[-1].weight.fill_(1)
+            head.budget_action[0].weight.zero_()
+            head.budget_action[0].bias.zero_()
+            head.budget_action[0].weight[0, -1] = 1
+            head.budget_action[-1].weight.fill_(1)
+        v1, o1 = head(z, h, action, 2, 2, remaining_budget=1)
+        v8, o8 = head(z, h, action, 2, 2, remaining_budget=8)
+        self.assertTrue(torch.all(v8 > v1))
+        self.assertTrue(torch.all(o8[:, 3] > o1[:, 3]))
+        torch.testing.assert_close(o1[:, :3], o8[:, :3], rtol=0, atol=0)
+        malformed = dict(legacy)
+        malformed.pop('value.bias')
+        with self.assertRaises(RuntimeError):
+            other.load_compatible(malformed)
+
+    def test_budget_can_reverse_action_preference(self):
+        head = GoalValue(16, 32, width=8)
+        with torch.no_grad():
+            for module in (head.action, head.budget_action):
+                for parameter in module.parameters():
+                    parameter.zero_()
+            # Q1 = -.84 + SiLU(b+1)-SiLU(b); Q2=0, b=log1p(B)/log129.
+            head.action[0].weight[0, 129] = 1
+            head.action[-1].weight[3, 0] = -.84 / torch.nn.functional.silu(torch.tensor(1.))
+            head.budget_action[0].weight[0, -1] = 1
+            head.budget_action[0].weight[0, 129] = 1
+            head.budget_action[0].weight[1, -1] = 1
+            head.budget_action[-1].weight[0, 0] = 1
+            head.budget_action[-1].weight[0, 1] = -1
+        from model.data import Action
+        actions = torch.tensor([Action(1).features(), Action(2).features()])
+        z, h = torch.zeros(2, 4, 16), torch.zeros(2, 32)
+        short = head(z, h, actions, 2, 2, remaining_budget=1)[1][:, 3]
+        long = head(z, h, actions, 2, 2, remaining_budget=8)[1][:, 3]
+        self.assertEqual(int(short.argmax()), 1)
+        self.assertEqual(int(long.argmax()), 0)
+
+    def test_double_dqn_evaluates_online_choice_not_target_maximum_and_keeps_last_success(self):
+        seen = []
+        class Head(nn.Module):
+            supports_budget = True
+            def __init__(self, values):
+                super().__init__()
+                self.values = values
+            def forward(self, z, h, actions, rows, columns, remaining_budget=None):
+                seen.append((self.values, remaining_budget.clone(), z[:, 0, 0].tolist()))
+                ids = actions[:, :8].argmax(-1)
+                q = torch.tensor([self.values[int(i)] for i in ids])
+                output = torch.zeros(len(z), 4)
+                output[:, 3] = torch.logit(q)
+                return torch.zeros(len(z)), output
+        # Online selects action 1 (.9 vs .1), target prefers action 2 (.8 vs .2).
+        online, target = Head({1: .9, 2: .1}), Head({1: .2, 2: .8})
+        record = RealRecord(torch.zeros(1, 1), torch.zeros(1), torch.zeros(12), 0, None,
+                            (1, 1), 3, torch.full((1, 1), 7.), torch.ones(1), (1, 1), (1, 2), (1, 2), 'interrupted')
+        records = [record, replace(record, event=1, remaining_budget=1),
+                   replace(record, event=0, remaining_budget=1, end_reason='budget'),
+                   replace(record, event=2), replace(record, next_z=None)]
+        result = double_q_targets(online, target, records, 'cpu', 1, .5, random.Random(1))
+        torch.testing.assert_close(result[:4], torch.tensor([.1, 1., 0., 0.]))
+        self.assertTrue(torch.isnan(result[4]))
+        self.assertTrue(all(bool(torch.all(s[1] == 2)) for s in seen))
+        self.assertTrue(all(all(x == 7 for x in s[2]) for s in seen))
+
+    def test_interrupted_mc_is_censored_and_event_learning_survives(self):
+        self.assertEqual(returns([0, 0], .5, end_reason='interrupted'), [None, None])
+        self.assertEqual(returns([0, 0], .5, end_reason='budget'), [0., 0.])
+        self.assertEqual(returns([0, 1], .5, end_reason='progress'), [.5, 1.])
+        head = GoalValue(16, 32, width=8)
+        loss, parts = head_loss(head, torch.randn(2, 4, 16), torch.zeros(2, 32), torch.zeros(2, 12),
+                                torch.zeros(2, dtype=torch.long), torch.full((2,), float('nan')), 2, 2,
+                                components=True, remaining_budget=torch.tensor([2, 1]))
+        self.assertTrue(torch.isfinite(loss))
+        self.assertEqual(parts[1:].tolist(), [0., 0.])
+        loss.backward()
+        self.assertTrue(torch.isfinite(head.action[-1].weight.grad).all())
+
+    def test_batched_double_q_keeps_successor_actions_and_budgets_paired(self):
+        class Head(nn.Module):
+            supports_budget = True
+            def __init__(self, target=False):
+                super().__init__()
+                self.target = target
+            def forward(self, z, h, actions, rows, columns, remaining_budget=None):
+                ids = actions[:, :8].argmax(-1)
+                marker = z[:, 0, 0]
+                q = (.1 * ids + .01 * remaining_budget + .001 * marker if self.target else
+                     torch.where(ids == marker, .9, .1))
+                output = torch.zeros(len(z), 4)
+                output[:, 3] = torch.logit(q)
+                return torch.zeros(len(z)), output
+        online, target = Head(), Head(target=True)
+        record = RealRecord(torch.zeros(1, 1), torch.zeros(1), torch.zeros(12), 0, None,
+                            (1, 1), 5, torch.ones(1, 1), torch.zeros(1), (1, 1), (1, 2), (1, 2))
+        records = [record, replace(record, remaining_budget=3, next_z=torch.full((1, 1), 2.)),
+                   replace(record, remaining_budget=4, next_z=torch.full((2, 1), 3.),
+                           next_geometry=(1, 2), next_available_actions=(2,))]
+        # Explicit readout injection is also used for precompiled CUDA functions.
+        with patch.object(online, 'forward', wraps=online.forward) as online_forward, \
+             patch.object(target, 'forward', wraps=target.forward) as target_forward:
+            result = double_q_targets(online, target, records, 'cpu', 1, .5, random.Random(1),
+                                      online_readout=online_forward, target_readout=target_forward)
+        torch.testing.assert_close(result, torch.tensor([.0705, .111, .1165]))
+        self.assertEqual(online_forward.call_count, 2)
+        self.assertEqual(target_forward.call_count, 2)
+
+    def test_ema_is_the_declared_post_update_weighted_average(self):
+        online, target = nn.Linear(1, 1), nn.Linear(1, 1)
+        with torch.no_grad():
+            online.weight.fill_(4)
+            online.bias.fill_(6)
+            target.weight.fill_(2)
+            target.bias.fill_(0)
+        update_target(target, online, .25)
+        self.assertEqual(target.weight.item(), 2.5)
+        self.assertEqual(target.bias.item(), 1.5)
+
+    def test_mpc_budget_and_progress_absorb_future_value(self):
+        from model.tests.test_goal_planning import Dynamics
+        class Readout(nn.Module):
+            def forward(self, z, h, a, rows, columns):
+                # Action 1: 80% progress, 20% failure. Action 2: continue.
+                output = torch.full((len(z), 4), -100.)
+                one = a[:, 1] > .5
+                output[one, 1] = torch.log(torch.tensor(.8))
+                output[one, 2] = torch.log(torch.tensor(.2))
+                output[~one, 0] = 0
+                return torch.full((len(z),), 100.), output
+        engine = Dynamics()
+        state = State(torch.zeros(1, 1), torch.zeros(1, 1), (1, 1))
+        planner = Planner(engine, Readout(), PlanConfig(horizon=4, beam=2))
+        trace = {}
+        chosen = planner.choose(state, replace(obs(), available_actions=(1, 2)), random.Random(1),
+                                 'value_mpc', trace, remaining_budget=1)
+        self.assertEqual(chosen.id, 1)
+        self.assertEqual(trace['planning']['horizon'], 1)
+        self.assertAlmostEqual(trace['planning']['selected_score'], .8, places=6)
+        # Progress on step one cannot gain a second success or a leaf value.
+        from model.data import Action
+        route = planner.evaluate_route(state, [Action(1), Action(1)], 2)
+        self.assertAlmostEqual(route['score'], .8, places=6)
+        with self.assertRaisesRegex(ValueError, 'positive remaining'):
+            planner.choose(state, obs(), random.Random(1), remaining_budget=0)
+
+    def test_collection_interruption_preserves_real_successor_and_budget(self):
+        class Factory:
+            def make(self, seed, level):
+                start = replace(obs(), available_actions=(1,))
+                after = replace(start, frames=np.ones((1, 8, 8), dtype=np.uint8))
+                return SimpleNamespace(observation=start, step=lambda a: after)
+        class Engine:
+            device = 'cpu'
+            model = SimpleNamespace(config=SimpleNamespace(memory=1))
+            def autocast(self): return nullcontext()
+            def encode(self, observations):
+                return [torch.tensor([[float(o.final[0, 0])]]) for o in observations]
+            def actions(self, actions): return torch.ones(len(actions), 1)
+            def advance(self, z, h, action): return h + 1, None
+        records = []
+        collect(Engine(), Factory(), 1, [1], 8, .95, records, action_limit=1)
+        self.assertEqual(len(records), 1)
+        row = records[0]
+        self.assertEqual(row.remaining_budget, 8)
+        self.assertEqual(row.end_reason, 'interrupted')
+        self.assertIsNone(row.target)
+        self.assertEqual(row.z.item(), 0.)
+        self.assertEqual(row.next_z.item(), 1.)
+        self.assertEqual(row.next_h.item(), 1.)
 
 
 if __name__ == '__main__':

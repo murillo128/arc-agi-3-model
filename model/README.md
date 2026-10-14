@@ -1,16 +1,169 @@
 # Modelo residual latente
 
-Primera implementación del encoder, predictor recurrente y decoder visual. Se
-entrenan con acciones aleatorias legales y transiciones reales del SDK. El
-actor Dreamer, el crítico distribucional y el entrenamiento de políticas por
-imaginación permanecen como componentes futuros en
-[`architecture.json`](architecture.json). El experimento separado
-`model.behavior_experiment` implementa un primer evaluador de objetivos/valor y
-un planner latente sobre pesos congelados; se describe a continuación.
+## Plan de evolución aprobado
 
-El código y la arquitectura viven en este directorio. No modifica los comandos
-existentes `training.collect`, `evaluation.run`, el viewer ni la exportación de
-trazas. Los checkpoints y el replay no se suben a Git.
+El objetivo de esta iteración es **entrenar, guardar y ejecutar el mismo agente**,
+con `z_next = z + delta` y planificación en latentes. El planner conserva la
+decisión final; un actor aprendido propone acciones y secuencias. Su criterio
+principal es progreso SDK esperado más valor futuro, nunca similitud visual
+sumada como si fuera probabilidad de éxito. El primer progreso y GAME_OVER son
+absorbentes para el objetivo local. Un éxito en la última acción permitida sigue
+teniendo target uno; el presupuesto agotado elimina únicamente el futuro.
+
+La ejecución se divide en estas entregas, manteniendo una referencia de pesos
+inmutable y sin convertir cada hipótesis en una pieza obligatoria:
+
+1. Agente compartido, checkpoint conjunto y equivalencia entre actuación local
+   y adaptador de despliegue. Entrenador separado, mismos módulos; evaluación
+   congelada y sin replay. La adaptación online no está habilitada implícitamente.
+2. Presupuesto explícito en V/Q; targets MC y Double-DQN sobre sucesores reales.
+   Q online selecciona la acción y Q target evalúa esa misma acción; EMA después
+   del optimizador. Q de clics usa el mismo retorno en la coordenada ejecutada.
+3. Entrenamiento de uno más dos pasos autorregresivos, con targets reales y
+   máscaras de fronteras. `loss_steps` cuenta endpoints, no horizonte imaginado.
+   Comparación congelada a uno/dos/cuatro pasos, incluida predicción identidad.
+4. Planner de progreso/valor con horizonte inicial dos, memoria de ramas aislada
+   y reutilización de rutas desde el estado real. El endpoint previsto de un plan
+   no se presenta como un objetivo previo que haya causado la elección.
+5. Ablaciones independientes: readout local frente a contextual; SIGReg sin
+   hinge adicional; gate actual frente a 50 % conjunto y 50 % congelado.
+   Retención de episodios, cachés, burn-in y backward son opciones del trainer,
+   medidas frente a sus referencias, no componentes nuevos del agente.
+6. Actor por imitación del MPC y después actor/crítico mediante imaginación
+   corta. REINFORCE con ventajas detenidas, log-probabilidades diferenciables y
+   mundo congelado. Cada acción propuesta condiciona la siguiente mediante su
+   sucesor imaginado. Un generador independiente de subobjetivos y horizontes
+   mayores quedan como experimentos, no bloquean la primera versión completa.
+
+**Comparación:** tres semillas de nuevas etapas desde el checkpoint existente;
+16.384 acciones reales por variante/semilla repartidas entre los diez pares
+juego/nivel de `sc01-v1` y `si01-v1`. Controles intermedios pequeños a 4.096,
+8.192 y 12.288 acciones; 32 episodios por nivel al cerrar desarrollo y 128 solo
+para confirmar referencia y configuración seleccionada. Datos reales, etiquetas
+docentes y trayectorias imaginadas mantienen procedencia separada. El benchmark
+sintético no acredita generalización a juegos nuevos ni entrenamiento desde cero.
+
+Se promueven mejoras de éxito, o variantes no inferiores (margen de dos puntos
+porcentuales con intervalo emparejado del 95 %) que reduzcan coste: acciones,
+latencia, parámetros, memoria o entrenamiento. Una simplificación elimina un
+mecanismo o módulo completo, conserva los contratos y se documenta sin atribuirle
+mejoras de velocidad no medidas. Resultados inconclusos conservan la referencia.
+Las optimizaciones exactas requieren equivalencia numérica, no nuevos entrenos.
+
+Los cambios del mundo invalidan sus cachés y requieren recalibrar las cabezas de
+comportamiento. Se conservan dimensiones y pesos de origen; toda conversión es
+explícita. CUDA usa `torch.compile`, el camino CPU permite verificar contratos y
+se respeta el límite GPU de 100 W. Replay y checkpoints permanecen fuera de Git.
+La arquitectura separará interacción, aprendizaje del mundo y del comportamiento,
+con una definición por conjunto de pesos. La actualización visual del viewer se
+integrará después de que el usuario confirme el fin del trabajo independiente
+de la #54; no se monitoriza esa sesión.
+
+El encoder, predictor recurrente y decoder visual aprenden de transiciones reales
+del SDK. `model.agent.Agent` reúne los mismos módulos para observar, imaginar y
+actuar; `Learner` puede actualizar su `Engine` sin crear otra implementación.
+`evaluation.run --agent-checkpoint` y el adaptador Kaggle cargan ese agente con
+pesos congelados. La política aleatoria sigue siendo el valor predeterminado de
+los comandos que no reciben un checkpoint. Los checkpoints y el replay no se
+suben a Git; el viewer conserva su contrato anterior durante esta iteración.
+
+`model.proposals.ProposalPolicy` es opcional: produce propuestas categóricas y
+coordenadas de clic, y contiene un crítico escalar de su política. Aprende por
+imitación de decisiones MPC identificadas como tales; una variante posterior usa
+REINFORCE, retornos lambda y dos pasos imaginados con mundo y evaluador congelados.
+La segunda acción observa el sucesor imaginado de la primera. El MPC compara esas
+rutas con sus alternativas y decide. El crítico del actor no sustituye a V/Q del
+planner. No se ha incorporado un generador independiente de objetivos aprendido.
+Antes de entrenar mediante imaginación, cada par juego/nivel debe tener muestras
+reales a dos pasos, diagnósticos finitos y MSE latente no peor que mantener el
+latente inicial (tolerancia numérica absoluta `1e-8`). Se reutiliza el diagnóstico
+MC de la misma semilla sólo si coincide exactamente el fingerprint del mundo.
+Este filtro provisional evita una degradación evidente; no acredita precisión
+suficiente ni generalización. Si falla, la celda queda `deferred`, con sus semillas
+y evidencia registradas, y se conserva la variante por imitación.
+
+### Ejecución de las comparaciones
+
+```sh
+.venv/bin/python -u -m model.campaign \
+  --checkpoint model/runs/active-training/latest.pt \
+  --heads model/runs/goal-planner/multilevel/heads.pt \
+  --output model/runs/architecture-evolution/full \
+  > model/runs/architecture-evolution/campaign.log 2>&1
+```
+
+La campaña ejecuta secuencialmente referencias y variantes con tres semillas,
+16.384 acciones por celda y diez pares sintéticos, sin leer reglas internas para
+decidir acciones. Las variantes del mundo arrancan de los mismos pesos y comparten
+recogida equilibrada/replay acotado; cada una recalibra las cabezas con experiencias
+reales conservadas en RAM y recodificadas con sus pesos finales. `local_decoder`
+y `staged_freeze` se comparan con `rollout2`. `sigreg_only` se compara después con
+`staged_freeze`: ambas entrenan encoder/predictor/decoder durante la primera
+mitad de las acciones y congelan la representación en la segunda; sólo cambia
+`variance_weight`, que pasa a cero. Así la comparación mide la regularización
+cuando el encoder aprende, en vez de retirar una pérdida ya inactiva. El informe
+y el progreso cuentan las actualizaciones conjuntas y con representación congelada.
+Las variantes de
+comportamiento conservan el mundo original; `double_q` y `click_mixed` se comparan
+con `mc`. Los actores parten de las cabezas MC calibradas de su misma semilla.
+Las propuestas de clic mixtas mantienen dieciséis candidatos y exploración uniforme.
+La selección final conserva una configuración completa que haya sido medida;
+no combina automáticamente ganadores de comparaciones distintas sin evaluarlos juntos.
+
+`report.json` distingue celdas terminadas, comparaciones inconclusas y confirmación
+final. Volver a ejecutar el mismo comando omite celdas completas; una celda
+interrumpida vuelve a empezar desde su fuente, sin fingir una restauración de replay.
+Los enlaces duros `source-world.pt`/`source-heads.pt` conservan las fuentes sin
+duplicar su almacenamiento. Sólo se retienen pesos representativos de la semilla
+cero, candidata y seleccionada; no se elige la semilla con mejores resultados.
+`--pilot` permite presupuestos menores para diagnosticar la ejecución, y nunca
+promueve pesos ni constituye evidencia del protocolo completo.
+
+Las comparaciones de éxito usan episodios emparejados por semilla/juego/nivel y
+bootstrap estratificado; el intervalo describe estas nuevas etapas, no tres
+preentrenamientos independientes. La elección del readout local conserva por ahora
+los pesos de la torre contextual para comparación reversible: no se presenta como
+reducción de parámetros. Su eliminación necesitaría una conversión explícita
+posterior, justificada por los resultados. Burn-in es una aproximación optativa;
+el backward ordinario/fragmentado y la caché congelada disponen de comprobaciones
+numéricas. Una prueba piloto no demuestra generalización a otros juegos.
+Las entradas compiladas de dinámica separan entrenamiento diferenciable e
+inferencia, compartiendo los mismos parámetros y conservando el límite normal
+de caché. No se sustituye silenciosamente la compilación por ejecución eager.
+
+El dashboard admite `--campaign-log model/runs/architecture-evolution/campaign.log`
+además de sus logs existentes. Muestra el progreso por variante/semilla, presupuesto,
+velocidad, errores a uno/dos/cuatro pasos, comparación identidad y éxito real,
+separados de las pérdidas de actor/crítico. No hay inspecciones visuales automáticas.
+
+### Agente portable y contratos
+
+```sh
+.venv/bin/python -m model.agent_checkpoint \
+  --world model/runs/active-training/latest.pt \
+  --heads model/runs/goal-planner/multilevel/heads.pt \
+  --output model/runs/agent.pt --mode value_mpc
+```
+
+La conversión comprueba la huella del mundo antes de unir pesos. La carga nueva es
+estricta y guarda conjuntamente mundo, V/Q, configuración y actor/crítico opcional.
+El estado de una partida/RNG sólo se incluye si se pide expresamente. En evaluación
+y despliegue no se crea un optimizador ni se guarda replay. RESET consume una acción
+confirmada y no repone el presupuesto global; las ramas imaginadas no lo consumen.
+
+V/Q reciben presupuesto restante; la cabeza de eventos físicos no lo recibe.
+Double-DQN selecciona candidatos con Q online y evalúa la misma acción con Q target
+en `b-1`; la EMA se actualiza tras el optimizador. Progreso en la última acción vale
+uno. Una recogida interrumpida se etiqueta como censurada, no como fracaso.
+La Q de clic es la misma función Q condicionada por coordenadas, supervisada sólo
+en acciones reales ejecutadas. La disponibilidad futura sigue desactivada por
+defecto: haber actualizado su cabeza no acredita que esté calibrada.
+
+`value_mpc` suma progreso esperado hasta el primer evento absorbente más V de hoja
+cuando queda presupuesto; `leaf_value=q` usa la variante TD. Un endpoint decodificado
+de la ruta seleccionada es una hipótesis visual del plan, no una recompensa ni una
+intención previa inventada. Se conserva el modo experimental `goal_mpc` antiguo
+para leer/comparar artefactos existentes, con su contrato de similitud diferenciado.
 
 El diagrama refleja la variante en experimentación con `--pixel-latent`,
 `--broadcast-conditioning`, `--local-dynamics`, y escalas residual/posicional .1.
@@ -18,7 +171,11 @@ Sus operaciones enlazan los 491 tensores reales compartidos entre llamadas. La
 configuración del checkpoint identifica qué variante ejecuta cada entrenamiento;
 el diagrama no demuestra convergencia ni generalización entre juegos.
 
-## Objetivo y planner con el modelo del mundo congelado
+## Referencia anterior: objetivo y planner con el mundo congelado
+
+Esta sección describe el experimento `behavior_experiment` y sus artefactos
+existentes. La campaña nueva añade los contratos de presupuesto y propuestas
+descritos arriba; no atribuye retrospectivamente esos contratos a pesos antiguos.
 
 `planning.py` añade 603.013 parámetros nuevos (`GoalValue`), frente a los
 215.984.848 del mundo existente. El encoder visual, su memoria de animación,

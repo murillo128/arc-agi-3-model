@@ -13,13 +13,16 @@ from .planning import Planner, candidates
 
 @dataclass(frozen=True)
 class GoalConfig:
-    proposal_horizon: int = 8
+    proposal_horizon: int = 2
     proposal_beam: int = 4
     lifetime: int = 8
-    horizon: int = 4
+    horizon: int = 2
     beam: int = 4
     clicks: int = 8
     discount: float = .95
+    click_proposals: str = 'uniform'
+    future_availability: bool = False
+    leaf_value: str = 'v'
 
     def __post_init__(self):
         for name in ('proposal_horizon', 'proposal_beam', 'horizon', 'beam', 'clicks', 'lifetime'):
@@ -29,6 +32,12 @@ class GoalConfig:
                 raise ValueError(f'{name} must be an integer in [1, {maximum}]')
         if not math.isfinite(self.discount) or not 0 < self.discount <= 1:
             raise ValueError('discount must lie in (0, 1]')
+        if self.click_proposals not in {'uniform', 'mixed', 'actor'}:
+            raise ValueError('Unknown click proposal mode')
+        if self.click_proposals != 'uniform' and self.clicks < 16:
+            raise ValueError('Mixed click proposals require at least sixteen candidates')
+        if self.leaf_value not in {'v', 'q'}:
+            raise ValueError('Leaf value must be v or q')
 
 
 @dataclass(frozen=True)
@@ -60,6 +69,7 @@ class GoalPlanner(Planner):
 
     def reset(self):
         """Required at episode start / RESET; no cached goal crosses episodes."""
+        super().reset()
         self.goal = None
         self.position = 0
 
@@ -68,6 +78,7 @@ class GoalPlanner(Planner):
         if action.id == 0:
             self.reset()
             return
+        super().after_real_action(action, before, after)
         self.position += 1
         if after.terminal or after.levels_completed != before.levels_completed:
             self.goal = None
@@ -92,24 +103,27 @@ class GoalPlanner(Planner):
         self.goal = Goal(z.detach().clone(), state.geometry, proposal_score, self.position)
 
     @torch.no_grad()
-    def _propose(self, state, actions):
+    def _propose(self, state, actions, remaining_budget=None):
         z, h = state.z[None], state.h
         count = len(actions)
         score = torch.zeros(1, device=z.device)
         survival = torch.ones_like(score)
         best_score, best_z = -1., None
-        for _ in range(self.config.proposal_horizon):
+        horizon = self.config.proposal_horizon if remaining_budget is None else min(self.config.proposal_horizon, remaining_budget)
+        for depth in range(horizon):
             branches = len(z)
             z, h = z.repeat_interleave(count, 0), h.repeat_interleave(count, 0)
             a = actions.repeat(branches, 1)
-            _, output = self.readout(z, h, a, *self.shape(state.geometry))
+            budget = None if remaining_budget is None else remaining_budget - depth
+            _, output = self._readout(z, h, a, state.geometry, budget)
             p = output[:, :3].float().softmax(-1)
             score = score.repeat_interleave(count) + survival.repeat_interleave(count) * p[:, 1]
             survival = survival.repeat_interleave(count) * self.config.discount * p[:, 0]
             z, h, _ = self.engine.predict(z, h, a, *state.geometry)
             self._branches(z, h, state)
-            value, _ = self.readout(z, h, torch.zeros_like(a), *self.shape(state.geometry))
-            ranked = score + survival * value.float().sigmoid()
+            value, _ = self._readout(z, h, torch.zeros_like(a), state.geometry,
+                                      None if budget is None else budget - 1)
+            ranked = score + survival * (value.float().sigmoid() if budget != 1 else 0.)
             if not torch.isfinite(ranked).all():
                 raise ValueError('Nonfinite goal proposal score')
             keep = torch.argsort(ranked, descending=True, stable=True)[:self.config.proposal_beam]
@@ -125,9 +139,24 @@ class GoalPlanner(Planner):
             raise ValueError('Nonfinite or mismatched imagined state')
 
     @torch.no_grad()
-    def choose(self, state, observation, rng, mode='goal_mpc', diagnostics=None):
+    def choose(self, state, observation, rng, mode='goal_mpc', diagnostics=None, *, remaining_budget=None):
+        if mode == 'goal_value_mpc':
+            self._state(state)
+            if observation.terminal:
+                self.reset()
+                raise ValueError('Cannot plan after SDK termination')
+            # The endpoint is a prediction of the chosen route, not an
+            # independently learned winning image or a reward bonus.
+            action = super().choose(state, observation, rng, 'value_mpc', diagnostics,
+                                    remaining_budget=remaining_budget)
+            if diagnostics is not None:
+                diagnostics['planning_v2']['mode'] = 'goal_value_mpc'
+                diagnostics['planning_v2']['endpoint_role'] = 'predicted_plan_result'
+            return action
         if mode != 'goal_mpc':
-            raise ValueError('GoalPlanner requires goal_mpc')
+            raise ValueError('GoalPlanner requires goal_mpc or goal_value_mpc')
+        if remaining_budget is not None and (type(remaining_budget) is not int or remaining_budget < 1):
+            raise ValueError('Planning requires a positive remaining action budget')
         self._state(state)
         if observation.terminal:
             self.goal = None
@@ -135,22 +164,24 @@ class GoalPlanner(Planner):
         if self.goal is not None and (self.goal.geometry != state.geometry or
                 self.position - self.goal.created_position >= self.config.lifetime):
             self.goal = None
-        choices = candidates(observation, rng, self.config.clicks)
+        choices = self.action_candidates(state, observation, rng, remaining_budget)
         actions, count = self.engine.actions(choices), len(choices)
+        horizon = self.config.horizon if remaining_budget is None else min(self.config.horizon, remaining_budget)
         with self.engine.autocast():
             if self.goal is None:
-                self._propose(state, actions)
+                self._propose(state, actions, remaining_budget)
             goal = self.goal
             # Fixed target chosen before reaching search; never selected afterwards.
             current_distance = distance(state.z[None], goal.z)
             z, h, paths, history = state.z[None], state.h, None, None
             estimates = None
-            for depth in range(self.config.horizon):
+            for depth in range(horizon):
                 branches = len(z)
                 a = actions.repeat(branches, 1)
                 z, h = z.repeat_interleave(count, 0), h.repeat_interleave(count, 0)
                 if diagnostics is not None:
-                    v, output = self.readout(z, h, a, *self.shape(state.geometry))
+                    budget = None if remaining_budget is None else remaining_budget - depth
+                    v, output = self._readout(z, h, a, state.geometry, budget)
                     if depth == 0:
                         initial_value = float(v[0].float().sigmoid())
                     p = output[:, :3].float().softmax(-1)
@@ -162,13 +193,15 @@ class GoalPlanner(Planner):
                 paths = ids if paths is None else torch.cat((paths.repeat_interleave(count, 0), ids), 1)
                 if diagnostics is not None:
                     history = z[:, None] if history is None else torch.cat((history.repeat_interleave(count, 0), z[:, None]), 1)
-                    v, _ = self.readout(z, h, torch.zeros_like(a), *self.shape(state.geometry))
-                    values = torch.cat((p, v.float().sigmoid()[:, None]), -1)[:, None]
+                    v, _ = self._readout(z, h, torch.zeros_like(a), state.geometry,
+                                         None if budget is None else budget - 1)
+                    leaf = v.float().sigmoid() if budget != 1 else torch.zeros_like(v)
+                    values = torch.cat((p, leaf[:, None]), -1)[:, None]
                     estimates = values if estimates is None else torch.cat((estimates.repeat_interleave(count, 0), values), 1)
                 # Distance orders even scores that underflow to zero; ties retain
                 # candidate / parent order. Final-depth branch alone chooses action.
                 keep = torch.argsort(distances, stable=True)[:self.config.beam]
-                if depth == self.config.horizon - 1:
+                if depth == horizon - 1:
                     index = int(keep[0])
                     chosen = choices[int(paths[index, 0])]
                     if diagnostics is not None:

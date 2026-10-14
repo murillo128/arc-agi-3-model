@@ -14,6 +14,28 @@
     <div class="connection"><span id="connection" role="status">Conectando…</span><small id="freshness">Actualización automática cada 2 s</small></div>
   </header>
   <p id="notice" class="notice" hidden></p>
+  <section id="campaign-panel" aria-labelledby="campaign-title" hidden>
+    <div class="toolbar"><div><h2 id="campaign-title">Comparación de arquitectura</h2><p id="campaign-status" class="muted" role="status">Esperando el inicio de la campaña.</p></div>
+      <label>Variante y semilla <select id="campaign-run"><option value="current">En curso</option></select></label></div>
+    <p id="campaign-info" class="muted"></p>
+    <div class="metrics">
+      <article><h2>Variante actual</h2><strong id="campaign-variant">—</strong><small id="campaign-stage">Etapa pendiente</small></article>
+      <article><h2>Acciones de aprendizaje</h2><strong id="campaign-actions">—</strong><small id="campaign-budget">Presupuesto por variante y semilla</small></article>
+      <article><h2>Velocidad</h2><strong id="campaign-tps">—</strong><small>acciones/s · ejecución actual</small></article>
+      <article><h2>Actualizaciones</h2><strong id="campaign-updates">—</strong><small id="campaign-location">Juego y nivel pendientes</small></article>
+      <article><h2>Error del delta</h2><strong id="campaign-delta">—</strong><small id="campaign-delta-note">Última evaluación de la variante actual</small></article>
+      <article><h2>Éxito del agente</h2><strong id="campaign-win">—</strong><small id="campaign-decision">Coste de decidir pendiente</small></article>
+    </div>
+    <div class="charts behavior-charts">
+      <article class="chart-card"><h3>Aprendizaje del mundo <span>pérdidas</span></h3><p>Serie de la variante y semilla seleccionadas. El rollout de dos pasos se supervisa con experiencia real.</p><div id="campaign-loss-chart-legend" class="legend"></div><div class="plot"><canvas id="campaign-loss-chart" role="img" aria-label="Pérdidas de aprendizaje de la campaña"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Predicción encadenada <span>MSE · evaluación</span></h3><p>Errores a uno, dos y cuatro pasos sobre acciones reales. Identidad: conservar el latente inicial durante cuatro pasos.</p><div id="campaign-rollout-chart-legend" class="legend"></div><div class="plot"><canvas id="campaign-rollout-chart" role="img" aria-label="Error de predicción a distintos horizontes"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Control del agente <span>% de éxito</span></h3><p>Desarrollo y confirmación final permanecen separados. Las acciones de evaluación no se suman a las de aprendizaje.</p><div id="campaign-win-chart-legend" class="legend"></div><div class="plot"><canvas id="campaign-win-chart" role="img" aria-label="Éxito de las variantes de comportamiento"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Actor y valor <span>pérdidas</span></h3><p>Imitación, política y crítico, cuando esa etapa esté activa. No representan porcentajes de error.</p><div id="campaign-actor-chart-legend" class="legend"></div><div class="plot"><canvas id="campaign-actor-chart" role="img" aria-label="Pérdidas del actor y crítico de la campaña"></canvas><output class="tooltip" hidden></output></div></article>
+    </div>
+    <div class="table-scroll"><table><thead><tr><th>Variante / semilla</th><th>Juego / nivel</th><th>Fase</th><th>Acción de aprendizaje</th><th>Error delta</th><th>MSE · 2 pasos</th><th>Éxito</th><th>Acciones de evaluación</th><th>ms / decisión</th></tr></thead><tbody id="campaign-table"></tbody></table></div>
+    <p id="campaign-selection" class="muted"></p>
+    <p class="muted">Esta campaña tiene su propio log y contadores. Las secciones de mundo y comportamiento siguientes pueden corresponder a ejecuciones anteriores.</p>
+  </section>
   <section aria-labelledby="behavior-title">
     <div class="toolbar"><div><h2 id="behavior-title">Goal y planner · modelo del mundo congelado</h2><p id="behavior-status" class="muted" role="status">No se ha configurado un log de comportamiento.</p></div>
       <label>Nivel <select id="behavior-level"><option value="all">Conjunto</option></select></label>

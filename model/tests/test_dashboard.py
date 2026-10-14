@@ -11,7 +11,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from model.dashboard import LogMonitor, BehaviorMonitor, MAX_LINE, MAX_READ, make_server
+from model.dashboard import LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LINE, MAX_READ, make_server
 
 
 class DashboardTests(unittest.TestCase):
@@ -191,7 +191,9 @@ class DashboardTests(unittest.TestCase):
         self.append({'event': 'progress', 'actions': 256, 'updates': 28})
         behavior_path = self.path.with_name('behavior.log')
         behavior_path.write_text('{"event":"behavior_collection","actions":7,"episodes":2}\n')
-        server = make_server(('127.0.0.1', 0), self.monitor, BehaviorMonitor(behavior_path))
+        campaign_path = self.path.with_name('campaign.log')
+        campaign_path.write_text('{"event":"campaign_progress","variant":"rollout","seed":2,"actions":9,"total_actions":100}\n')
+        server = make_server(('127.0.0.1', 0), self.monitor, BehaviorMonitor(behavior_path), CampaignMonitor(campaign_path))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
@@ -209,6 +211,8 @@ class DashboardTests(unittest.TestCase):
                     data = json.loads(body)
                     self.assertEqual(data['progress']['actions'], 256)
                     self.assertEqual(data['behavior']['progress']['collection']['actions'], 7)
+                    self.assertEqual(data['campaign']['progress']['actions'], 9)
+                    self.assertEqual(data['campaign']['progress']['seed'], 2)
         self.append({'event': 'progress', 'actions': 288})
         with urlopen(base + '/api/state') as response:
             self.assertEqual(json.load(response)['progress']['actions'], 288)
@@ -216,6 +220,87 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + route)
             self.assertEqual(error.exception.code, 404)
+
+    def test_campaign_counters_and_evaluation_are_isolated_by_variant_and_seed(self):
+        monitor = CampaignMonitor(self.path, max_points=3)
+        self.append({'event': 'campaign_started', 'config': {'variants': ['baseline', 'rollout'],
+                    'seeds': [0, 1], 'actions_per_variant': 100}},
+                    {'event': 'campaign_progress', 'variant': 'baseline', 'seed': 0, 'actions': 100,
+                     'total_actions': 100, 'stage': 'world', 'loss': {'rollout_mse': 0}},
+                    {'event': 'campaign_evaluation', 'variant': 'baseline', 'seed': 0, 'actions': 100,
+                     'split': 'development', 'world': {'delta_error': .2, 'rollouts': {
+                         '2': {'samples': 3, 'latent_mse': .4, 'identity_latent_mse': .7}}},
+                     'behavior': {'win_rate': .5, 'actions': 38, 'decision_ms': 2}},
+                    {'event': 'campaign_progress', 'variant': 'rollout', 'seed': 1, 'actions': 2,
+                     'total_actions': 100, 'stage': 'world', 'loss': {'rollout_mse': float('nan')}})
+        data = monitor.snapshot()
+        self.assertEqual(data['progress']['actions'], 2)
+        self.assertEqual(data['run']['config']['seeds'], [0, 1])
+        self.assertEqual([row['actions'] for row in data['progress_points']], [100, 2])
+        self.assertEqual(data['evaluations'][0]['actions'], 100)
+        self.assertEqual(data['evaluations'][0]['behavior']['actions'], 38)
+        self.assertEqual(data['evaluations'][0]['world']['rollouts']['2']['latent_mse'], .4)
+        self.assertIsNone(data['progress']['loss']['rollout_mse'])
+        json.dumps(data, allow_nan=False)
+        self.append({'event': 'campaign_error', 'message': 'explicit failure'})
+        self.assertEqual(monitor.snapshot()['reason'], 'explicit failure')
+        self.append({'event': 'campaign_started', 'config': {'variants': ['local']}},
+                    {'event': 'campaign_finished', 'status': 'complete', 'selected': 'local'})
+        restarted = monitor.snapshot()
+        self.assertEqual(restarted['progress_points'], [])
+        self.assertEqual(restarted['evaluations'], [])
+        self.assertIsNone(restarted['reason'])
+        self.assertEqual(restarted['run']['selected'], 'local')
+
+    def test_campaign_missing_tail_and_bounded_history(self):
+        monitor = CampaignMonitor(self.path, max_points=3)
+        self.assertFalse(monitor.snapshot()['source']['available'])
+        for action in range(5):
+            self.append({'event': 'campaign_progress', 'variant': 'x', 'seed': 0, 'actions': action},
+                        {'event': 'campaign_evaluation', 'variant': 'x', 'seed': 0, 'actions': action})
+        data = monitor.snapshot()
+        self.assertEqual([r['actions'] for r in data['progress_points']], [2, 3, 4])
+        self.assertEqual([r['actions'] for r in data['evaluations']], [2, 3, 4])
+        self.path.write_text('{"event":"campaign_progress","variant":"new","seed":2,"actions":1}\n')
+        self.assertEqual(monitor.snapshot()['evaluations'], [])
+
+    def test_campaign_phase_changes_status_without_fabricating_progress_points(self):
+        monitor = CampaignMonitor(self.path)
+        self.append({'event': 'campaign_started', 'config': {'actions': 40}},
+                    {'event': 'campaign_phase', 'variant': 'reference', 'seed': 0,
+                     'stage': 'initializing', 'actions': 0, 'total_actions': 40,
+                     'message': 'Preparing compiled kernels'})
+        data = monitor.snapshot()
+        self.assertEqual(data['phase'], 'campaign_phase')
+        self.assertEqual(data['progress']['stage'], 'initializing')
+        self.assertEqual(data['progress']['message'], 'Preparing compiled kernels')
+        self.assertEqual(data['progress_points'], [])
+        self.append({'event': 'campaign_progress', 'variant': 'reference', 'seed': 0,
+                     'stage': 'world', 'actions': 10, 'actions_per_second': 5},
+                    {'event': 'campaign_phase', 'variant': 'reference', 'seed': 0,
+                     'stage': 'head_calibration', 'actions': 10})
+        data = monitor.snapshot()
+        self.assertEqual(data['progress']['stage'], 'head_calibration')
+        self.assertNotIn('actions_per_second', data['progress'])
+        self.assertEqual([p['actions'] for p in data['progress_points']], [10])
+        self.append({'event': 'campaign_phase', 'variant': 'rollout', 'seed': 1,
+                     'stage': 'initializing', 'actions': 0})
+        data = monitor.snapshot()
+        self.assertEqual(data['progress']['actions'], 0)
+        self.assertEqual(len(data['progress_points']), 1)
+
+    def test_campaign_deferred_imagination_is_not_reported_as_training(self):
+        monitor = CampaignMonitor(self.path)
+        self.append({'event': 'campaign_started'},
+                    {'event': 'campaign_imagination_gate', 'variant': 'actor_imagined', 'seed': 0, 'passed': False},
+                    {'event': 'campaign_variant_deferred', 'variant': 'actor_imagined',
+                     'reason': 'incomplete_h2_admission', 'fallback': 'actor_imitation'},
+                    {'event': 'campaign_finished', 'selected': 'mc', 'status': 'complete'})
+        data = monitor.snapshot()
+        self.assertFalse(data['run']['imagination_gate']['passed'])
+        self.assertEqual(data['run']['deferred']['actor_imagined']['fallback'], 'actor_imitation')
+        self.assertEqual(data['progress_points'], [])
+        self.assertEqual(data['evaluations'], [])
 
     def test_behavior_logs_isolate_splits_rounds_missing_values_and_restarts(self):
         monitor = BehaviorMonitor(self.path, max_points=3)

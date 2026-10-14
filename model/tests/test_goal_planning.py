@@ -177,6 +177,58 @@ class GoalPlanningTests(unittest.TestCase):
                 self.assertEqual(plan['steps'][0]['action'], step['action'])
             self.assertEqual((world.read_bytes(), utility.read_bytes()), before)
 
+    def test_value_goal_mode_ignores_visual_reward_and_keeps_first_progress_objective(self):
+        class ProgressReadout(nn.Module):
+            def forward(self, z, h, a, rows, columns):
+                output = torch.full((len(z), 4), -100.)
+                progress = a[:, 2] > .5
+                output[progress, 1] = torch.log(torch.tensor(.8))
+                output[progress, 2] = torch.log(torch.tensor(.2))
+                output[~progress, 0] = 0
+                return torch.full((len(z),), -100.), output
+        planner = GoalPlanner(self.engine, ProgressReadout(), GoalConfig(horizon=2))
+        planner.set_goal(torch.tensor([[-2.]]), self.state)  # nearest path is left.
+        diagnostics = {}
+        result = planner.choose(self.state, self.obs, random.Random(1), 'goal_value_mpc',
+                                 diagnostics, remaining_budget=2)
+        self.assertEqual(result.id, 2)  # progress beats visually perfect left goal.
+        self.assertAlmostEqual(diagnostics['planning']['selected_score'], .8, places=6)
+        self.assertEqual(diagnostics['planning']['objective'], 'sdk_level_progress')
+        self.assertEqual(diagnostics['planning_v2']['endpoint_role'], 'predicted_plan_result')
+        self.assertIsNone(self.engine.decoded)  # no readout in imagined control loop.
+
+    def test_warm_click_suffix_is_recomputed_even_when_uniform_samples_miss_it(self):
+        class ClickDynamics(Dynamics):
+            def predict(self, z, h, action, height, width):
+                # Generic coordinate-dependent oracle, independent of any game.
+                next_z = action[:, 8, None, None] * 3
+                return next_z, h + 1, next_z - z
+        planner = GoalPlanner(ClickDynamics(), Readout(), GoalConfig(horizon=1, clicks=1))
+        retained = Action(6, {'x': 63, 'y': 0})
+        planner.last_plan = [retained]
+        diagnostic = {}
+        result = planner.choose(self.state, replace(self.obs, available_actions=(6,)), random.Random(5),
+                                 'goal_value_mpc', diagnostic, remaining_budget=2)
+        self.assertEqual(result, retained)
+        self.assertEqual(planner.last_endpoint.item(), 3)
+        self.assertEqual(diagnostic['planning_v2']['selected_route_source'], 'retained')
+        planner.after_real_action(retained, self.obs, self.obs)
+        self.assertEqual(planner.last_plan, [])
+        self.assertEqual(self.state.z.item(), 0)
+
+    def test_actor_route_can_contribute_without_click_actions_and_still_loses_if_worse(self):
+        class Proposal:
+            calls = 0
+            def propose_route(self, engine, state, available, rng, **kwargs):
+                self.calls += 1
+                return [Action(1)]
+        planner = GoalPlanner(self.engine, Readout(), GoalConfig(horizon=1))
+        proposer = Proposal()
+        planner.proposal_policy = proposer
+        choice = planner.choose(self.state, self.obs, random.Random(1), 'goal_value_mpc', remaining_budget=2)
+        self.assertEqual(choice.id, 2)  # actor is a candidate, never an override.
+        self.assertEqual(proposer.calls, 1)
+
     def test_bad_bounds_states_and_targets_fail_explicitly(self):
         for setting in ({'horizon': 65}, {'proposal_beam': 0}, {'lifetime': 1025}, {'discount': float('nan')}):
             with self.subTest(setting=setting), self.assertRaises(ValueError):

@@ -613,6 +613,27 @@ class NumericalTests(unittest.TestCase):
 
 
 class SDKTests(unittest.TestCase):
+    def test_retained_replay_keeps_native_levels_in_distinct_episodes(self):
+        factory = Factory('sc01-v1', ROOT / 'games')
+        self.addCleanup(factory.arcade.close_scorecard)
+        config = TrainConfig(max_steps=6, replay_episodes=4, batch_episodes=2,
+                             retain_replay_across_levels=True)
+        engine = Engine(WorldModel(NetworkConfig.small()), config)
+        learner = Learner(engine)
+        update, sampled_levels = learner.update, []
+        def traced_update(episodes):
+            sampled_levels.append([{o.levels_completed for o in e.observations} for e in episodes])
+            return update(episodes)
+        learner.update = traced_update
+        progress = dict(actions=0, updates=0, episodes=0, level_index=0,
+                        level_actions=0, passes=0, best_error=1.)
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()), \
+                patch('model.runner.random_action', side_effect=[Action(4)] * 5 + [Action(1)]):
+            train(engine, learner, factory, {'levels': [None]}, progress,
+                  random.Random(0), Path(directory))
+        self.assertEqual(sampled_levels[-1], [{1}, {0}])
+        self.assertEqual(progress['episodes'], 2)
+
     def test_native_level_advance_splits_training_and_preserves_win_targets(self):
         import json
         # Literal route for native SDK seed 1654615998, drawn by Random(0).

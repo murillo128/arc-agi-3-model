@@ -1,6 +1,7 @@
 """Only public observation data and executed actions enter neural code."""
 from dataclasses import dataclass, field, replace
 import random
+import weakref
 
 import numpy as np
 import torch
@@ -73,11 +74,28 @@ def random_action(observation: Observation, rng: random.Random) -> Action:
     return Action(action, {'x': rng.randrange(64), 'y': rng.randrange(64)} if action == 6 else {})
 
 
+@dataclass(eq=False)
+class FrozenLatents:
+    """Weight-dependent, disposable data shared only by prefixes of one episode."""
+    token: object = None
+    values: list = field(default_factory=list)
+
+    def clear(self):
+        self.token = None
+        self.values.clear()
+
+    @property
+    def nbytes(self):
+        return sum(z.numel() * z.element_size() for z in self.values if z is not None)
+
+
 @dataclass
 class Episode:
     observations: list[Observation]
     actions: list[Action] = field(default_factory=list)
     prepared: list = field(default_factory=list, repr=False)
+    latent_cache: FrozenLatents = field(default_factory=FrozenLatents, repr=False)
+    replay_owner: object = field(default=None, repr=False)
 
     def append(self, action, observation):
         self.actions.append(action)
@@ -89,8 +107,8 @@ class Episode:
 
     @property
     def device_bytes(self):
-        return sum(t.numel() * t.element_size() for item in self.prepared
-                   for t in item if t is not None)
+        return self.latent_cache.nbytes + sum(t.numel() * t.element_size() for item in self.prepared
+                                             for t in item if t is not None)
 
     def prepare(self, device, patch, dtype=torch.float32, byte_limit=128 * 1024 * 1024):
         """Cache immutable inputs only, owned and released by this episode.
@@ -122,6 +140,7 @@ class Replay:
     def add(self, episode):
         if not any(e is episode for e in self.episodes):
             self.episodes.append(episode)
+        episode.replay_owner = weakref.ref(self)
         self.trim()
 
     def trim(self):
@@ -139,6 +158,12 @@ class Replay:
                 episode.prepare(device, patch, dtype, self.byte_limit - other_bytes)
                 return
             except MemoryError:
+                # Optional learned caches must never force eviction/failure
+                # when the immutable real inputs would still fit by themselves.
+                if any(e.latent_cache.values for e in self.episodes):
+                    for e in self.episodes:
+                        e.latent_cache.clear()
+                    continue
                 if self.episodes[0] is episode:
                     raise
                 self.episodes.pop(0)
@@ -156,11 +181,13 @@ class Replay:
                 break
         if observations < minimum:
             return []
-        # No stale latent cache: every chosen prefix starts at episode initialization.
+        # Prefixes start at initialization and may share a frozen-encoder cache;
+        # the learner validates its weight token before any reuse.
         result = []
         for e in chosen:
             end = rng.randint(1, len(e.actions)) if random_prefix and e is not latest else len(e.actions)
-            result.append(Episode(e.observations[:end + 1], e.actions[:end], e.prepared[:end + 1]))
+            result.append(Episode(e.observations[:end + 1], e.actions[:end], e.prepared[:end + 1],
+                                  e.latent_cache, e.replay_owner))
         return result
 
 
