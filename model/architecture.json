@@ -33502,6 +33502,12 @@
           "label": "rollout",
           "direction": "input",
           "shape": []
+        },
+        {
+          "id": "visual_rollout",
+          "label": "visual_rollout",
+          "direction": "input",
+          "shape": []
         }
       ],
       "parameter_ids": [],
@@ -33518,11 +33524,15 @@
         {
           "name": "rollout_weight",
           "value": 0.0
+        },
+        {
+          "name": "rollout_visual_weight",
+          "value": 0.0
         }
       ],
-      "description": "Displayed coefficients are TrainConfig reference defaults; checkpoints/configuration may override them. The separate autoregressive contribution is zero in the reference and 0.5 in rollout2. Visual losses are propagated through the existing backward interface. Comparisons change one recipe at a time.",
+      "description": "Displayed coefficients are TrainConfig reference defaults; checkpoints/configuration may override them. The separate autoregressive contribution is zero in the reference and 0.5 in rollout2. Visual losses are propagated through the existing backward interface. Comparisons change one recipe at a time. The optional visual_rollout term supervises the second predicted endpoint relative to the real rollout anchor; the paired diagnostic freezes encoder/decoder and changes only this weight.",
       "operation": "total",
-      "formula": "loss = (1 - sigreg_weight) * prediction + sigreg_weight * regularization.sigreg + variance_weight * regularization.variance_floor + rollout_weight * rollout"
+      "formula": "loss = (1 - sigreg_weight) * prediction + sigreg_weight * regularization.sigreg + variance_weight * regularization.variance_floor + rollout_weight * rollout + rollout_visual_weight * visual_rollout"
     },
     {
       "id": "world.model_state.objective.backward",
@@ -109574,7 +109584,7 @@
           "value": 0.95
         }
       ],
-      "description": "Train OutcomeValue only on real SDK outcome/action records. MC V/Q learn discounted first-progress returns within explicit budget; censored tails do not receive MC targets. TD uses a*=argmax_a Q_online(real_next_state,b-1,a) over the defined legal candidates, then gamma*sigmoid(Q_target(real_next_state,b-1,a*)). Progress is handled before exhaustion, so success on the last action targets one. Target EMA advances once after each optimizer update. Availability fits observed SDK masks. Q_click(s,b,x,y) is the same Q head evaluated at ACTION6 coordinates; only executed actions receive real targets, and unexecuted pixels are not negatives. MPC imitation has separate provenance and loss in Behavior Learner. Decoder/world weights stay fixed in behavior comparisons."
+      "description": "Train OutcomeValue only on real SDK outcome/action records. MC V/Q learn discounted first-progress returns within explicit budget; censored tails do not receive MC targets. TD uses a*=argmax_a Q_online(real_next_state,b-1,a) over the defined legal candidates, then gamma*sigmoid(Q_target(real_next_state,b-1,a*)). Progress is handled before exhaustion, so success on the last action targets one. Target EMA advances once after each optimizer update. Availability fits observed SDK masks. Q_click(s,b,x,y) is the same Q head evaluated at ACTION6 coordinates; only executed actions receive real targets, and unexecuted pixels are not negatives. MPC imitation has separate provenance and loss in Behavior Learner. Decoder/world weights stay fixed in behavior comparisons. World-variant recalibration retains all collected real episodes in a bounded CPU archive and re-encodes them with final world weights, rather than keeping only the most recent episodes. It reports per-level outcome coverage and applies no success oversampling."
     },
     {
       "id": "behavior.planner.search",
@@ -113419,17 +113429,31 @@
           "label": "loss",
           "direction": "output",
           "shape": []
+        },
+        {
+          "id": "decoder_parameters",
+          "label": "decoder_parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, context_projection, pixel_classifier}"
+        },
+        {
+          "id": "visual_loss",
+          "label": "visual_loss",
+          "direction": "output",
+          "shape": []
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Optional TrainConfig.rollout_weight term. Two complete calls of the same residual dynamics; step two receives predicted z/h from step one and a recorded second action. Ground truth enters only seed construction and endpoint loss. Consecutive compatible transitions with a real visual endpoint are required; this does not remove SDK event labels at visual boundaries.",
+      "description": "Optional TrainConfig.rollout_weight term. Two complete calls of the same residual dynamics; step two receives predicted z/h from step one and a recorded second action. Ground truth enters only seed construction and endpoint loss. Consecutive compatible transitions with a real visual endpoint are required; this does not remove SDK event labels at visual boundaries. Optional rollout_visual_weight adds visual supervision at the same two-step endpoint using the shared decoder; it never feeds decoded pixels into imagined dynamics. Both weights default to zero; rollout2_visual enables 0.5 for each.",
       "children": [
         "world.model_state.objective.rollout.seeds",
         "world.model_state.objective.rollout.step1",
         "world.model_state.objective.rollout.step2",
-        "world.model_state.objective.rollout.error"
+        "world.model_state.objective.rollout.error",
+        "world.model_state.objective.rollout.visual"
       ]
     },
     {
@@ -113910,6 +113934,46 @@
       "description": "Joint mode allows gradients through both predicted calls and the real target encoder branch; freezing disables encoder updates, not residual predictor gradients.",
       "operation": "error",
       "formula": "loss = mean(square(predicted_state.z - target2))"
+    },
+    {
+      "id": "world.model_state.objective.rollout.visual",
+      "label": "Two-step Visual Objective",
+      "kind": "operation",
+      "parent_id": "world.model_state.objective.rollout",
+      "ports": [
+        {
+          "id": "predicted_state",
+          "label": "predicted_state",
+          "direction": "input",
+          "shape": null,
+          "value_type": "LatentState {z: float32[B,P,1024], h: float32[B,2048], geometry, real_episode_context}"
+        },
+        {
+          "id": "real_batch",
+          "label": "real_batch",
+          "direction": "input",
+          "shape": null
+        },
+        {
+          "id": "decoder_parameters",
+          "label": "decoder_parameters",
+          "direction": "input",
+          "shape": null,
+          "value_type": "DecoderParameters {latent_projection, blocks[0..7], final_norm, context_projection, pixel_classifier}"
+        },
+        {
+          "id": "loss",
+          "label": "loss",
+          "direction": "output",
+          "shape": []
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "visual_endpoint_loss",
+      "description": "Decode predicted z at t+2 with the same trained decoder. Compare net visual deltas relative to the real t frame, using the real t+2 frame as target. False-change penalty and overlap loss match the one-step objective. Gradients traverse both predicted latent and memory steps, with no intervening real observation. Frozen decoder weights still transmit gradients into the predictor; this invocation belongs only to learning, outside imagination.",
+      "formula": "logits = shared_decoder(predicted_state.z, decoder_parameters); loss = visual_delta_loss(logits, real_batch.frame_t, real_batch.frame_t_plus_2) + delta_overlap_weight * overlap_loss(logits, real_batch.frame_t, real_batch.frame_t_plus_2)"
     }
   ],
   "edges": [
@@ -146430,6 +146494,78 @@
       "target": {
         "node_id": "world.model_state.objective.total",
         "port_id": "rollout"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "agent_runtime.world.decoder.learning.parameters.parameters--world.model_state.objective.rollout.decoder_parameters",
+      "source": {
+        "node_id": "world.decoder.learning.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.rollout",
+        "port_id": "decoder_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "agent_runtime.world.model_state.objective.rollout.decoder_parameters--world.model_state.objective.rollout.visual.decoder_parameters",
+      "source": {
+        "node_id": "world.model_state.objective.rollout",
+        "port_id": "decoder_parameters"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.rollout.visual",
+        "port_id": "decoder_parameters"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "agent_runtime.world.model_state.objective.rollout.real_batch--world.model_state.objective.rollout.visual.real_batch",
+      "source": {
+        "node_id": "world.model_state.objective.rollout",
+        "port_id": "real_batch"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.rollout.visual",
+        "port_id": "real_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "agent_runtime.world.model_state.objective.rollout.step2.next_state--world.model_state.objective.rollout.visual.predicted_state",
+      "source": {
+        "node_id": "world.model_state.objective.rollout.step2",
+        "port_id": "next_state"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.rollout.visual",
+        "port_id": "predicted_state"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "agent_runtime.world.model_state.objective.rollout.visual.loss--world.model_state.objective.rollout.visual_loss",
+      "source": {
+        "node_id": "world.model_state.objective.rollout.visual",
+        "port_id": "loss"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.rollout",
+        "port_id": "visual_loss"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "agent_runtime.world.model_state.objective.rollout.visual_loss--world.model_state.objective.total.visual_rollout",
+      "source": {
+        "node_id": "world.model_state.objective.rollout",
+        "port_id": "visual_loss"
+      },
+      "target": {
+        "node_id": "world.model_state.objective.total",
+        "port_id": "visual_rollout"
       },
       "kind": "data"
     }

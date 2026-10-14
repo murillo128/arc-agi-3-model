@@ -257,6 +257,12 @@ function evaluationDiagnostics(rows) {
     : {actions: group[0].actions, split: group[0].split, per_pair: group}));
 }
 function render(data) {
+  const report = data.campaign?.report;
+  const probe = report?.learning_probe, diagnostic = report?.diagnostics;
+  const activity = [probe, diagnostic].find(a => a?.available && a.status === 'running');
+  $('experiment-notice').hidden = !activity;
+  $('experiment-summary').textContent = activity
+    ? `${activity === probe ? 'Ensayo de aprendizaje' : 'Diagnóstico con pesos congelados'} en curso. Las métricas de abajo pertenecen al entrenamiento seleccionado.` : '';
   const {views, current} = executionCatalogue(data);
   const select = $('execution-select');
   const options = [new Option('En curso · seguimiento automático', 'current'),
@@ -325,7 +331,7 @@ function render(data) {
   const curveGroup = r => `${splitName(r)} · ${scope(r)}`;
   charts.delta.set(groupedLines(visualRows, [['Predictor', r => percentValue(r.delta_error)],
     ['Decoder', r => percentValue(r.decoder_delta_error)]], curveGroup), finite(config.delta_error) ? config.delta_error * 100 : undefined, ' %');
-  charts.loss.set([['Predicción', 'decoder_ce'], ['Reconstrucción', 'reconstruction_ce'], ['Reconstrucción local', 'local_reconstruction_ce']]
+  charts.loss.set([['Predicción', 'decoder_ce'], ['Reconstrucción', 'reconstruction_ce'], ['Reconstrucción local', 'local_reconstruction_ce'], ['Visual a 2 pasos · ponderada', 'rollout_visual']]
     .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));
   charts.latent.set([['1 paso', 'latent_mse'], ['2 pasos', 'rollout_mse']]
     .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));

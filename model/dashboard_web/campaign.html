@@ -15,10 +15,32 @@
   </header>
   <p id="campaign-notice" class="notice" hidden></p>
   <section class="metrics summary-metrics" aria-label="Estado de la campaña">
-    <article><h2>En curso</h2><strong id="campaign-current">—</strong><small id="campaign-stage"></small></article>
+    <article><h2>Campaña de comparación</h2><strong id="campaign-current">—</strong><small id="campaign-stage"></small></article>
     <article><h2>Ejecuciones terminadas</h2><strong id="campaign-completed">—</strong><small id="campaign-budget"></small></article>
     <article><h2>Candidata provisional</h2><strong id="campaign-candidate">Pendiente</strong><small>No confirmada hasta la evaluación final.</small></article>
     <article><h2>Confirmación final</h2><strong id="campaign-confirmation">Pendiente</strong><small>Referencia y candidata · episodios separados de desarrollo.</small></article>
+  </section>
+  <section id="learning-probe" class="campaign-results" hidden>
+    <h2>Ensayo de aprendizaje</h2>
+    <p id="probe-status" role="status"></p>
+    <p>Mismos pesos iniciales, datos y actualizaciones. Encoder y decoder congelados. «Datos entrenados» mide ajuste; «Partidas nuevas» mide transferencia a observaciones que no se entrenan. Este ensayo no promociona pesos.</p>
+    <div class="charts">
+      <article class="chart-card"><h3>Error visual a un paso <span>% · menor es mejor</span></h3><div id="probe-chart-1"></div></article>
+      <article class="chart-card"><h3>Error visual a dos pasos <span>% · menor es mejor</span></h3><div id="probe-chart-2"></div></article>
+    </div>
+    <details><summary>Cobertura de las partidas reales del ensayo</summary>
+      <p>Éxitos y fracasos observados durante la recogida; no son resultados del planner. El presupuesto corto puede terminar sin ninguno de los dos.</p>
+      <div class="table-scroll"><table><thead><tr><th>Juego / nivel</th><th>Partidas</th><th>Acciones</th><th>Éxitos</th><th>Game over</th><th>Fin de presupuesto</th></tr></thead><tbody id="probe-coverage"></tbody></table></div>
+    </details>
+  </section>
+  <section id="diagnostics" class="campaign-results" hidden>
+    <h2>Diagnósticos con pesos congelados</h2>
+    <p id="diagnostic-status" class="muted"></p>
+    <p>Prueba corta de desarrollo. Mismos pesos y presupuestos para azar, Q directa y planner. No selecciona automáticamente una arquitectura. Las filas parciales aún no cubren todos los juegos y niveles: no deben compararse directamente con las terminadas.</p>
+    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Política</th><th>Victorias / partidas</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="diagnostic-policies"></tbody></table></div>
+    <h3>Acciones alternativas desde el mismo estado real</h3>
+    <p>Error visual del delta; menor es mejor. «Sin cambio» conserva el tablero. Las dos últimas columnas comparan la acción correcta con otra sólo cuando sus resultados reales difieren.</p>
+    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Juego / nivel</th><th>Predictor</th><th>Sin cambio</th><th>Acción correcta · distintos</th><th>Otra acción · distintos</th><th>Pares distintos</th></tr></thead><tbody id="diagnostic-actions"></tbody></table></div>
   </section>
   <section class="campaign-results" aria-label="Gráficas de comparación">
     <h2>Comparación visual</h2>
@@ -31,15 +53,6 @@
       <article class="chart-card"><h3>Coste de decidir <span>ms / decisión · más bajo es mejor</span></h3><p>Tiempo observado; puede incluir efectos de compilación y caché. No demuestra por sí solo una mejora de velocidad.</p><div id="campaign-latency-chart" class="comparison-bars"></div></article>
     </div>
   </section>
-  <section id="diagnostics" class="campaign-results" hidden>
-    <h2>Diagnósticos con pesos congelados</h2>
-    <p id="diagnostic-status" class="muted"></p>
-    <p>Prueba corta de desarrollo. Mismos pesos y presupuestos para azar, Q directa y planner. No selecciona automáticamente una arquitectura.</p>
-    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Política</th><th>Victorias / partidas</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="diagnostic-policies"></tbody></table></div>
-    <h3>Acciones alternativas desde el mismo estado real</h3>
-    <p>Error visual del delta; menor es mejor. «Sin cambio» conserva el tablero. Las dos últimas columnas comparan la acción correcta con otra sólo cuando sus resultados reales difieren.</p>
-    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Juego / nivel</th><th>Predictor</th><th>Sin cambio</th><th>Acción correcta · distintos</th><th>Otra acción · distintos</th><th>Pares distintos</th></tr></thead><tbody id="diagnostic-actions"></tbody></table></div>
-  </section>
   <section class="campaign-results">
     <h2>Resultados de desarrollo</h2>
     <p class="muted">Sólo evaluaciones completas de cada semilla. Errores y éxito: media entre semillas terminadas; resultados parciales hasta completar todas. Las acciones por victoria usan el total de acciones y victorias. Las acciones de evaluación no cuentan como entrenamiento.</p>
@@ -51,6 +64,10 @@
     <p class="muted">Pesos representativos de la semilla 0; estos episodios no intervienen en la selección. No son tres entrenamientos nuevos.</p>
     <div class="table-scroll"><table><thead><tr><th>Configuración</th><th>Victorias / episodios</th><th>Éxito</th><th>Acciones / victoria</th></tr></thead><tbody id="campaign-final-table"></tbody></table></div>
   </section>
+  <details id="calibration-coverage" hidden><summary>Datos reales conservados para recalibrar V/Q</summary>
+    <p>Partidas de aprendizaje completas conservadas en RAM, sin descartar éxitos antiguos. Los finales por presupuesto y los cortes de recogida se distinguen. Estas cifras describen los datos, no la calidad del planner.</p>
+    <div class="table-scroll"><table><thead><tr><th>Variante / semilla</th><th>Juego / nivel</th><th>Partidas</th><th>Éxitos</th><th>Game over</th><th>Fin de presupuesto</th><th>Recogida interrumpida</th></tr></thead><tbody id="calibration-table"></tbody></table></div>
+  </details>
   <footer>Actualización automática cada 2 segundos. Lee el informe existente y el progreso del log; no crea historial adicional ni modifica el entrenamiento.</footer>
 </main>
 </body>

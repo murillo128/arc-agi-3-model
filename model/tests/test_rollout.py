@@ -53,8 +53,14 @@ class RolloutTests(unittest.TestCase):
                             torch.testing.assert_close(actual.grad, expected.grad, atol=2e-6, rtol=2e-4, msg=name)
 
     def test_endpoint_loss_uses_predicted_state_and_memory_with_unbroken_gradient(self):
+        for visual in (False, True):
+            with self.subTest(visual=visual):
+                self.check_endpoint_gradient(visual)
+
+    def check_endpoint_gradient(self, visual):
         model = WorldModel(NetworkConfig.small())
-        config = TrainConfig(rollout_weight=.5, loss_steps=1, freeze_representation=True,
+        config = TrainConfig(rollout_weight=0. if visual else .5,
+                             rollout_visual_weight=.5 if visual else 0., loss_steps=1, freeze_representation=True,
                              sigreg_weight=0, variance_weight=0)
         engine = Engine(model, config)
         # Independent scalar recurrence z' = w*z + h + action1,
@@ -79,15 +85,22 @@ class RolloutTests(unittest.TestCase):
             return following, advance(z, h, action)[0], following - z
 
         engine.encode, engine.advance, engine.predict = encode, advance, predict
+        if visual:
+            engine.decode = lambda z, *args, **kwargs: z.mean((1, 2))[:, None, None, None].expand(-1, 4, 4, 16)
         data = Episode([observation(1), observation(4), observation(9)], [Action(1), Action(2)])
         zero_visual = lambda logits, *args: logits.sum((1, 2, 3)) * 0
-        with patch('model.learning.visual_delta_loss', side_effect=zero_visual), \
+        def visual_endpoint(logits, before, actual, *args):
+            self.assertTrue(torch.all(actual == 9))
+            # Only the real two-step anchor is 1; the one-step reference is 4.
+            return (logits.mean((1, 2, 3)) - 9).square() * (before[:, 0, 0] == 1)
+        with patch('model.learning.visual_delta_loss', side_effect=visual_endpoint if visual else zero_visual), \
                 patch('model.learning.soft_delta_error', side_effect=zero_visual):
             result = Learner(engine).update([data])
         self.assertEqual(result['samples'], 1)
         self.assertEqual(result['rollout_samples'], 1)
         self.assertAlmostEqual(result['rollout_mse'], 1.)
         self.assertAlmostEqual(result['loss'], 1.5)
+        self.assertAlmostEqual(result['rollout_visual'], .5 if visual else 0.)
         self.assertAlmostEqual(sum(captured), 4., places=5)
 
     def test_missing_frames_and_geometry_changes_cannot_be_rollout_targets(self):
@@ -119,7 +132,7 @@ class RolloutTests(unittest.TestCase):
         for frozen in (False, True):
             for readout in ('contextual', 'local'):
                 with self.subTest(frozen=frozen, readout=readout):
-                    config = TrainConfig(rollout_weight=.5, loss_steps=2, frame_chunk=1,
+                    config = TrainConfig(rollout_weight=.5, rollout_visual_weight=.5, loss_steps=2, frame_chunk=1,
                                          freeze_representation=frozen, decoder_readout=readout)
                     models = [WorldModel(NetworkConfig.small()) for _ in range(2)]
                     models[1].load_state_dict(models[0].state_dict())

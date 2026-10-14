@@ -21,7 +21,7 @@ const data = {source: {}, campaign: {source: {available: true, age_seconds: 2}, 
   progress: {variant: 'world_reference', seed: 1, actions: 40, total_actions: 100, stage: 'world'}, report}};
 let offline = false;
 const context = vm.createContext({console, AbortSignal, setTimeout: () => {},
-  document: {getElementById: id => nodes.get(id), createElement: element},
+  document: {getElementById: id => nodes.get(id), createElement: element, createElementNS: element},
   fetch: async () => { if (offline) throw new Error('offline'); return {ok: true, json: async () => data}; }});
 const text = id => nodes.get(id).textContent;
 const row = n => nodes.get('campaign-table').children[n].children;
@@ -76,13 +76,33 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
       probes: [{game: 'sc01-v1', level: 1, predictor: {delta_error: 0}, no_change: {delta_error: 1},
         distinct_pairs: 0, distinct_correct: {delta_error: null}, distinct_wrong: {delta_error: null}}]}]};
   await vm.runInContext('pollCampaign()', context);
-  assert.match(text('campaign-connection'), /pausada/);
+  assert.match(text('campaign-connection'), /Diagnóstico.*en curso/);
+  assert.equal(text('campaign-current'), 'Pausada');
   assert.equal(nodes.get('diagnostics').hidden, false);
   assert.match(text('diagnostic-status'), /partida 2\/8.*10\/128/);
   assert.equal(nodes.get('diagnostic-policies').children[0].children[3].textContent, '0 %');
   assert.equal(nodes.get('diagnostic-policies').children[0].children[6].textContent, 'Parcial');
   assert.equal(nodes.get('diagnostic-actions').children[0].children[2].textContent, '0 %');
   assert.equal(nodes.get('diagnostic-actions').children[0].children[4].textContent, '—');
+  report.status = 'failed'; report.error = 'compile failure';
+  report.learning_probe = {available: true, status: 'running', age_seconds: 2,
+    progress: {variant: 'visual_2step', phase: 'training', updates: 20, total_updates: 120},
+    coverage: {per_pair: [{game: 'example', level: 1, episodes: 3, actions: 8, successes: 1, failures: 2, budget_ends: 0}]},
+    results: [{variant: 'visual_2step', points: [{updates: 0, fit_1: .5, fit_2: .8, development_1: .6, development_2: .9},
+      {updates: 20, fit_1: 0, fit_2: .1, development_1: .3, development_2: .5}]}]};
+  await vm.runInContext('pollCampaign()', context);
+  assert.match(text('campaign-connection'), /Ensayo de aprendizaje.*en curso/);
+  assert.match(text('campaign-notice'), /Campaña.*detenida.*compile failure/);
+  assert.match(text('probe-status'), /20 \/ 120/);
+  assert.equal(nodes.get('learning-probe').hidden, false);
+  assert.equal(nodes.get('probe-coverage').children[0].children[3].textContent, '1');
+  assert.equal(nodes.get('probe-chart-1').children.length, 3, 'two named series and one SVG');
+  report.learning_probe.age_seconds = 200;
+  await vm.runInContext('pollCampaign()', context);
+  assert.match(text('campaign-connection'), /sin datos recientes/);
+  report.learning_probe.status = 'complete';
+  await vm.runInContext('pollCampaign()', context);
+  assert.doesNotMatch(text('campaign-connection'), /sin datos recientes/);
   report.status = 'complete';
   report.final = {reference: {win_rate: .5, wins: 2, episodes: 4}, selected: {win_rate: .75, wins: 3, episodes: 4}};
   await vm.runInContext('pollCampaign()', context);
@@ -99,6 +119,7 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.equal(nodes.get('campaign-final').hidden, true);
   assert.match(text('campaign-connection'), /Informe no disponible/);
   assert.equal(nodes.get('campaign-charts').hidden, true);
+  assert.equal(nodes.get('learning-probe').hidden, true);
   assert.equal(bars('campaign-success-chart').length, 0, 'unavailable report clears stale chart data');
   console.log('Campaign partial/completed/deferred results, comparisons, confirmation and refresh passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

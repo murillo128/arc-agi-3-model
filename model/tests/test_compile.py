@@ -7,11 +7,59 @@ from unittest.mock import patch
 import torch
 
 from model.config import NetworkConfig
-from model.learning import _CompiledDynamics
+from model.learning import _CompiledDynamics, Engine
+from model.config import TrainConfig
 from model.networks import WorldModel
 
 
 class CompileTests(unittest.TestCase):
+    def test_decoder_joint_frozen_and_both_readouts_reuse_caches_and_gradients(self):
+        torch.compiler.reset()
+        self.addCleanup(torch.compiler.reset)
+        torch.set_num_threads(2)
+        model = WorldModel(replace(NetworkConfig.small(), latent=32, pixel_latent=True))
+        reference = copy.deepcopy(model.decoder)
+        graphs = []
+        def backend(graph, inputs):
+            graphs.append(graph)
+            return graph.forward
+        compiler = torch.compile
+        with patch('torch.compile', side_effect=lambda f, **kw: compiler(f, backend=backend, **kw)):
+            engine = Engine(model, TrainConfig(), compile_model=True)
+        count = None
+        for repeat in range(2):
+            for learning in (True, False):
+                for joint in (True, False):
+                    for local in (False, True):
+                        for batch in (1, 4, 16):
+                            model.train(learning).requires_grad_(joint)
+                            reference.train(learning).requires_grad_(joint)
+                            model.zero_grad(set_to_none=True)
+                            reference.zero_grad(set_to_none=True)
+                            z = torch.randn(batch, 4, 32)
+                            if repeat:
+                                z = z.transpose(1, 2).contiguous().transpose(1, 2)
+                            z.requires_grad_(learning)
+                            other = z.detach().clone().requires_grad_(learning)
+                            with torch.set_grad_enabled(learning):
+                                actual = engine.decode(z, 8, 8, local=local, checkpoint_blocks=learning)
+                                expected = reference(other, 8, 8, local=local, checkpoint_blocks=learning)
+                                torch.testing.assert_close(actual, expected)
+                                if learning:
+                                    actual.square().mean().backward()
+                                    expected.square().mean().backward()
+                                    torch.testing.assert_close(z.grad, other.grad)
+                                    for p, q in zip(model.decoder.parameters(), reference.parameters()):
+                                        self.assertEqual(p.grad is None, q.grad is None)
+                                        if p.grad is not None:
+                                            torch.testing.assert_close(p.grad, q.grad)
+            if count is None:
+                count = len(graphs)
+                self.assertGreater(count, 0)
+            else:
+                self.assertEqual(count, len(graphs))
+        self.assertEqual(torch._dynamo.config.cache_size_limit, 8)
+
     def test_learning_and_planning_reuse_bounded_caches_and_preserve_gradients(self):
         # Exercise Dynamo's actual guard/cache machinery on CPU. Returning the
         # captured FX graph avoids expensive Inductor/CUDA compilation in CI;

@@ -82,3 +82,9 @@ a { color: #77dabb; font-size: 13px; }
 [hidden] { display: none !important; }
 @media (max-width: 1150px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .details { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { main { padding: 22px 14px; } header, .toolbar { align-items: start; flex-direction: column; } .connection { text-align: left; } .charts { grid-template-columns: 1fr; } .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .chart-card { padding: 18px 14px 10px; } h3 span { float: none; display: block; margin-top: 6px; } .plot { height: 220px; } .controls { width: 100%; } }
+/* Fixed-data learning probe; colors remain compatible with the page CSP. */
+#probe-chart-1 svg, #probe-chart-2 svg { width: 100%; display: block; }
+.probe-legend-0 { color: #77d8c4; }
+.probe-legend-1 { color: #f7bd76; }
+.probe-legend-2 { color: #b4a5ff; }
+.probe-legend-3 { color: #7cceff; }

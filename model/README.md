@@ -96,7 +96,17 @@ La campaña ejecuta secuencialmente referencias y variantes con tres semillas,
 16.384 acciones por celda y diez pares sintéticos, sin leer reglas internas para
 decidir acciones. Las variantes del mundo arrancan de los mismos pesos y comparten
 recogida equilibrada/replay acotado; cada una recalibra las cabezas con experiencias
-reales conservadas en RAM y recodificadas con sus pesos finales. `local_decoder`
+reales conservadas en RAM y recodificadas con sus pesos finales. El archivo de
+calibración conserva todas las partidas recogidas, sin sobrescribir los éxitos
+antiguos ni sobremuestrearlos; el replay del predictor sigue acotado por separado.
+`--calibration-bytes` limita los bytes de observaciones originales (512 MiB por
+defecto); si se supera, la ejecución falla explícitamente. Los latentes para V/Q
+se crean después en CPU y consumen memoria adicional. El informe registra partidas,
+acciones, progresos, fracasos, finales por presupuesto y targets censurados.
+`rollout2_visual` añade `rollout_visual_weight=0.5` y se compara con `rollout2`:
+decodifica el segundo latente predicho y supervisa su delta neto respecto al frame
+real de inicio de ambos pasos. La memoria y el latente intermedios son predichos;
+ninguna observación real intermedia entra en ese rollout. `local_decoder`
 y `staged_freeze` se comparan con `rollout2`. `sigreg_only` se compara después con
 `staged_freeze`: ambas entrenan encoder/predictor/decoder durante la primera
 mitad de las acciones y congelan la representación en la segunda; sólo cambia
@@ -116,7 +126,12 @@ no combina automáticamente ganadores de comparaciones distintas sin evaluarlos 
 
 `report.json` distingue celdas terminadas, comparaciones inconclusas y confirmación
 final. Volver a ejecutar el mismo comando omite celdas completas; una celda
-interrumpida vuelve a empezar desde su fuente, sin fingir una restauración de replay.
+interrumpida durante el aprendizaje vuelve a empezar desde su fuente, sin fingir
+una restauración de replay. Al terminar el aprendizaje y la calibración, guarda
+`pending-agent.pt` antes de evaluar. Si falla la evaluación, el mismo comando carga
+ese agente y repite sólo la evaluación pendiente. No marca la celda como terminada
+hasta completarla. Al incorporar este cambio de recogida hay que usar un directorio
+nuevo: no se mezclan resultados de protocolos de calibración distintos.
 Los enlaces duros `source-world.pt`/`source-heads.pt` conservan las fuentes sin
 duplicar su almacenamiento. Sólo se retienen pesos representativos de la semilla
 cero, candidata y seleccionada; no se elige la semilla con mejores resultados.
@@ -132,7 +147,8 @@ posterior, justificada por los resultados. Burn-in es una aproximación optativa
 el backward ordinario/fragmentado y la caché congelada disponen de comprobaciones
 numéricas. Una prueba piloto no demuestra generalización a otros juegos.
 Las entradas compiladas de dinámica separan entrenamiento diferenciable e
-inferencia, compartiendo los mismos parámetros y conservando el límite normal
+inferencia; el decoder separa también readout local/contextual y gradientes activos
+o desactivados. Comparten los mismos parámetros y conservan el límite normal
 de caché. No se sustituye silenciosamente la compilación por ejecución eager.
 El historial recurrente recalcula sus activaciones durante backward mediante
 checkpointing, incluido el camino compilado. Así evita conservar una copia BF16
@@ -163,6 +179,21 @@ no cuentan como ceros y las evaluaciones intermedias no sustituyen resultados de
 desarrollo completos. El informe se limita a 32 MiB y se relee sólo cuando cambia;
 si no está disponible, la página lo indica sin reutilizar silenciosamente datos
 anteriores. El servicio web puede reiniciarse sin reiniciar el entrenamiento.
+
+El ensayo pequeño `python -m model.learning_probe --agent agente.pt --output
+model/runs/architecture-evolution/full/learning-probe` compara pérdida latente a dos
+pasos frente a añadir supervisión visual a dos pasos. Usa el `Learner` de producción,
+los mismos pesos iniciales, datos, orden de muestreo y 120 actualizaciones por rama.
+Encoder/decoder permanecen congelados, verificados al finalizar. Por defecto recoge
+dos prefijos reales de hasta ocho acciones por juego/nivel para aprender y otros
+dos con semillas disjuntas para desarrollo. Mide ambos conjuntos cada veinte
+actualizaciones: mejorar sólo en los ejemplos de entrenamiento no acredita mejora
+en partidas nuevas. No entrena V/Q ni el actor y no promueve pesos automáticamente.
+CUDA conserva `torch.compile`; `--device cpu` permite un ensayo pequeño. Guarda los
+pesos de cada rama antes de su evaluación final, sin exportar replay. La página de
+comparación muestra sus curvas y cobertura aparte de la campaña y del diagnóstico
+congelado; la página de entrenamiento enlaza la actividad en curso sin mezclarla con
+los contadores de la ejecución seleccionada.
 
 ### Agente portable y contratos
 

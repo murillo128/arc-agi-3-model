@@ -23,7 +23,7 @@ PROGRESS_KEYS = ('actions', 'updates', 'episodes', 'level_index', 'level_actions
                  'episode_actions', 'episode_observations', 'device_cache_mb', 'trained_transitions', 'trained_transitions_per_second')
 LOSS_KEYS = ('loss', 'latent_mse', 'sigreg', 'variance_floor', 'decoder_ce',
              'reconstruction_ce', 'local_reconstruction_ce', 'gradient_norm', 'samples', 'seconds',
-             'rollout_mse', 'rollout_samples')
+             'rollout_mse', 'rollout_visual', 'rollout_samples')
 VALIDATION_KEYS = ('delta_error', 'decoder_delta_error', 'latent_delta_mse', 'latent_std',
                    'transitions', 'changed_transitions', 'skipped', 'wins', 'game_overs',
                    'extra_changes', 'missed_changes', 'wrong_replacement_colors', 'correct_changes')
@@ -328,6 +328,16 @@ class CampaignMonitor(LogMonitor):
                 summary['config'] = {k: compact_values(config.get(k)) for k in (
                     'variants', 'seeds', 'actions', 'dev_episodes', 'final_episodes', 'pilot')}
                 summary['cells'] = cells
+                summary['calibration'] = []
+                for item in [*report['cells'][:100], report.get('pending_evaluation', {})]:
+                    coverage = item.get('training', {}).get('calibration')
+                    if not isinstance(coverage, dict):
+                        continue
+                    keys = ('episodes', 'actions', 'successes', 'failures', 'budget_ends', 'censored_episodes')
+                    summary['calibration'].append({'variant': str(item['variant'])[:80], 'seed': number(item['seed']),
+                        **numbers(coverage, (*keys, 'raw_bytes', 'records', 'positive_records', 'censored_records')),
+                        'per_pair': [dict(numbers(p, ('level', *keys)), game=str(p['game'])[:80])
+                                     for p in coverage.get('per_pair', [])[:100]]})
                 summary['deferred_cells'] = [{k: compact_values(c.get(k)) for k in (
                     'variant', 'seed', 'reason', 'fallback')} for c in report.get('deferred_cells', [])[:100]]
                 final = report.get('final', {})
@@ -335,7 +345,7 @@ class CampaignMonitor(LogMonitor):
                 summary['error'] = str(report.get('error', ''))[:500]
                 summary.update(available=True, updated_at=stat.st_mtime)
                 self.report_summary, self.report_identity = summary, identity
-            return dict(self.report_summary, diagnostics=self._diagnostics())
+            return dict(self.report_summary, diagnostics=self._diagnostics(), learning_probe=self._learning_probe())
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             self.report_identity = None
             return {'available': False, 'reason': 'unreadable'}
@@ -365,6 +375,39 @@ class CampaignMonitor(LogMonitor):
                                 'weights_unchanged': row.get('weights_unchanged') is True})
             return {'available': True, 'status': str(report['status'])[:80],
                     'progress': compact_values(report.get('progress')), 'results': results,
+                    'error': str(report.get('error', ''))[:240],
+                    'age_seconds': max(0, time.time() - path.stat().st_mtime)}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return {'available': False}
+
+    def _learning_probe(self):
+        path = self.report_path.parent / 'learning-probe' / 'report.json'
+        try:
+            with path.open('rb') as stream:
+                payload = stream.read(4 * 1024 * 1024 + 1)
+            if len(payload) > 4 * 1024 * 1024:
+                raise ValueError('Learning probe report too large')
+            report = json.loads(payload)
+            results = []
+            for row in report.get('results', [])[:4]:
+                points = []
+                for point in row.get('points', [])[-200:]:
+                    values = numbers(point, ('updates', 'seconds'))
+                    for split in ('fit', 'development'):
+                        for horizon in ('1', '2'):
+                            measure = point.get(split, {}).get('rollouts', {}).get(horizon, {})
+                            values[f'{split}_{horizon}'] = number(measure.get('readouts', {}).get('contextual', {}).get('prediction_delta_error'))
+                            values[f'{split}_{horizon}_samples'] = number(measure.get('samples'))
+                    points.append(values)
+                results.append({'variant': str(row['variant'])[:80], 'complete': row.get('complete') is True,
+                                'frozen_representation_verified': row.get('frozen_representation_verified') is True,
+                                'points': points})
+            keys = ('episodes', 'actions', 'successes', 'failures', 'budget_ends', 'censored_episodes')
+            coverage = numbers(report.get('coverage'), keys)
+            coverage['per_pair'] = [dict(numbers(row, ('level', *keys)), game=str(row['game'])[:80])
+                                   for row in report.get('coverage', {}).get('per_pair', [])[:100]]
+            return {'available': True, 'status': str(report['status'])[:80],
+                    'progress': compact_values(report.get('progress')), 'results': results, 'coverage': coverage,
                     'error': str(report.get('error', ''))[:240],
                     'age_seconds': max(0, time.time() - path.stat().st_mtime)}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

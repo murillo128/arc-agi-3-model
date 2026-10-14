@@ -151,6 +151,14 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   await vm.runInContext('poll()', context);
   assert.match(text('notice'), /expected failure/);
   assert.equal(nodes.get('notice').hidden, false);
+  data.campaign.report = {learning_probe: {available: true, status: 'running'}};
+  await vm.runInContext('poll()', context);
+  assert.equal(nodes.get('experiment-notice').hidden, false);
+  assert.match(text('experiment-summary'), /Ensayo de aprendizaje en curso/);
+  assert.match(text('notice'), /expected failure/, 'an active diagnostic does not hide the old failure');
+  data.campaign.report.learning_probe.status = 'complete';
+  await vm.runInContext('poll()', context);
+  assert.equal(nodes.get('experiment-notice').hidden, true);
   ui.change('execution-select', old.value);
   assert.equal(nodes.get('notice').hidden, true, 'a different seed failure is not this historical run failure');
   assert.equal(text('actions'), '100');

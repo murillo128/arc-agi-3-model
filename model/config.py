@@ -61,6 +61,7 @@ class TrainConfig:
     frame_chunk: int = 4
     loss_steps: int = 1
     rollout_weight: float = 0.
+    rollout_visual_weight: float = 0.
     decoder_readout: str = 'contextual'
     backward_mode: str = 'fragmented'
     rollout_diagnostics: bool = False
@@ -104,7 +105,7 @@ class TrainConfig:
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
             if k in {'representation_freeze_error', 'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight',
-                     'rollout_weight', 'representation_joint_steps', 'burn_in_steps'}:
+                     'rollout_weight', 'rollout_visual_weight', 'representation_joint_steps', 'burn_in_steps'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:

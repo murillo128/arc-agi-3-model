@@ -25,10 +25,10 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}, allow_nan=False), flush=True)
 
 
-def merge_rollout_reports(reports):
+def merge_rollout_reports(reports, horizons=('1', '2', '4')):
     """Weight errors by their actual anchors/pixels, not equally by episode."""
     combined = {}
-    for horizon in ('1', '2', '4'):
+    for horizon in horizons:
         groups = [report[horizon] for report in reports]
         samples = sum(group['samples'] for group in groups)
         combined[horizon] = {'samples': samples}

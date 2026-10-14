@@ -4,6 +4,7 @@ const finite = v => typeof v === 'number' && Number.isFinite(v);
 const fmt = (v, digits = 0) => finite(v) ? v.toLocaleString('es-ES', {maximumFractionDigits: digits}) : '—';
 const pct = v => finite(v) ? `${fmt(v * 100, 2)} %` : '—';
 const names = {world_reference: 'Referencia del mundo', rollout2: 'Predicción a dos pasos',
+  rollout2_visual: 'Dos pasos con supervisión visual', latent_2step: 'Dos pasos latentes', visual_2step: 'Dos pasos latentes + visuales',
   local_decoder: 'Decoder local', staged_freeze: 'Congelación por etapas', sigreg_only: 'Sólo SIGReg',
   mc: 'Monte Carlo', double_q: 'Double-Q', click_mixed: 'Clics mixtos',
   actor_imitation: 'Actor por imitación', actor_imagined: 'Actor con imaginación'};
@@ -74,6 +75,16 @@ function renderCampaign(data) {
   const p = campaign.progress || {}, config = report.config || {}, rows = report.cells || [];
   renderComparisonCharts(available ? report : {});
   renderDiagnostics(report.diagnostics);
+  renderLearningProbe(report.learning_probe);
+  const calibration = report.calibration || [];
+  $('calibration-coverage').hidden = !calibration.length;
+  $('calibration-table').replaceChildren();
+  for (const run of calibration) for (const pair of run.per_pair || []) {
+    const tr = document.createElement('tr');
+    tr.append(cell(`${title(run.variant)} · S${fmt(run.seed)}`), cell(`${pair.game} / ${fmt(pair.level)}`),
+      ...['episodes', 'successes', 'failures', 'budget_ends', 'censored_episodes'].map(key => cell(fmt(pair[key]))));
+    $('calibration-table').append(tr);
+  }
   const terminal = ['complete', 'pilot_complete', 'failed', 'interrupted', 'paused'].includes(report.status);
   const failed = ['failed', 'interrupted'].includes(report.status) || campaign.phase === 'campaign_error';
   const finished = ['complete', 'pilot_complete'].includes(report.status);
@@ -84,7 +95,16 @@ function renderCampaign(data) {
   $('campaign-notice').hidden = available && !failed;
   $('campaign-notice').textContent = !available
     ? 'El informe de esta campaña todavía no está disponible. No se sustituyen sus resultados por los de otro entrenamiento.'
-    : report.error || campaign.reason || 'La campaña está interrumpida; se conservan las evaluaciones completadas.';
+    : `Campaña de comparación detenida: ${report.error || campaign.reason || 'se conservan las evaluaciones completadas.'}`;
+  const activities = [report.learning_probe, report.diagnostics].filter(a => a?.available);
+  const activity = activities.find(a => a.status === 'running') || activities[0];
+  if (activity && terminal) {
+    const label = activity === report.learning_probe ? 'Ensayo de aprendizaje' : 'Diagnóstico con pesos congelados';
+    const stale = activity.status === 'running' && activity.age_seconds > 120;
+    $('campaign-connection').textContent = `${label} · ${activity.status === 'complete' ? 'terminado' : activity.status === 'failed' ? 'error' : stale ? 'sin datos recientes' : 'en curso'}`;
+    $('campaign-connection').className = stale || activity.status === 'failed' ? 'warn' : '';
+    $('campaign-freshness').textContent = `Último registro de esta actividad hace ${fmt(activity.age_seconds)} s · consulta cada 2 s`;
+  }
   $('campaign-current').textContent = terminal ? (finished ? 'Terminada' : report.status === 'paused' ? 'Pausada' : 'Detenida') : title(p.variant);
   $('campaign-stage').textContent = p.variant ? `Semilla ${fmt(p.seed)} · ${stages[p.stage] || p.stage || 'Esperando'} · ${fmt(p.actions)} / ${fmt(p.total_actions ?? config.actions)} acciones` : 'Esperando progreso';
   const variants = config.variants || [], seeds = config.seeds || [];
@@ -162,6 +182,56 @@ function renderDiagnostics(diagnostic) {
         cell(pct(r.distinct_wrong?.delta_error)), cell(fmt(r.distinct_pairs)));
       actions.append(tr);
     }
+  }
+}
+function renderLearningProbe(probe) {
+  $('learning-probe').hidden = !probe?.available;
+  const table = $('probe-coverage'); table.replaceChildren();
+  for (const horizon of [1, 2]) {
+    const host = $(`probe-chart-${horizon}`); host.replaceChildren();
+    if (!probe?.available) continue;
+    const series = (probe.results || []).flatMap((row, index) => ['fit', 'development'].map((split, branch) => ({
+      label: `${title(row.variant)} · ${split === 'fit' ? 'Datos entrenados' : 'Partidas nuevas'}`,
+      color: ['#77d8c4', '#f7bd76', '#b4a5ff', '#7cceff'][index * 2 + branch],
+      points: row.points.filter(p => finite(p[`${split}_${horizon}`])).map(p => [p.updates, p[`${split}_${horizon}`] * 100])
+    }))).filter(s => s.points.length);
+    if (!series.length) { host.textContent = 'Esperando la primera evaluación…'; continue; }
+    const max = Math.max(1, ...series.flatMap(s => s.points.map(p => p[0])));
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 540 245'); svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', `Error visual a ${horizon} pasos. Eje horizontal: actualizaciones; vertical: 0 a 100 por ciento.`);
+    const add = (tag, attrs, text) => {
+      const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+      for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+      if (text !== undefined) node.textContent = text;
+      svg.append(node);
+    };
+    for (const percent of [0, 25, 50, 75, 100]) {
+      const y = 215 - percent * 2;
+      add('line', {x1: 42, y1: y, x2: 525, y2: y, stroke: '#34413f'});
+      add('text', {x: 0, y: y + 4, fill: '#9bb0ac', 'font-size': 12}, `${percent}%`);
+    }
+    add('text', {x: 42, y: 240, fill: '#9bb0ac', 'font-size': 12}, '0');
+    add('text', {x: 525, y: 240, fill: '#9bb0ac', 'font-size': 12, 'text-anchor': 'end'}, `${fmt(max)} actualizaciones`);
+    for (const [index, s] of series.entries()) {
+      const coords = s.points.map(([x, y]) => [42 + x / max * 483, 215 - y * 2]);
+      add('polyline', {points: coords.map(p => p.join(',')).join(' '), fill: 'none', stroke: s.color, 'stroke-width': 2});
+      for (const [x, y] of coords) add('circle', {cx: x, cy: y, r: 3, fill: s.color});
+      const legend = document.createElement('p');
+      legend.textContent = `${s.label}: ${fmt(s.points.at(-1)[1], 2)} %`;
+      legend.className = `probe-legend-${index}`; host.append(legend);
+    }
+    host.append(svg);
+  }
+  if (!probe?.available) return;
+  const p = probe.progress || {};
+  const phase = {collection: 'Recogiendo datos', loading: 'Preparando / compilando', training: 'Entrenando predictor',
+    evaluation: p.split === 'fit' ? 'Midiendo datos entrenados' : 'Midiendo partidas nuevas', complete: 'Terminado'}[p.phase] || p.phase;
+  $('probe-status').textContent = probe.status === 'failed' ? `Error: ${probe.error}` : `${title(p.variant)} · ${phase} · ${fmt(p.updates)} / ${fmt(p.total_updates)} actualizaciones`;
+  for (const r of probe.coverage?.per_pair || []) {
+    const tr = document.createElement('tr');
+    tr.append(cell(`${r.game} / ${fmt(r.level)}`), ...['episodes', 'actions', 'successes', 'failures', 'budget_ends'].map(k => cell(fmt(r[k]))));
+    table.append(tr);
   }
 }
 async function pollCampaign() {

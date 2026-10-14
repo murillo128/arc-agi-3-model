@@ -51,6 +51,22 @@ def engine(**changes):
 
 
 class CampaignWorldTests(unittest.TestCase):
+    def test_head_calibration_keeps_early_successes_after_replay_eviction(self):
+        class EarlySuccesses(SyntheticFixture):
+            def make(self, seed, level):
+                self.native_progress = len(self.calls) < 2
+                return super().make(seed, level)
+        model = engine(replay_episodes=1)
+        with redirect_stdout(io.StringIO()):
+            records, report = train_world(model, {'a': EarlySuccesses(steps=2)}, [('a', 1)], 12, 0, 'world_reference')
+        self.assertEqual(sum(r.event == 1 for r in records), 2)
+        self.assertEqual(len(records), 12)
+        self.assertEqual(report['calibration']['episodes'], 6)
+        self.assertEqual(report['calibration']['successes'], 2)
+        self.assertEqual(report['calibration']['failures'], 4)
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(MemoryError, 'calibration'):
+            train_world(engine(), {'a': SyntheticFixture()}, [('a', 1)], 3, 0, 'world_reference', calibration_bytes=1)
+
     def test_staged_schedule_reports_actual_joint_and_frozen_updates(self):
         model = engine(representation_joint_steps=4, auto_representation=False,
                        freeze_representation=False, train_every=1)

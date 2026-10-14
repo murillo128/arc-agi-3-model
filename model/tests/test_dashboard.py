@@ -294,6 +294,34 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot['phase'], 'campaign_paused')
         self.assertEqual(snapshot['progress']['stage'], 'paused')
 
+    def test_learning_probe_exposes_bounded_curves_and_refreshes_without_campaign_changes(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'failed', 'cells': []}))
+        monitor = CampaignMonitor(self.path, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['learning_probe']['available'])
+        probe_path = path.parent / 'learning-probe' / 'report.json'
+        probe_path.parent.mkdir()
+        probe = {'status': 'running', 'progress': {'updates': 20},
+                 'coverage': {'episodes': 2, 'per_pair': [{'game': 'sc01-v1', 'level': 1, 'successes': 0}]},
+                 'results': [{'variant': 'visual_2step', 'private_path': '/not/public', 'points': [
+                     {'updates': i, 'fit': {'rollouts': {'1': {'samples': 3, 'readouts': {
+                         'contextual': {'prediction_delta_error': 0}}}}}, 'private_trace': ['secret']}
+                     for i in range(205)]}]}
+        probe_path.write_text(json.dumps(probe))
+        row = monitor.snapshot()['report']['learning_probe']
+        self.assertEqual(row['progress']['updates'], 20)
+        self.assertEqual(len(row['results'][0]['points']), 200)
+        self.assertEqual(row['results'][0]['points'][-1]['fit_1'], 0)
+        self.assertIsNone(row['results'][0]['points'][-1]['development_2'])
+        self.assertNotIn('private_trace', row['results'][0]['points'][-1])
+        self.assertNotIn('private_path', row['results'][0])
+        self.assertEqual(row['coverage']['per_pair'][0]['successes'], 0)
+        probe['progress']['updates'] = 40
+        probe_path.write_text(json.dumps(probe))
+        self.assertEqual(monitor.snapshot()['report']['learning_probe']['progress']['updates'], 40)
+        probe_path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['learning_probe']['available'])
+
     def test_campaign_report_refresh_retention_and_read_only_summary(self):
         path = self.path.with_name('report.json')
         monitor = CampaignMonitor(self.path, max_points=2, report_path=path)
@@ -304,7 +332,9 @@ class DashboardTests(unittest.TestCase):
             'cells': [{'variant': 'world_reference', 'seed': 0,
                 'world': {'delta_error': .2, 'per_pair': [{'private_trace': 'not exposed'}]},
                 'behavior': {'win_rate': .5, 'wins': 2, 'episodes': 4, 'results': ['not exposed']},
-                'training': {'actions': 100, 'per_pair': ['not exposed']}}]}
+                'training': {'actions': 100, 'per_pair': ['not exposed'], 'calibration': {
+                    'episodes': 6, 'positive_records': 2, 'private_trace': ['not exposed'],
+                    'per_pair': [{'game': 'sc01-v1', 'level': 1, 'successes': 1, 'failures': 5}]}}}]}
         path.write_text(json.dumps(report))
         original = path.read_bytes()
         snapshot = monitor.snapshot()['report']
@@ -312,6 +342,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot['cells'][0]['behavior']['win_rate'], .5)
         self.assertNotIn('results', snapshot['cells'][0]['behavior'])
         self.assertNotIn('per_pair', snapshot['cells'][0]['world'])
+        self.assertEqual(snapshot['calibration'][0]['positive_records'], 2)
+        self.assertEqual(snapshot['calibration'][0]['per_pair'][0]['successes'], 1)
+        self.assertNotIn('private_trace', snapshot['calibration'][0])
         self.assertEqual(path.read_bytes(), original)
         for action in range(5):
             self.append({'event': 'campaign_progress', 'variant': 'rollout2', 'seed': 1, 'actions': action})
