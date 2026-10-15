@@ -33,6 +33,9 @@ article { background: #172122; border: 1px solid #2b3837; border-radius: 12px; }
 .metrics strong { display: block; font-size: clamp(23px, 2.5vw, 32px); font-weight: 600; letter-spacing: -.04em; font-variant-numeric: tabular-nums; margin-bottom: 8px; }
 .metrics small { display: block; font-size: 11px; line-height: 1.5; }
 .toolbar { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin: 34px 0 16px; }
+.plot-toolbar { margin-top: 20px; }
+.plot-toolbar label { min-width: 220px; }
+.plot-toolbar p { margin: 0; max-width: 880px; line-height: 1.6; }
 .controls { display: flex; flex-wrap: wrap; gap: 12px; }
 label { color: #a8bbb5; font-size: 11px; display: grid; gap: 6px; }
 select { background: #172122; color: #e7efec; border: 1px solid #3c504a; border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 12px; }

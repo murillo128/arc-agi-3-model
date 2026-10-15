@@ -143,6 +143,16 @@ de cierre de su partida, cuando se publican. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
 
+El selector común permite ver desde el principio o las últimas 1.024, 4.096
+(por defecto), 16.384 o 65.536 acciones. Comparte el intervalo del eje horizontal
+entre gráficas, filtra las evaluaciones y los resúmenes de subobjetivos, y mantiene
+en directo los contadores generales y el estado del currículo. Las medias móviles
+se calculan antes de recortar lo visible: cambiar la ventana no cambia sus valores.
+Se indica el primer dato disponible de cada grupo. El selector no recupera datos
+descartados: los deltas y pérdidas conservan 4.096 acciones, los subobjetivos las
+últimas 2.000 partidas y las evaluaciones toda la ejecución. La elección se conserva
+durante el refresco automático y al cambiar de pestaña.
+
 El panel del predictor muestra cada dos segundos una muestra aleatoria de las
 últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,
 delta real y delta predicho. La reconstrucción decodifica el latente de esa misma

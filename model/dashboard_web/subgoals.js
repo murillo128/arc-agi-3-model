@@ -7,6 +7,17 @@ const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
 const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
 const namespace = 'http://www.w3.org/2000/svg';
+let selectedWindow='4096', chartRange=null;
+function visibleAction(action) {
+  return finite(action)&&(!chartRange||(action<=chartRange.end&&
+    (chartRange.start===0?action>=0:action>chartRange.start)));
+}
+function actionRange(report) {
+  let end=finite(report.progress?.actions)?report.progress.actions:0;
+  for(const [rows,key] of [[report.curves,'actions'],[report.episodes,'end_action'],[report.evaluations,'actions']])
+    for(const row of rows||[])if(finite(row[key]))end=Math.max(end,row[key]);
+  return {start:selectedWindow==='all'?0:Math.max(0,end-Number(selectedWindow)),end};
+}
 function gpuStatus(sample) {
   const devices=sample?.devices||[], status=$('gpu-status');
   status.textContent=devices.length ? devices.map(gpu=>
@@ -22,6 +33,12 @@ function element(tag, attributes={}, text='') {
   node.textContent=text; return node;
 }
 function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, empty='Pendiente de datos de esta ejecución'}={}) {
+  const recorded=series.some(s=>s.points.some(p=>finite(p[0])&&finite(p[1])))||markers.length>0;
+  // Compute rolling statistics before clipping, so changing the display window
+  // never changes a measured value or truncates its 512-action context.
+  series=series.map(s=>({...s,points:s.points.filter(p=>visibleAction(p[0]))}));
+  if(chartRange)markers=markers.filter(m=>m.end>chartRange.start&&m.start<=chartRange.end)
+    .map(m=>({...m,start:Math.max(m.start,chartRange.start),end:Math.min(m.end,chartRange.end)}));
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
   const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
   svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
@@ -47,9 +64,9 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     span.className=`threshold-label series-${ref.colorIndex??3}`;legend.append(span);
   }
   const points=series.flatMap(s=>s.points).filter(p=>finite(p[0])&&finite(p[1]));
-  if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
+  if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},recorded?'Sin mediciones en la ventana seleccionada':empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
-  const minX=Math.min(...times), maxX=Math.max(minX+1,...times);
+  const minX=chartRange?chartRange.start:Math.min(...times), maxX=chartRange?Math.max(minX+1,chartRange.end):Math.max(minX+1,...times);
   const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+1,...points.map(p=>p[1]),...references.map(r=>r.value));
   const x=v=>58+(v-minX)/(maxX-minX)*(width-80), y=v=>height-40-(v-minY)/(maxY-minY)*(height-64);
   for(let i=0;i<=4;i++) {const v=minY+(maxY-minY)*i/4;
@@ -172,6 +189,12 @@ function fixedEvaluations(report) {
 let displayedReport;
 function render(report) {
   displayedReport=report;
+  chartRange=actionRange(report);
+  $('plot-window').value=selectedWindow;
+  const available=[[report.curves,'actions','deltas y pérdidas'],[report.episodes,'end_action','subobjetivos'],[report.evaluations,'actions','evaluaciones']]
+    .flatMap(([rows,key,name])=>{const first=rows?.find(r=>finite(r[key]));return first?[`${name} desde ${fmt(first[key])}`]:[];});
+  $('window-info').textContent=`Acciones ${fmt(chartRange.start)}–${fmt(chartRange.end)}. Medias móviles: 512 acciones. Estado y contadores generales en directo.`+
+    (available.length?` Datos disponibles: ${available.join(' · ')}.`:'');
   const p=report.progress||{}, c=report.config||{};
   const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',failed:'Detenido por error'};
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
@@ -200,7 +223,7 @@ function render(report) {
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
     : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
-  const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
+  const fixed=fixedEvaluations(report), last=fixed.points.filter(r=>visibleAction(r.actions)).at(-1);
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
   const qualityThresholds=[{name:'Reconstrucción',value:100*limits.representation_open,colorIndex:1},
     {name:'Predicción',value:100*limits.prediction_open,colorIndex:0},
@@ -209,14 +232,14 @@ function render(report) {
   plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
     {name:'Reconstrucción',points:qualityPoints('reconstruction')},
     {name:'Predicción · 3 pasos',points:qualityPoints('rollout')},
-    {name:'Deriva latente',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
+    {name:'Deriva latente',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>visibleAction(r.actions)&&r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
   $('quality-cadence').textContent=finite(c.evaluate_every)
     ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`:'';
-  $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
-    (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
+  $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Sin evaluación fija completa en esta ventana.')+
+    (fixed.pending&&visibleAction(fixed.pending.actions)&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
-  const measured=rows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
-  $('interaction-summary').textContent=rows.length?`Ventana reciente: acciones ${fmt(rows[0].actions)}–${fmt(rows.at(-1).actions)}. ${fmt(unchanged)} de ${fmt(measured.length)} acciones medidas sin cambios reales ni predichos.`:'Esperando acciones reales de esta ejecución.';
+  const visibleRows=rows.filter(r=>visibleAction(r.actions)), measured=visibleRows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
+  $('interaction-summary').textContent=visibleRows.length?`Datos visibles: acciones ${fmt(visibleRows[0].actions)}–${fmt(visibleRows.at(-1).actions)}. ${fmt(unchanged)} de ${fmt(measured.length)} acciones medidas sin cambios reales ni predichos.`:'Sin acciones registradas en esta ventana.';
   plot('delta',[{name:'Media móvil · hasta 512 acciones',points:t.map(r=>[r.x,r.error])},
     {name:'Bloque de 32 acciones',muted:true,points:b.map(r=>[r.x,r.error])}],
     {percent:true,markers:b.filter(r=>r.noChange).map(r=>({start:r.start,end:r.x}))});
@@ -234,8 +257,9 @@ function render(report) {
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
-  $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
-  $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
+  const visibleEpisodes=episodes.filter(e=>visibleAction(e.end_action)), visibleGoals=goals.filter(g=>visibleAction(g.x));
+  $('episodes').textContent=fmt(visibleEpisodes.length);$('successes').textContent=`${fmt(visibleEpisodes.filter(e=>e.success).length)} niveles resueltos · ventana seleccionada`;
+  $('subgoals').textContent=`${fmt(visibleGoals.filter(g=>g.success).length)} / ${fmt(visibleGoals.length)}`;$('goal-label').textContent=p.goal||'';
   picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
   const efficiency=[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
   plot('efficiency',[
@@ -245,9 +269,16 @@ function render(report) {
   const rewards=goals.map(g=>[g.x,g.reward]);
   plot('reward',[{name:'Media por subobjetivo · hasta 512 acciones',points:movingAverage(rewards)},
     {name:'Reward individual',points:rewards,muted:true}]);
-  const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
+  const evaluations=(report.evaluations||[]).filter(r=>visibleAction(r.actions));$('evaluation-empty').hidden=!!evaluations.length;
+  $('evaluation-empty').textContent='Sin evaluaciones registradas en esta ventana.';
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));
 }
+$('plot-window').addEventListener('change',()=>{
+  const value=$('plot-window').value;
+  if(!['all','1024','4096','16384','65536'].includes(value))return;
+  selectedWindow=value;
+  if(displayedReport)render(displayedReport);
+});
 const tabs=['world','curriculum','path','evaluation'];
 for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
