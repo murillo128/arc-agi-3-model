@@ -303,7 +303,8 @@ class GenerationTests(unittest.TestCase):
             signatures = []
             for level in range(1,7):
                 p = make_puzzle(game,42,level)
-                signatures.append(tuple(getattr(p, f, None) for f in fields))
+                signatures.append(tuple(p.patterns[0].bit_count() if f=='weight'
+                                        else getattr(p,f) for f in fields))
             with self.subTest(game=game):
                 self.assertEqual(len(set(signatures)),6,(game,signatures))
 
