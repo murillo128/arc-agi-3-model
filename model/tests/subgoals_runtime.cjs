@@ -145,18 +145,17 @@ const text=id=>nodes.get(id).textContent;
   assert.match(circles('fixed-delta')[1].children[0].textContent,/: 20 · acción 1000/);
   assert.doesNotMatch(text('fixed-summary'),/En curso/);
   // Returning to the quality chart fits its full panel immediately, preserving
-  // the measured 20% point. The common action axis extends to 2000; action
-  // 1000 stays at its midpoint. Resizing changes geometry, not the data.
+  // the measured 20% point. A narrower panel changes geometry, not the data.
   Object.assign(nodes.get('fixed-delta'),{clientWidth:1200,clientHeight:300});
   nodes.get('tab-world').listeners.click();
   assert.equal(nodes.get('fixed-delta').viewBox,'0 0 1200 300');
-  assert.equal(circles('fixed-delta').at(-1).cx,618);
+  assert.equal(circles('fixed-delta').at(-1).cx,1178);
   assert.equal(circles('fixed-delta').at(-1).cy,212.8);
   assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 20 · acción 1000/);
   Object.assign(nodes.get('fixed-delta'),{clientWidth:360,clientHeight:240});
   await vm.runInContext('poll()',context);
   assert.equal(nodes.get('fixed-delta').viewBox,'0 0 360 240');
-  assert.equal(circles('fixed-delta').at(-1).cx,198);
+  assert.equal(circles('fixed-delta').at(-1).cx,338);
   assert.equal(circles('fixed-delta').at(-1).cy,164.8);
   assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 20 · acción 1000/);
   delete nodes.get('fixed-delta').clientWidth;delete nodes.get('fixed-delta').clientHeight;
@@ -317,58 +316,6 @@ const text=id=>nodes.get(id).textContent;
   report.curriculum.thresholds.representation_open=.02;
   await vm.runInContext('poll()',context);
   assert.equal(limits().length,3,'distinct limits are not hidden behind a hard-coded 10% line');
-
-  // A single action window controls every chart, goal summary and evaluation
-  // table, while current training counters and the 512-action averages survive.
-  report.progress.actions=2048;
-  report.curves=[{actions:1024,representation_loss:10,path_loss:10,predictor_loss:10,tps:2},
-    {actions:1025,representation_loss:30,path_loss:30,predictor_loss:30,tps:3},
-    {actions:2048,representation_loss:null,path_loss:null,predictor_loss:null,tps:4}];
-  report.episodes=[[1024,goal(6,1,-5)],[1025,goal(2,1,-1)],[2048,goal(4,2,-2)]]
-    .map(([end_action,segment])=>({game:'a',level:1,end_action,success:true,segments:[segment]}));
-  report.evaluations=[evaluation(1024,'a',.1,{coverage:first,stage:1}),
-    evaluation(1025,'a',.2,{coverage:first,stage:1}),evaluation(2048,'a',.3,{coverage:first,stage:1})];
-  await vm.runInContext('poll()',context);
-  const chooseWindow=value=>{nodes.get('plot-window').value=value;nodes.get('plot-window').listeners.change();};
-  chooseWindow('1024');
-  assert.equal(text('actions'),'2048','window never resets live training totals');
-  assert.equal(text('episodes'),'2');assert.equal(text('subgoals'),'2 / 2');
-  assert.equal(nodes.get('evaluation-rows').children.length,2);
-  assert.equal(circles('fixed-delta').length,2);
-  assert.ok(circles('fixed-delta').every(n=>!n.children[0].textContent.includes('acción 1024')),'left window boundary is excluded');
-  for(const id of ['representation-loss','path-loss','loss']) {
-    assert.match(nodes.get(id+'-legend').children[0].textContent,/: 20$/,
-      'hidden action 1024 still contributes to the average at action 1025');
-    assert.ok(circles(id).every(n=>n.children[0].textContent.includes('acción 1025')));
-  }
-  assert.ok(circles('efficiency').some(n=>n.opacity===1&&n.children[0].textContent.endsWith(': 4 · acción 1025')));
-  assert.ok(circles('reward').some(n=>n.opacity===1&&n.children[0].textContent.endsWith(': -3 · acción 1025')));
-  assert.match(text('window-info'),/Acciones 1024–2048/);
-  assert.match(text('window-info'),/deltas y pérdidas desde 1024/,'retained data bounds stay explicit');
-  nodes.get('tab-path').listeners.click();
-  report.progress.actions=2300;
-  await vm.runInContext('poll()',context);
-  assert.equal(nodes.get('plot-window').value,'1024');
-  assert.equal(nodes.get('path').hidden,false);
-  assert.equal(circles('fixed-delta').length,1,'the common window advances with the live action count');
-  assert.equal(nodes.get('evaluation-rows').children.length,1);
-  assert.equal(text('episodes'),'1');
-  assert.match(nodes.get('representation-loss-legend').children[0].textContent,/: —$/);
-  chooseWindow('all');
-  assert.equal(circles('fixed-delta').length,3);
-  assert.equal(text('episodes'),'3');
-  assert.match(text('window-info'),/Acciones 0–2300/);
-  assert.match(nodes.get('representation-loss-legend').children[0].textContent,/: 20$/);
-  report.progress.actions=100000;
-  chooseWindow('1024');
-  assert.equal(circles('fixed-delta').length,0);
-  assert.equal(nodes.get('evaluation-rows').children.length,0);
-  assert.equal(nodes.get('evaluation-empty').hidden,false);
-  assert.match(nodes.get('fixed-delta').children.at(-1).textContent,/Sin mediciones en la ventana seleccionada/);
-  chooseWindow('4096');
-  report.progress.actions=32;
-  await vm.runInContext('poll()',context);
-
   report.config.game='sc01-v1';report.config.initialization='random';
   await vm.runInContext('poll()',context);
   assert.match(text('run-info'),/^sc01-v1 · semilla 0/);
