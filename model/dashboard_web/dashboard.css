@@ -44,8 +44,9 @@ h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
 h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margin-top: 2px; }
 .chart-card p, .details p { color: #9aadaa; font-size: 12px; line-height: 1.6; margin-bottom: 16px; }
 .chart-card p { min-height: 38px; }
-.legend { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px; min-height: 28px; }
+.legend { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px; min-height: 28px; font-variant-numeric: tabular-nums; }
 .legend span::before { content: '━'; font-weight: bold; margin-right: 6px; }
+.legend .threshold-label::before { content: ''; display: inline-block; width: 14px; border-top: 1px dashed; vertical-align: middle; }
 .series-0 { color: #77dabb; } .series-1 { color: #f4b979; } .series-2 { color: #a9a6ef; } .series-3 { color: #94a7aa; }
 .subgoal-dashboard svg { display: block; width: 100%; height: auto; }
 .subgoal-dashboard canvas.goal-image { width: 256px; max-width: 100%; height: auto; image-rendering: pixelated; }
@@ -72,6 +73,7 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .quality-meta { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 8px; }
 .quality-meta .legend { min-height: 0; }
 .quality-meta #fixed-summary { min-height: 0; margin: 0; font-size: 11px; }
+.fixed-evaluation #quality-cadence { min-height: 0; margin: 0 0 8px; font-size: 11px; }
 .chart-help { position: relative; flex: 0 0 auto; }
 .chart-help summary { display: grid; place-items: center; list-style: none; width: 24px; height: 24px; border: 1px solid #3c504a; border-radius: 50%; color: #a8bbb5; font-size: 13px; cursor: pointer; }
 .chart-help summary::-webkit-details-marker { display: none; }

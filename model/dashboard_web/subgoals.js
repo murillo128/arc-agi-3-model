@@ -21,24 +21,49 @@ function element(tag, attributes={}, text='') {
   for (const [k,v] of Object.entries(attributes)) node.setAttribute(k, v);
   node.textContent=text; return node;
 }
-function plot(id, series, {markers=[], percent=false, responsive=false, empty='Pendiente de datos de esta ejecución'}={}) {
+function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, empty='Pendiente de datos de esta ejecución'}={}) {
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
   const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
   svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
+  const suffix=unit?` ${unit}`:percent?' %':'';
+  series.forEach((s,i)=>{
+    if(s.legend===false)return;
+    const last=s.points.findLast(p=>finite(p[0])&&finite(p[1]));
+    const span=document.createElement('span');
+    span.textContent=`${s.name}: ${last?fmt(last[1],2)+suffix:'—'}`;
+    span.title=last?`Último dato medido · acción ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'Sin mediciones';
+    span.className=s.muted?'series-muted':`series-${s.colorIndex??i%4}`;legend.append(span);
+  });
+  // Coincident limits share one line and label, rather than hiding each other.
+  const byValue=new Map();
+  for(const threshold of thresholds.filter(t=>finite(t.value))) {
+    const previous=byValue.get(threshold.value);
+    if(previous){previous.name+=` / ${threshold.name}`;previous.colorIndex=3;}
+    else byValue.set(threshold.value,{...threshold});
+  }
+  const references=[...byValue.values()];
+  for(const ref of references) {
+    const span=document.createElement('span');span.textContent=`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`;
+    span.className=`threshold-label series-${ref.colorIndex??3}`;legend.append(span);
+  }
   const points=series.flatMap(s=>s.points).filter(p=>finite(p[0])&&finite(p[1]));
   if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
   const minX=Math.min(...times), maxX=Math.max(minX+1,...times);
-  const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+1,...points.map(p=>p[1]));
+  const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+1,...points.map(p=>p[1]),...references.map(r=>r.value));
   const x=v=>58+(v-minX)/(maxX-minX)*(width-80), y=v=>height-40-(v-minY)/(maxY-minY)*(height-64);
   for(let i=0;i<=4;i++) {const v=minY+(maxY-minY)*i/4;
     svg.append(element('line',{x1:58,y1:y(v),x2:width-22,y2:y(v),stroke:'#2a3835'}));
     svg.append(element('text',{x:50,y:y(v)+4,fill:'#94a7aa','font-size':11,'text-anchor':'end'},fmt(v,2)));
     const a=minX+(maxX-minX)*i/4;svg.append(element('text',{x:x(a),y:height-14,fill:'#94a7aa','font-size':11,'text-anchor':'middle'},fmt(a)));
   }
+  for(const ref of references) {
+    const line=element('line',{x1:58,y1:y(ref.value),x2:width-22,y2:y(ref.value),
+      stroke:colors[ref.colorIndex??3],'stroke-width':1,'stroke-dasharray':'2 4',opacity:.75});
+    line.append(element('title',{},`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`));svg.append(line);
+  }
   series.forEach((s,i)=>{
     const colorIndex=s.colorIndex??i%4;
-    if(s.legend!==false) {const span=document.createElement('span');span.textContent=s.name;span.className=s.muted?'series-muted':`series-${colorIndex}`;legend.append(span);}
     const color=s.muted?'#94a7aa':colors[colorIndex], opacity=s.faint ? .2 : s.muted ? .45 : 1;
     let segment=[];
     const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
@@ -166,12 +191,17 @@ function render(report) {
     : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
+  const qualityThresholds=[{name:'Reconstrucción',value:100*limits.representation_open,colorIndex:1},
+    {name:'Predicción',value:100*limits.prediction_open,colorIndex:0},
+    {name:'Deriva',value:100*limits.latent_drift,colorIndex:3}];
   // Relative latent drift can exceed 100%; allow this chart to expand its axis.
   plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
     {name:'Reconstrucción',points:qualityPoints('reconstruction')},
     {name:'Predicción · 3 pasos',points:qualityPoints('rollout')},
-    {name:'Deriva latente',points:qualityPoints('drift')}],{percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
-  $('fixed-summary').textContent=(last?`Última completa: ${fmt(last.error,2)} % · acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
+    {name:'Deriva latente',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
+  $('quality-cadence').textContent=finite(c.evaluate_every)
+    ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`:'';
+  $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
     (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
   const measured=rows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
@@ -184,16 +214,16 @@ function render(report) {
       points:b.map(r=>[r.x,r.rates[key],'px/acción · bloque de 32'])})),
     ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,
       points:t.map(r=>[r.x,r.rates[key],'px/acción · media móvil de hasta 512 acciones'])}))
-  ]);
+  ],{unit:'px/acción'});
   plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.loss])},
     {...series('Actualización individual','predictor_loss'),muted:true}]);
   plot('representation-loss',[series('Representación','representation_loss')]);
-  plot('speed',[series('Acciones/s','tps')]);plot('path-loss',[series('Coste restante','path_loss')]);
+  plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});plot('path-loss',[series('Coste restante','path_loss')]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
   $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
   picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
-  plot('efficiency',[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key])=>({name,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])})));
+  plot('efficiency',[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key])=>({name,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])})),{unit:'acciones'});
   plot('reward',[{name:'Reward real',points:goals.map(g=>[g.x,g.reward])}]);
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));

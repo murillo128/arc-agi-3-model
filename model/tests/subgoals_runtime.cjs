@@ -36,6 +36,10 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('world-updates'),'1');
   assert.equal(text('path-updates'),'0');
   assert.equal(text('tps'),'2');
+  assert.equal(nodes.get('speed-legend').children[0].textContent,'Acciones/s: 2 acciones/s');
+  assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Coste restante: 0');
+  assert.equal(nodes.get('loss-legend').children[1].textContent,'Actualización individual: 2');
+  assert.match(nodes.get('loss-legend').children[1].title,/acción 1$/,'missing latest sample does not fabricate a zero');
   assert.equal(text('gpu-status'),'GPU · 73 % de uso · 71 °C');
   assert.match(nodes.get('gpu-status').title,/Test GPU/);
   gpu={devices:[{index:0,name:'Test GPU',utilization_percent:0,temperature_c:null},
@@ -236,6 +240,34 @@ const text=id=>nodes.get(id).textContent;
   const qualityLines=nodes.get('fixed-delta').children.filter(n=>n.stroke==='#77dabb'&&typeof n.points==='string');
   assert.deepEqual(qualityLines.map(n=>n.points.split(' ').length),[2,1]);
   assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 40 · acción 200/);
+  // Live configured limits are thin dotted references; coincident limits merge.
+  report.config.evaluate_every=256;
+  Object.assign(report.curriculum.thresholds,{representation_open:.1,prediction_open:.1,latent_drift:.15});
+  report.evaluations=[evaluation(256,'a',.2,{coverage:first,stage:1,
+      quality:{reconstruction_error:.01,rollout_error:.3,latent_drift:.12}}),
+    evaluation(512,'a',.1,{coverage:first,stage:1,
+      quality:{reconstruction_error:0,rollout_error:.2,latent_drift:null}}),
+    evaluation(768,'a',.05,{coverage:first,stage:1,
+      quality:{reconstruction_error:0,rollout_error:.07,latent_drift:.11}})];
+  await vm.runInContext('poll()',context);
+  const labels=()=>nodes.get('fixed-delta-legend').children.map(n=>n.textContent);
+  assert.deepEqual(labels(),['Predicción · 1 paso: 5 %','Reconstrucción: 0 %',
+    'Predicción · 3 pasos: 7 %','Deriva latente: 11 %',
+    'Límite · Reconstrucción / Predicción: 10 %','Límite · Deriva: 15 %']);
+  const limits=()=>nodes.get('fixed-delta').children.filter(n=>n['stroke-dasharray']);
+  assert.deepEqual(limits().map(n=>n.y1),[218.4,207.6]);
+  assert.ok(limits().every(n=>n.y1===n.y2&&n['stroke-width']===1&&n['stroke-dasharray']==='2 4'));
+  assert.match(text('quality-cadence'),/Calidad, deriva y activaciones cada 256 acciones/);
+  const driftLines=()=>nodes.get('fixed-delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string');
+  assert.deepEqual(driftLines().map(n=>n.points.split(' ').length),[1,1],'missing drift measurements leave a gap');
+  report.evaluations.pop();
+  await vm.runInContext('poll()',context);
+  assert.equal(labels()[0],'Predicción · 1 paso: 10 %');
+  assert.equal(labels()[3],'Deriva latente: 12 %');
+  assert.match(nodes.get('fixed-delta-legend').children[3].title,/acción 256/,'drift keeps the action of its actual measurement');
+  report.curriculum.thresholds.representation_open=.02;
+  await vm.runInContext('poll()',context);
+  assert.equal(limits().length,3,'distinct limits are not hidden behind a hard-coded 10% line');
   report.config.game='sc01-v1';report.config.initialization='random';
   await vm.runInContext('poll()',context);
   assert.match(text('run-info'),/^sc01-v1 · semilla 0/);
@@ -247,6 +279,7 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(circles('delta').length,0,'no points borrowed from a previous run');
   assert.equal(circles('fixed-delta').length,0,'fixed evaluations reset with the selected run');
+  assert.equal(labels()[0],'Predicción · 1 paso: —','empty series has no stale last value');
   assert.equal(nodes.get('evaluation-rows').children.length,0);
   offline=true;await vm.runInContext('poll()',context);
   assert.match(text('connection'),/Sin conexión.*offline/);

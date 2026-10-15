@@ -40,7 +40,8 @@ Para abrir un nivel nuevo se exige calidad de representación/predicción y ≥8
 de éxito del planner en **todos** los niveles ya abiertos de ese juego durante
 tres evaluaciones consecutivas. No basta una media global ni agotar un presupuesto.
 
-**Evaluación:** cada 1.024 acciones, ocho partidas por nivel desbloqueado, con
+**Evaluación:** cada 256 acciones (`--evaluate-every`), al terminar la partida,
+ocho partidas por nivel desbloqueado, con
 semillas fijas de desarrollo y pesos sin actualizar. La política aleatoria sirve
 para medir representación y predicción sobre las mismas situaciones. El planner
 se evalúa aparte una vez habilitado, con las mismas semillas y presupuesto de
@@ -52,6 +53,14 @@ cambiar píxeles, se admite una evaluación enteramente estática solo si incluy
 una terminación nativa observada; se decide por evidencia pública, no por el juego.
 El éxito del planner sigue siendo obligatorio para avanzar. La confirmación final utiliza
 otras semillas y no modifica permisos ni currículo.
+
+Calidad, deriva y activaciones usan la misma frecuencia. La deriva mide cambios
+entre estas evaluaciones: acortar el intervalo cambia el criterio de estabilidad,
+no solo la frecuencia del gráfico. Para cambiarlo al reanudar, se requiere
+`--resume --evaluate-every 256 --update-evaluation-interval`. Se conservan pesos,
+contadores y permisos ya abiertos, pero se reinician las rachas de comprobación.
+La primera evaluación reconstruye los anclajes; las siguientes pueden contar
+para las tres comprobaciones consecutivas. Cada fila registra su intervalo.
 
 **Subobjetivos desde el inicio:** los juegos generan la lista después de
 aleatorizarse. El agente recibe solamente la imagen/máscara del objetivo actual;
@@ -119,7 +128,11 @@ procesos; no se guardan históricos ni se modifica el entrenador. Si no hay lect
 se indica como no disponible, sin conservar un valor antiguo ni inventar un cero.
 Curvas fijas de reconstrucción
 y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
-al cambiar la cobertura del currículo. Las curvas de interacción conservan las
+al cambiar la cobertura del currículo. Cada leyenda muestra el último valor
+medido, con su acción en la ayuda. La gráfica de calidad marca los umbrales
+configurados con líneas finas punteadas; los límites coincidentes comparten línea.
+Son referencias: el avance requiere cumplir todos los criterios por nivel, no
+solo que una media cruce una línea. Las curvas de interacción conservan las
 últimas 4.096 acciones: bloques de 32 y tendencia de 512. El error suma errores y
 uniones de deltas; el desglose usa píxeles por acción medida. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios

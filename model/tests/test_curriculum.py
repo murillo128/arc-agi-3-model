@@ -246,6 +246,54 @@ class CurriculumTests(unittest.TestCase):
                 loaded = agent_checkpoint.load(root/'run/latest.pt')
                 self.assertEqual(loaded.config.mode,'path_mpc')
 
+    def test_resume_changes_evaluation_interval_without_losing_learning(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root/'source.pt',path_agent())
+            args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                    '--device','cpu','--steps','2','--evaluate-every','4',
+                    '--checkpoint-every','2','--evaluation-episodes','1']
+            main([*args,'--actions','4'])
+            saved = checkpoint.load(root/'run/latest.pt')
+            saved['training_progress']['curriculum']['levels'][0].update(
+                predictor=True, planner=True, representation_passes=3,
+                prediction_passes=2, promotion_passes=1)
+            checkpoint.write(root/'run/latest.pt',saved)
+            old = agent_checkpoint.load(root/'run/latest.pt')
+            expected = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
+            report_path = root/'run/report.json'
+            unchanged = report_path.read_bytes()
+            with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
+                main([*args,'--actions','8','--resume','--evaluate-every','2'])
+            self.assertIn('Cannot change evaluate_every',stderr.getvalue())
+            self.assertEqual(report_path.read_bytes(),unchanged)
+            snapshots = []
+            save = agent_checkpoint.save
+            def capture(path, agent, **kwargs):
+                progress = kwargs['training_progress']
+                if progress['actions'] == 4:
+                    self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)),expected)
+                    snapshots.append(progress)
+                return save(path,agent,**kwargs)
+            with patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture):
+                main([*args,'--actions','8','--resume','--evaluate-every','2','--update-evaluation-interval'])
+            self.assertEqual(len(snapshots),1)
+            permissions = snapshots[0]['curriculum']['levels'][0]
+            self.assertTrue(permissions['predictor'] and permissions['planner'])
+            self.assertEqual([permissions[k] for k in
+                              ('representation_passes','prediction_passes','promotion_passes')],[0,0,0])
+            report = json.loads(report_path.read_text())
+            checks = [r for r in report['evaluations'] if r['split']=='dev' and r['policy']=='random']
+            self.assertEqual([(r['actions'],r['evaluate_every']) for r in checks],[(0,4),(4,4),(6,2),(8,2)])
+            self.assertIsNone(checks[-2]['quality']['latent_drift'])
+            self.assertIsNotNone(checks[-1]['quality']['latent_drift'])
+            self.assertEqual(report['config']['evaluate_every'],2)
+            self.assertEqual(report['resumed_from']['evaluation_interval'],dict(old=4,new=2))
+            self.assertEqual(report['resumed_from']['actions'],4)
+            self.assertEqual(report['progress']['representation_updates'],8)
+            self.assertEqual(report['progress']['predictor_updates'],4)
+            self.assertGreater(report['progress']['path_updates'],0)
+
     def test_resume_uses_saved_weights_gates_counters_and_discards_unsaved_measurements(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
             root = Path(temp)

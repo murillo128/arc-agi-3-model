@@ -257,7 +257,9 @@ def main(argv=None):
     parser.add_argument('--actions', type=int, default=262144)
     parser.add_argument('--steps', type=int, default=128)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--evaluate-every', type=int, default=1024)
+    parser.add_argument('--evaluate-every', type=int, default=256)
+    parser.add_argument('--update-evaluation-interval', action='store_true',
+                        help='With --resume, explicitly change the evaluation interval and reset qualification streaks')
     parser.add_argument('--evaluation-episodes', type=int, default=8)
     parser.add_argument('--checkpoint-every', type=int, default=2048)
     parser.add_argument('--representation-error', type=float, default=.10)
@@ -276,6 +278,8 @@ def main(argv=None):
         parser.error('--update-representation-threshold requires --resume')
     if args.update_latent_drift_threshold and not args.resume:
         parser.error('--update-latent-drift-threshold requires --resume')
+    if args.update_evaluation_interval and not args.resume:
+        parser.error('--update-evaluation-interval requires --resume')
     if (min(args.actions, args.steps, args.evaluate_every, args.evaluation_episodes, args.checkpoint_every) < 1
             or args.steps > 128 or not 0 <= args.seed < 100
             or not 0 < args.learning_rate < 1 or not 0 < args.representation_learning_rate < 1):
@@ -297,7 +301,8 @@ def main(argv=None):
     # Keep each game's evaluation scenarios stable when campaign coverage changes.
     evaluation_pairs = [(g, n) for g, count in SYNTHETIC_LEVELS.items() for n in range(1, count + 1)]
     report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
-                     if k not in ('update_representation_threshold', 'update_latent_drift_threshold')}
+                     if k not in ('update_representation_threshold', 'update_latent_drift_threshold',
+                                  'update_evaluation_interval')}
     report_config['curriculum'] = asdict(gates)
     report_config['horizon'] = PathConfig().horizon
     report_config['initialization'] = 'random' if args.init_config else 'checkpoint'
@@ -321,6 +326,8 @@ def main(argv=None):
                     continue
                 if key == 'curriculum' and previous is not None:
                     previous = dict(previous, latent_drift=gates.latent_drift)
+            if key == 'evaluate_every' and args.update_evaluation_interval:
+                continue
             if key not in ('resume', 'actions', 'source', 'output') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
@@ -329,6 +336,12 @@ def main(argv=None):
         curriculum.restore(restored['curriculum'],
                            update_representation_threshold=args.update_representation_threshold,
                            update_latent_drift_threshold=args.update_latent_drift_threshold)
+        old_interval = report['config']['evaluate_every']
+        if old_interval != args.evaluate_every:
+            # The drift window has changed: retain learned permissions but
+            # require new consecutive evidence before another activation.
+            for state in curriculum.readiness.values():
+                state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if args.actions <= restored['actions']:
             parser.error('--actions must exceed the saved action counter')
         # Report publication can be ahead of the atomic weight snapshot.
@@ -347,6 +360,8 @@ def main(argv=None):
         old_drift = restored['curriculum']['thresholds']['latent_drift']
         if old_drift != gates.latent_drift:
             report['resumed_from']['latent_drift_threshold'] = dict(old=old_drift, new=gates.latent_drift)
+        if old_interval != args.evaluate_every:
+            report['resumed_from']['evaluation_interval'] = dict(old=old_interval, new=args.evaluate_every)
         report.pop('error', None)
         report.pop('prediction_sample', None)
     previews = PredictionSamples()
@@ -446,6 +461,7 @@ def main(argv=None):
                     else:
                         success = sum(r['success'] for r in summaries) / len(summaries)
                     report['evaluations'].append(dict(actions=actions, stage=curriculum.stage,
+                        evaluate_every=args.evaluate_every,
                         coverage=coverage, split=split, policy=mode, game=game, level=level,
                         episodes=len(summaries), successes=sum(r['success'] for r in summaries),
                         subgoals=sum(s['success'] for r in summaries for s in r['segments']),
@@ -476,7 +492,8 @@ def main(argv=None):
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates)
-        if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold):
+        if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
+                            or args.update_evaluation_interval):
             save()
         if not args.resume:
             save()
