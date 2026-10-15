@@ -95,6 +95,22 @@ class FoundationSDK(unittest.TestCase):
             self.assertEqual(full.levels_completed,0)
             np.testing.assert_array_equal(full.frame[-1],initial)
 
+    def test_clicking_known_downstream_switches_cannot_bypass_links(self):
+        env=self.make('bf02')
+        for _ in range(5):
+            for command in plan(env._game.puzzle): self.command(env,command)
+        p=env._game.puzzle
+        for command in (1,3,4):
+            self.command(env,command)
+            self.assertEqual(p.state,(False,)*5)
+            self.assertEqual(training_info(env)['last_transition']['outcome'],'blocked')
+        self.command(env,0); self.command(env,1); self.command(env,2)
+        self.command(env,4)
+        self.assertEqual(p.state,(True,True,True,False,False))
+        self.command(env,3); self.command(env,4)
+        self.assertEqual(env.observation_space.state,GameState.WIN)
+        self.assertEqual(p.steps,9)
+
     def test_memory_animation_and_simultaneous_tank_labels(self):
         env=self.make('bf08')
         for _ in range(2):

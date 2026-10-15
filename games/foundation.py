@@ -38,7 +38,7 @@ class Basic(Puzzle):
         # Appearance changes placement, not answer or logical ordering.
         ox, oy = self.offset
         xs = {1: (31,), 2: (18, 44), 3: (11, 31, 51)}[count]
-        return [(x+ox-1, 29+oy) for x in xs]
+        return [(x+ox-1, (29 if self.level%2 else 35)+oy) for x in xs]
 
 
 class MatchColor(Basic):
@@ -330,7 +330,7 @@ class Pair(Basic):
         w,h = self.size+7,self.size+10
         cols = 2 if self.n<3 else 3
         ox,oy=self.offset
-        return [(10+19*(i%cols)+ox,12+23*(i//cols)+oy,w,h) for i in range(2*self.n)]
+        return [(10+19*(i%cols)+ox,(12 if self.level%2 else 16)+23*(i//cols)+oy,w,h) for i in range(2*self.n)]
 
     def draw(self,c):
         for i,(x,y,w,h) in enumerate(self.button_rects()):

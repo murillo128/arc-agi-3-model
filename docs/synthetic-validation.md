@@ -164,7 +164,10 @@ outline originally touched its fill. A literal pixel-gap regression failed
 before the fix and passed after reducing the inner reflection footprint; the
 controlled solid and outlined reflection are now visually distinct at both size
 extremes. Browser fixture repair focused the actual directional button before
-keyboard input (the canvas is not focusable). Catalog assertions now identify
+keyboard input (the canvas is not focusable). Consolidation geometry initially coincided for some seeds (for example bf01
+seed 29 at L3/L4 and bf08 seed 11 at L1/L2). A regression failed before adding
+deliberate even-level placement changes and passed afterward; the pair/tile
+counts and rules stay the same. Catalog assertions now identify
 Originals by source instead of assuming group index 1, preserving source/privacy
 checks after adding the foundation group.
 

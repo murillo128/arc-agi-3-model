@@ -153,6 +153,8 @@ class FoundationInstances(unittest.TestCase):
                         self.assertEqual(p.state,original.state)
                         self.assertEqual(p.target,original.target)
                         self.assertEqual(p.get_subgoals(),original.get_subgoals())
+                        for command in range(len(p.commands)):
+                            self.assertEqual(p.transition(p.state,command),original.transition(original.state,command))
                         self.assertFalse(p.solved(p.state))
                         # Text glyph helpers are forbidden on these boards.
                         with patch.object(Canvas,'label',side_effect=AssertionError('letter')), \
@@ -199,6 +201,15 @@ class FoundationInstances(unittest.TestCase):
             self.assertTrue(p.state[0]==p.destination[0] or p.state[1]==p.destination[1])
             p=make_puzzle('bf03',seed,3)
             self.assertTrue(p.state[0]!=p.destination[0] and p.state[1]!=p.destination[1])
+
+    def test_consolidation_changes_layout_without_adding_rules(self):
+        for game in ('bf01','bf08'):
+            for seed in range(64):
+                for odd in (1,3,5):
+                    first=make_puzzle(game,seed,odd)
+                    second=make_puzzle(game,seed,odd+1)
+                    self.assertEqual(first.n,second.n)
+                    self.assertNotEqual(first.button_rects(),second.button_rects(),(game,seed,odd))
 
     def test_detached_labels_and_reproducible_reset_instance(self):
         for spec in FOUNDATION_SPECS:
