@@ -427,6 +427,11 @@ def main(argv=None):
         agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
         representation = OnlineRepresentation(engine, args.representation_learning_rate)
+        # A shared encoder must not resume distribution shaping when a later
+        # level is still in representation-only warmup. Restored permissions
+        # also restore this global phase without adding a checkpoint counter.
+        if any(state.predictor for state in curriculum.readiness.values()):
+            representation.sigreg_enabled = False
         world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
         factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
@@ -494,7 +499,9 @@ def main(argv=None):
                     publish(force=True)
                 if split == 'dev':
                     readiness.observe(quality, success, gates)
-                    publish(force=True)
+                    if readiness.predictor:
+                        representation.sigreg_enabled = False
+                    publish(force=True, sigreg_enabled=representation.sigreg_enabled)
             if split == 'dev':
                 promotions = curriculum.advance()
                 if promotions:
@@ -527,7 +534,7 @@ def main(argv=None):
                 save()
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
-                path_updates=path_learner.updates)
+                path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled)
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval):
             save('resume')
@@ -553,6 +560,8 @@ def main(argv=None):
                     error=row['delta_error'], path_loss=row['path_loss'],
                     predictor_loss=(row['predictor_loss'] or {}).get('total'),
                     representation_loss=(row['representation_loss'] or {}).get('total'),
+                    predictor_terms=(row['predictor_loss'] or {}).get('terms'),
+                    representation_terms=(row['representation_loss'] or {}).get('terms'),
                     representation_updates=representation.updates,
                     predictor_updates=world.updates, path_updates=path_learner.updates,
                     counts=row['counts'], tps=(actions - process_start_actions - 1) / seconds if seconds else None)

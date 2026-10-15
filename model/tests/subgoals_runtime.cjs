@@ -215,6 +215,32 @@ const text=id=>nodes.get(id).textContent;
     assert.match(nodes.get(id+'-legend').children[0].textContent,/: —$/);
   }
 
+  // Loss contributions are already weighted. Display zeros, omit uncomputed
+  // terms and clear old values when selecting a fresh run with no updates.
+  report.curves=[{actions:3,representation_terms:{color_ce:1,delta_nll:2,delta_overlap:0,local_reconstruction:1.5},
+    predictor_terms:{latent:.25,delta_nll:2,delta_overlap:.5}},
+    {actions:4,representation_terms:null,predictor_terms:null}];
+  await vm.runInContext('poll()',context);
+  assert.deepEqual(nodes.get('representation-loss-terms').children.map(n=>n.textContent),
+    ['Color: 1','Delta visual: 2','Unión del delta: 0','Reconstrucción local: 1,5']);
+  assert.deepEqual(nodes.get('loss-terms').children.map(n=>n.textContent),
+    ['Delta latente: 0,25','Delta visual: 2','Unión del delta: 0,5']);
+  assert.match(nodes.get('loss-terms').children[0].title,/acción 3$/);
+  report.progress.sigreg_enabled=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('representation-regularization'),'SIGReg activo · fase inicial de representación');
+  report.progress.sigreg_enabled=false;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('representation-regularization'),'SIGReg desactivado · reconstrucción continúa');
+  delete report.progress.sigreg_enabled;
+  report.curves=[];
+  await vm.runInContext('poll()',context);
+  for(const id of ['representation-loss-terms','loss-terms']) {
+    assert.equal(nodes.get(id).children.length,0);
+    assert.equal(text(id),'Sin una actualización registrada');
+  }
+  assert.equal(text('representation-regularization'),'Estado de SIGReg no registrado');
+
   // Goal statistics average events in an action window, not the last N goals.
   // Simultaneous completions count equally, failures affect reward only, and a
   // censored segment without reward never dilutes the denominator.

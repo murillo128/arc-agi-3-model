@@ -5,14 +5,19 @@
 Sustituye las campañas anteriores. La campaña activa empieza desde cero: encoder,
 decoder, predictor y PathValue con pesos nuevos; también contadores, criterios de
 activación y resultados. Un solo juego (`sc01-v1`), hasta 262.144 acciones reales,
-sin barrido de variantes. `subgoal_config.json` conserva los tamaños y la receta
+sin barrido de variantes. `subgoal_config.json` fija los tamaños y la receta
 del modelo, sin depender de checkpoints previos para inicializarlo.
 
 **Activación acumulativa, nunca fases que sustituyen al aprendizaje anterior:**
 
 1. Encoder y decoder aprenden desde la primera acción real y siguen aprendiendo
    durante toda la campaña. Reconstrucción de las dos últimas observaciones:
-   CE de colores, delta visual, overlap y regularización latente configurada.
+   CE de colores, delta visual y overlap, tanto con el decoder contextual como
+   con su lectura local auxiliar (peso 1). La lectura local obliga a conservar
+   información visual en z sin depender de la corrección contextual del decoder.
+   SIGReg (peso 0,002) se usa sólo antes de la primera activación del predictor.
+   Desde esa activación se apaga para todo el encoder compartido, incluso al
+   abrir niveles nuevos o reanudar. La reconstrucción continúa sin congelarse.
    AdamW LR 3e-6, menor que el predictor para limitar el desplazamiento del latente.
 2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
    del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
@@ -30,6 +35,15 @@ las mismas imágenes iniciales entre evaluaciones (norma RMS de la diferencia /
 norma RMS anterior). La primera evaluación no tiene esa comparación y no abre
 permisos. Los umbrales, paciencia y tasas son configurables; son valores iniciales,
 no una conclusión experimental ni garantía de estabilidad.
+
+La penalización adicional de varianza tiene peso **0** en esta campaña. Aplicarla
+a sólo dos observaciones consecutivas exigía separar sus latentes en cada
+posición, aunque la imagen apenas cambiase. SIGReg también usa una muestra pequeña;
+conservarlo sólo al principio es una hipótesis de entrenamiento, no una garantía
+contra el colapso. Los diagnósticos de diversidad, rango y respuesta de zonas
+estáticas siguen activos. El cambio corrige además una omisión del entrenador
+incremental: `local_reconstruction_weight` ahora participa realmente en la pérdida.
+Los comandos de experimentos anteriores mantienen sus propias configuraciones.
 
 **Un solo juego por campaña:** `--game sc01-v1` por defecto. `si01-v1` también
 puede seleccionarse para otra campaña, pero no se intercalan ambos juegos.
@@ -159,6 +173,13 @@ alcanzado y el reward incluye fracasos. Los subobjetivos se sitúan en la acció
 de cierre de su partida, cuando se publican. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
+
+Cada gráfica de pérdida permite desplegar los componentes de la última
+actualización, con sus pesos ya aplicados: su suma coincide con el total. La
+representación distingue CE, delta, overlap, reconstrucción local y regularizadores
+cuando se calculan. El predictor distingue MSE latente, delta, overlap y rollout
+cuando existe un prefijo suficiente. Un término ausente no se presenta como cero.
+El panel muestra también si SIGReg sigue activo en la fase inicial o está apagado.
 
 El panel del predictor muestra cada dos segundos una muestra aleatoria de las
 últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,

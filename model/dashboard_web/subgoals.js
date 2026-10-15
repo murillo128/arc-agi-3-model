@@ -159,6 +159,20 @@ function movingAverage(points, window=512) {
     return [x,count?sum/count:null];
   });
 }
+function lossBreakdown(id, rows, key) {
+  const target=$(id);target.replaceChildren();
+  const row=rows.findLast(r=>r[key]&&Object.values(r[key]).some(finite));
+  if(!row){target.textContent='Sin una actualización registrada';return;}
+  const labels={color_ce:'Color',delta_nll:'Delta visual',delta_overlap:'Unión del delta',
+    local_reconstruction:'Reconstrucción local',sigreg:'SIGReg',variance_floor:'Varianza',
+    latent:'Delta latente',rollout:'Predicción encadenada'};
+  Object.entries(row[key]).filter(([,v])=>finite(v)).forEach(([name,value],i)=>{
+    const span=document.createElement('span');span.className=`series-${i%4}`;
+    span.textContent=`${labels[name]||name}: ${fmt(value,4)}`;
+    span.title=`Contribución al total, con su peso aplicado · acción ${fmt(row.actions)}`;
+    target.append(span);
+  });
+}
 function fixedEvaluations(report) {
   const pair=r=>`${r.game}/${r.level}`;
   // Older live reports have no declared pair list; their completed training
@@ -265,6 +279,11 @@ function render(report) {
     {...series('Actualización individual','predictor_loss'),muted:true}]);
   plot('representation-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.representationLoss])},
     {...series('Actualización individual','representation_loss'),muted:true}]);
+  lossBreakdown('representation-loss-terms',rows,'representation_terms');
+  lossBreakdown('loss-terms',rows,'predictor_terms');
+  $('representation-regularization').textContent=p.sigreg_enabled===true
+    ? 'SIGReg activo · fase inicial de representación'
+    : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
   plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);

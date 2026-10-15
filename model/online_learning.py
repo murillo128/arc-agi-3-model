@@ -23,12 +23,14 @@ class OnlineRepresentation:
         self.optimizer = optimizer(self.parameters, learning_rate,
                                    engine.device.type == 'cuda', engine.optimizer_bits)
         self.updates = 0
+        self.sigreg_enabled = bool(engine.config.sigreg_weight)
 
     def update(self, observations, *, preview=None):
         """Reconstruct the last two real observations on EVERY learning action.
 
-        Targets include unchanged pixels. No next-frame prediction or imagined
-        target enters this optimizer. Lower LR allows continued adaptation.
+        Targets include unchanged pixels. The auxiliary local readout must also
+        reconstruct from z without the decoder's contextual correction. No
+        next-frame prediction or imagined target enters this optimizer.
         """
         observations = [o for o in observations[-2:] if o.final is not None]
         if not observations or len({o.final.shape for o in observations}) != 1:
@@ -48,9 +50,22 @@ class OnlineRepresentation:
         ce = F.cross_entropy(logits.float().movedim(-1, 1), actual)
         delta = visual_delta_loss(logits[-1:], actual[:1], actual[-1:]).mean()
         overlap = soft_delta_error(logits[-1:], actual[:1], actual[-1:]).mean()
-        regularization = sigreg(zs, e.model.config.sigreg_slices) if len(zs) > 1 else zs.sum() * 0
-        variance = variance_floor(zs) if len(zs) > 1 else zs.sum() * 0
-        loss = ce + delta + c.delta_overlap_weight * overlap + c.sigreg_weight * regularization + c.variance_weight * variance
+        terms = dict(color_ce=ce, delta_nll=delta, delta_overlap=c.delta_overlap_weight * overlap)
+        if c.local_reconstruction_weight and c.decoder_readout != 'local':
+            with e.autocast():
+                local_logits = e.decode(zs, *observations[-1].final.shape, local=True)
+            local_loss = (F.cross_entropy(local_logits.float().movedim(-1, 1), actual)
+                + visual_delta_loss(local_logits[-1:], actual[:1], actual[-1:]).mean()
+                + c.delta_overlap_weight * soft_delta_error(local_logits[-1:], actual[:1], actual[-1:]).mean())
+            terms['local_reconstruction'] = c.local_reconstruction_weight * local_loss
+        # The curriculum disables SIGReg globally after the first predictor
+        # admission. New levels must not restart it on the shared encoder.
+        # Disabled regularizers do no work and consume no random draws.
+        if self.sigreg_enabled and c.sigreg_weight and len(zs) >= c.min_observations:
+            terms['sigreg'] = c.sigreg_weight * sigreg(zs, e.model.config.sigreg_slices)
+        if c.variance_weight and len(zs) >= c.min_observations:
+            terms['variance_floor'] = c.variance_weight * variance_floor(zs)
+        loss = sum(terms.values())
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.parameters, 1., error_if_nonfinite=True)
         self.optimizer.step()
@@ -58,7 +73,7 @@ class OnlineRepresentation:
         e.invalidate_latent_cache()
         trainable(e)  # Detached acting between optimizer steps.
         return dict(total=float(loss.detach()), reconstruction=float(ce.detach()),
-                    latent_regularization=float(regularization.detach()))
+                    terms={name: float(value.detach()) for name, value in terms.items()})
 
 
 class OnlinePredictor:
@@ -104,5 +119,9 @@ class OnlinePredictor:
         self.optimizer.step()
         self.updates += 1
         trainable(e)
+        terms = dict(latent=latent, delta_nll=visual, delta_overlap=e.config.delta_overlap_weight * overlap)
+        if rollout_loss is not None:
+            terms['rollout'] = rollout_loss
         return dict(total=float(loss.detach()), latent=float(latent.detach()), visual=float(visual.detach()),
-                    rollout=None if rollout_loss is None else float(rollout_loss.detach()))
+                    rollout=None if rollout_loss is None else float(rollout_loss.detach()),
+                    terms={name: float(value.detach()) for name, value in terms.items()})

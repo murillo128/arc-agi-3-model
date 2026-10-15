@@ -35,6 +35,51 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_sigreg_stops_globally_on_predictor_admission_and_stays_off_on_resume(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            config = root / 'config.json'
+            config.write_text(json.dumps({'network': asdict(path_agent().engine.model.config),
+                                          'training': {'variance_weight': 0.}}))
+            args = ['--init-config', str(config), '--output', str(root / 'run'), '--device', 'cpu',
+                    '--steps', '2', '--evaluate-every', '2', '--evaluation-episodes', '1', '--patience', '1']
+            training_phases = []
+            def capture(agent, factory, level, *positional, **kwargs):
+                if kwargs.get('representation') is not None:
+                    training_phases.append((level, kwargs['representation'].sigreg_enabled,
+                                            kwargs.get('world') is not None))
+                return play(agent, factory, level, *positional, **kwargs)
+            # Literal quality inputs isolate the controller from convergence.
+            # Initial drift is absent; the first learning episode then qualifies
+            # representation only. Real learner/optimizer/checkpoint paths run.
+            pending = dict(GOOD, latent_drift=None)
+            ready = dict(GOOD, prediction_error=.8, rollout_error=.8)
+            with patch('model.subgoal_training.play', side_effect=capture), \
+                 patch('games.square_cross.v1.sc01.generate_scene', return_value=fixture()), \
+                 patch('model.subgoal_training.summarize_quality',
+                       side_effect=[(pending, []), (ready, []), (ready, []), (ready, [])]):
+                main([*args, '--actions', '4'])
+            self.assertEqual(training_phases, [(1, True, False), (1, False, True)])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertTrue(all('sigreg' in r['representation_terms'] for r in report['curves'][:2]))
+            self.assertTrue(all('sigreg' not in r['representation_terms'] for r in report['curves'][2:]))
+            self.assertFalse(report['progress']['sigreg_enabled'])
+            saved = checkpoint.load(root / 'run/latest.pt')
+            curriculum = saved['training_progress']['curriculum']
+            # A later level starts representation-only, but shares the already
+            # stabilized encoder. It must not restart SIGReg after a resume.
+            curriculum['unlocked']['sc01-v1'] = 2
+            curriculum['levels'][1]['unlocked'] = True
+            checkpoint.write(root / 'run/latest.pt', saved)
+            training_phases.clear()
+            with patch('model.subgoal_training.play', side_effect=capture), \
+                 patch('games.square_cross.v1.sc01.generate_scene', return_value=fixture()):
+                main([*args, '--resume', '--actions', '6'])
+            self.assertEqual(training_phases, [(2, False, False)])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertFalse(report['progress']['sigreg_enabled'])
+            self.assertNotIn('sigreg', report['curves'][-1]['representation_terms'])
+
     def test_predictor_admission_needs_ten_percent_and_stability_three_times(self):
         for reconstruction, drift, expected in ((.099, .14, True), (.10, .15, True),
                                                  (.101, .14, False), (.099, .151, False)):

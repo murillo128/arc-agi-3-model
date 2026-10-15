@@ -1,6 +1,7 @@
 """Gradient ownership and numerical objectives of the incremental learners."""
 from contextlib import nullcontext
 from dataclasses import replace
+from functools import partial
 import math
 from types import SimpleNamespace
 import unittest
@@ -22,6 +23,49 @@ torch.set_num_threads(2)
 
 
 class OnlineLearningTests(unittest.TestCase):
+    def test_local_reconstruction_has_its_weighted_loss_and_encoder_gradient(self):
+        class Decoder(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.context = nn.Parameter(torch.tensor(0.))
+                self.local = nn.Parameter(torch.tensor(math.log(5.)))
+
+            def forward(self, z, height, width, *, local=False, **kwargs):
+                # Context: uniform 16 colors. Local: P(color 0)=5/(5+15)=1/4.
+                score = z[:, 0, 0] * (self.local if local else self.context)
+                return score[:, None, None, None] * torch.nn.functional.one_hot(torch.tensor(0), 16)
+
+        for weight, readout in ((.5, 'contextual'), (0., 'contextual'), (.5, 'local')):
+            with self.subTest(weight=weight, readout=readout):
+                model = nn.Module()
+                model.encoder, model.decoder, model.dynamics = nn.Linear(1, 1, bias=False), Decoder(), nn.Linear(1, 1)
+                model.config = NetworkConfig.small()
+                with torch.no_grad():
+                    model.encoder.weight.fill_(1.)
+                config = replace(TrainConfig(), sigreg_weight=0., variance_weight=0.,
+                                 local_reconstruction_weight=weight, decoder_readout=readout)
+                engine = SimpleNamespace(model=model, config=config, device=torch.device('cpu'), optimizer_bits=32,
+                    autocast=nullcontext, invalidate_latent_cache=lambda: None,
+                    encode=lambda observations, **kwargs: [model.encoder.weight for _ in observations],
+                    decode=partial(model.decoder.forward, local=readout == 'local'))
+                online = OnlineRepresentation(engine)
+                observation = Observation(np.zeros((1, 1, 1), dtype=np.uint8), (1,), 'NOT_FINISHED', 0, 1)
+                gradients = []
+                model.encoder.weight.register_hook(lambda grad: gradients.append(float(grad)))
+                rng = torch.get_rng_state().clone()
+                result = online.update([observation, observation])
+                context_loss, local_loss = 2 * math.log(16) + 15 / 16, 2 * math.log(4) + 3 / 4
+                expected = local_loss if readout == 'local' else context_loss + weight * local_loss
+                self.assertAlmostEqual(result['total'], expected, places=5)
+                # d/ds [2*(-log p0)+(1-p0)] = -27/16 at p0=1/4.
+                factor = 1. if readout == 'local' else weight
+                self.assertAlmostEqual(gradients[0], -factor * 27 / 16 * math.log(5), places=5)
+                self.assertEqual('local_reconstruction' in result['terms'], bool(weight and readout != 'local'))
+                self.assertNotIn('sigreg', result['terms'])
+                self.assertNotIn('variance_floor', result['terms'])
+                self.assertAlmostEqual(result['total'], sum(result['terms'].values()), places=5)
+                torch.testing.assert_close(torch.get_rng_state(), rng)
+
     def test_delayed_admission_keeps_weights_and_optimizer_fresh_then_learns(self):
         torch.manual_seed(67)
         config = replace(NetworkConfig.small(), latent=64, pixel_latent=True,
@@ -141,6 +185,7 @@ class OnlineLearningTests(unittest.TestCase):
         self.assertAlmostEqual(result['latent'], 1.)
         self.assertAlmostEqual(result['total'], 37 + 2 * math.log(16) + 2 * 15 / 16, places=5)
         self.assertEqual(captured, [-74.])
+        self.assertAlmostEqual(result['total'], sum(result['terms'].values()), places=5)
         self.assertIsNone(target.grad)
         self.assertIsNone(state.z.grad)
         self.assertIsNone(state.h.grad)
