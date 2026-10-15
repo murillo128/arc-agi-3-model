@@ -390,6 +390,8 @@ def main(argv=None):
                         predictor_updates=world.updates, path_updates=path_learner.updates,
                         predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                         tps=point['tps'], seconds=seconds, **{k: v for k, v in row.items() if k not in ('counts', 'segment')})
+            publish(force=True, phase='warmup' if actions == 0 else 'training', game=game, level=level,
+                    predictor_enabled=readiness.predictor, planner_enabled=readiness.planner)
             result = play(agent, factories[game], level, seed, args.steps,
                 representation=representation, world=world if readiness.predictor else None,
                 learner=path_learner if readiness.planner else None,
