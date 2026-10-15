@@ -71,6 +71,10 @@ la tendencia es la suma de errores dividida por la suma de uniones de deltas,
 no la media de porcentajes. Los bloques sin cambios reales ni predichos se marcan
 aparte y dejan un hueco en la serie original. La pérdida solo promedia las
 actualizaciones realizadas; una acción sin actualización no es una pérdida cero.
+El desglose del delta muestra cada categoría en píxeles por acción medida: tendencia
+de hasta 512 acciones destacada y bloques de 32 tenues, con los mismos cuatro colores.
+Ambas medias incluyen acciones medidas sin cambios y excluyen datos ausentes;
+los bloques parciales usan su número real de mediciones, no el tamaño de la ventana.
 
 ```sh
 .venv/bin/python -m model.dashboard --subgoal-report model/runs/subgoals/current/report.json

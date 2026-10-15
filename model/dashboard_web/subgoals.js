@@ -5,6 +5,7 @@ const fmt = (x, n=0) => finite(x) ? x.toLocaleString('es-ES', {maximumFractionDi
 // Same pinned SDK palette as viewer/src/canvas.ts.
 const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31','#1e93ff','#88d8f1','#ffdc00','#ff851b','#921231','#4fcc30','#a356d6'];
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
+const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
 const namespace = 'http://www.w3.org/2000/svg';
 function element(tag, attributes={}, text='') {
   const node = document.createElementNS(namespace, tag);
@@ -24,15 +25,17 @@ function plot(id, series, {markers=[], percent=false, empty='Pendiente de datos 
     svg.append(element('text',{x:50,y:y(v)+4,fill:'#94a7aa','font-size':11,'text-anchor':'end'},fmt(v,2)));
     const a=minX+(maxX-minX)*i/4;svg.append(element('text',{x:x(a),y:266,fill:'#94a7aa','font-size':11,'text-anchor':'middle'},fmt(a)));
   }
-  series.forEach((s,i)=>{const span=document.createElement('span');span.textContent=s.name;span.className=s.muted?'series-muted':`series-${i%4}`;legend.append(span);
-    const color=s.muted?'#94a7aa':colors[i%4];
+  series.forEach((s,i)=>{
+    const colorIndex=s.colorIndex??i%4;
+    if(s.legend!==false) {const span=document.createElement('span');span.textContent=s.name;span.className=s.muted?'series-muted':`series-${colorIndex}`;legend.append(span);}
+    const color=s.muted?'#94a7aa':colors[colorIndex], opacity=s.faint ? .2 : s.muted ? .45 : 1;
     let segment=[];
-    const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted?1:2,opacity:s.muted ? .45 : 1}));segment=[];};
+    const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
     for(const p of s.points) {
       // Leave a gap when there was no measurement; never join across it.
       if(!finite(p[0])||!finite(p[1])) {flush();continue;}
       segment.push(p);
-      const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2,fill:color,opacity:s.muted ? .45 : 1});
+      const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2,fill:color,opacity});
       circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));svg.append(circle);
     }
     flush();
@@ -48,12 +51,18 @@ function picture(id, frame, mask) {
   if(!Array.isArray(frame))return;
   frame.forEach((row,y)=>row.forEach((value,x)=>{ctx.fillStyle=mask&&!mask[y]?.[x] ? ((x+y)%2?'#aaa':'#eee') : palette[value]||'#000';ctx.fillRect(x,y,1,1);}));
 }
+function deltaRates(rows) {
+  return Object.fromEntries(deltaKinds.map(([,key])=>{
+    const values=rows.map(r=>r.counts?.[key]).filter(finite);
+    return [key,values.length?values.reduce((sum,v)=>sum+v,0)/values.length:null];
+  }));
+}
 function blocks(rows) {
   const grouped=new Map();
   for(const row of rows) {const key=Math.floor((row.actions-1)/32);if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(row);}
   return [...grouped.values()].map(group=>{const count={};for(const row of group)for(const [k,v]of Object.entries(row.counts||{}))count[k]=(count[k]||0)+v;
     const measured=group.filter(r=>r.counts);
-    return {start:group[0].actions,x:group.at(-1).actions,count,
+    return {start:group[0].actions,x:group.at(-1).actions,count,rates:deltaRates(group),
       noChange:measured.length===group.length&&count.union===0,
       error:count.union>0?100*count.wrong/count.union:null};});
 }
@@ -62,7 +71,7 @@ function trend(rows, grouped, window=512) {
     const samples=rows.filter(r=>r.actions>b.x-window&&r.actions<=b.x);
     const count=samples.reduce((a,r)=>({wrong:a.wrong+(r.counts?.wrong||0),union:a.union+(r.counts?.union||0)}),{wrong:0,union:0});
     const losses=samples.map(r=>r.predictor_loss).filter(finite);
-    return {x:b.x,error:count.union>0?100*count.wrong/count.union:null,
+    return {x:b.x,rates:deltaRates(samples),error:count.union>0?100*count.wrong/count.union:null,
       loss:losses.length?losses.reduce((a,v)=>a+v,0)/losses.length:null};
   });
 }
@@ -111,7 +120,12 @@ function render(report) {
   plot('delta',[{name:'Media móvil · hasta 512 acciones',points:t.map(r=>[r.x,r.error])},
     {name:'Bloque de 32 acciones',muted:true,points:b.map(r=>[r.x,r.error])}],
     {percent:true,markers:b.filter(r=>r.noChange).map(r=>({start:r.start,end:r.x}))});
-  plot('changes',[['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']].map(([name,key])=>({name,points:b.map(r=>[r.x,r.count[key]])})));
+  plot('changes',[
+    ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,faint:true,legend:false,
+      points:b.map(r=>[r.x,r.rates[key],'px/acción · bloque de 32'])})),
+    ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,
+      points:t.map(r=>[r.x,r.rates[key],'px/acción · media móvil de hasta 512 acciones'])}))
+  ]);
   plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.loss])},
     {...series('Actualización individual','predictor_loss'),muted:true}]);
   plot('speed',[series('Acciones/s','tps')]);plot('path-loss',[series('Coste restante','path_loss')]);

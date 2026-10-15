@@ -17,8 +17,8 @@ const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],element()
 const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:.1,
     evaluation_pairs:[{game:'a',level:1},{game:'b',level:1}]},
   progress:{phase:'training',actions:32,total_actions:65536,predictor_updates:1,path_updates:0,tps:2},
-  curves:[{actions:1,predictor_loss:2,path_loss:null,tps:2,counts:{wrong:5,union:10,invented:2,missed:3}},
-    {actions:32,predictor_loss:null,path_loss:0,tps:2,counts:{wrong:15,union:90,invented:10,missed:5}}],
+  curves:[{actions:1,predictor_loss:2,path_loss:null,tps:2,counts:{wrong:5,union:10,invented:2,missed:3,color:0,correct:5}},
+    {actions:32,predictor_loss:null,path_loss:0,tps:2,counts:{wrong:15,union:90,invented:10,missed:5,color:0,correct:75}}],
   episodes:[{game:'a',level:1,end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
   evaluations:[]};
 let offline=false;
@@ -41,6 +41,18 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(vm.runInContext('blocks([{actions:32,counts:{wrong:0,union:0,changed:0}}])[0].error',context),null);
   assert.equal(nodes.get('changes-legend').children.length,4,'one aggregate series per error kind');
   const circles=id=>nodes.get(id).children.filter(n=>n.r===2);
+  // Partial blocks divide by actual measured actions, not 32. Both layers use
+  // pixels/action, preserve each category's color and share one legend entry.
+  const kinds=[['Inventados','#77dabb',6],['Omitidos','#f4b979',4],
+    ['Color incorrecto','#a9a6ef',0],['Acertados','#94a7aa',40]];
+  for(const [name,color,value] of kinds) {
+    const points=circles('changes').filter(n=>n.fill===color);
+    assert.equal(points.length,2,`${name} has raw and trend measurements`);
+    assert.ok(points[0].opacity<points[1].opacity,'raw blocks are behind the stronger trend');
+    for(const point of points)assert.ok(point.children[0].textContent.startsWith(`${name}: ${value} · acción 32`));
+    assert.match(points[0].children[0].textContent,/px\/acción · bloque de 32/);
+    assert.match(points[1].children[0].textContent,/px\/acción · media móvil de hasta 512/);
+  }
   assert.equal(circles('loss').filter(n=>n.children[0].textContent.startsWith('Actualización individual:')).length,1,'missing loss is not a fabricated zero');
   assert.match(circles('loss')[0].children[0].textContent,/: 2 ·/,'mean includes only recorded updates');
   assert.match(circles('path-loss')[0].children[0].textContent,/Coste restante: 0/,'a genuine zero is retained');
@@ -87,6 +99,25 @@ const text=id=>nodes.get(id).textContent;
     {actions:513,counts:{wrong:1,union:50},predictor_loss:null}];
   assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).error',context),1);
   assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).loss',context),0);
+
+  // The trailing 512-action window excludes action 1. Missing measurements are
+  // excluded, but measured zero changes count. Unequal blocks are not averaged.
+  report.curves=[{actions:1,counts:{invented:100,missed:100,color:100,correct:100}},
+    {actions:32,counts:{invented:6,missed:12,color:2,correct:30}},
+    {actions:33,counts:null},
+    {actions:64,counts:{invented:0,missed:0,color:0,correct:0}},
+    {actions:512,counts:{invented:2,missed:4,color:0,correct:10}},
+    {actions:513,counts:{invented:4,missed:8,color:1,correct:20}},
+    {actions:514,counts:{invented:null,missed:null,color:null}}];
+  await vm.runInContext('poll()',context);
+  for(const [name,value] of [['Inventados','3'],['Omitidos','6'],['Color incorrecto','0,75'],['Acertados','15']]) {
+    const point=circles('changes').find(n=>n.opacity===1&&n.children[0].textContent.startsWith(`${name}: ${value} · acción 514`));
+    assert.ok(point,`${name} trend uses four measured actions in the exact window`);
+  }
+  const rawInvented=circles('changes').filter(n=>n.opacity<1&&n.fill==='#77dabb').map(n=>n.children[0].textContent);
+  assert.ok(rawInvented.some(s=>s.startsWith('Inventados: 4 · acción 514')),'missing count does not dilute the last partial block');
+  assert.ok(rawInvented.some(s=>s.startsWith('Inventados: 0 · acción 64')),'measured zero is kept');
+  assert.equal(nodes.get('changes-legend').children.length,4);
 
   report.curves=[{actions:32,counts:{wrong:5,union:10,changed:10}},
     {actions:64,counts:{wrong:0,union:0,changed:0}},
