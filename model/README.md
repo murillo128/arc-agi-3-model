@@ -134,7 +134,12 @@ configurados con líneas finas punteadas; los límites coincidentes comparten l�
 Son referencias: el avance requiere cumplir todos los criterios por nivel, no
 solo que una media cruce una línea. Las curvas de interacción conservan las
 últimas 4.096 acciones: bloques de 32 y tendencia de 512. El error suma errores y
-uniones de deltas; el desglose usa píxeles por acción medida. Datos ausentes no son
+uniones de deltas; el desglose usa píxeles por acción medida. La pérdida de
+representación y las métricas del planner también muestran medias
+móviles de hasta 512 acciones, con los valores individuales atenuados. Las pérdidas
+solo cuentan actualizaciones registradas; la eficiencia promedia por objetivo
+alcanzado y el reward incluye fracasos. Los subobjetivos se sitúan en la acción
+de cierre de su partida, cuando se publican. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
 

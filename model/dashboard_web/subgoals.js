@@ -129,9 +129,20 @@ function trend(rows, grouped, window=512) {
   return grouped.map(b=>{
     const samples=rows.filter(r=>r.actions>b.x-window&&r.actions<=b.x);
     const count=samples.reduce((a,r)=>({wrong:a.wrong+(r.counts?.wrong||0),union:a.union+(r.counts?.union||0)}),{wrong:0,union:0});
-    const losses=samples.map(r=>r.predictor_loss).filter(finite);
+    const mean=key=>{const values=samples.map(r=>r[key]).filter(finite);return values.length?values.reduce((sum,v)=>sum+v,0)/values.length:null;};
     return {x:b.x,rates:deltaRates(samples),error:count.union>0?100*count.wrong/count.union:null,
-      loss:losses.length?losses.reduce((a,v)=>a+v,0)/losses.length:null};
+      loss:mean('predictor_loss'),representationLoss:mean('representation_loss'),pathLoss:mean('path_loss')};
+  });
+}
+function movingAverage(points, window=512) {
+  const samples=points.filter(p=>finite(p[0])).sort((a,b)=>a[0]-b[0]);
+  let start=0,end=0,sum=0,count=0;
+  // Several subgoals can be published at the same episode-end action. Include
+  // all of them once in that window; their array order must not change the mean.
+  return [...new Set(samples.map(p=>p[0]))].map(x=>{
+    while(end<samples.length&&samples[end][0]<=x){if(finite(samples[end][1])){sum+=samples[end][1];count++;}end++;}
+    while(start<end&&samples[start][0]<=x-window){if(finite(samples[start][1])){sum-=samples[start][1];count--;}start++;}
+    return [x,count?sum/count:null];
   });
 }
 function fixedEvaluations(report) {
@@ -217,14 +228,23 @@ function render(report) {
   ],{unit:'px/acción'});
   plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.loss])},
     {...series('Actualización individual','predictor_loss'),muted:true}]);
-  plot('representation-loss',[series('Representación','representation_loss')]);
-  plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});plot('path-loss',[series('Coste restante','path_loss')]);
+  plot('representation-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.representationLoss])},
+    {...series('Actualización individual','representation_loss'),muted:true}]);
+  plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});
+  plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
+    {...series('Actualización individual','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
   $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
   picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
-  plot('efficiency',[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key])=>({name,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])})),{unit:'acciones'});
-  plot('reward',[{name:'Reward real',points:goals.map(g=>[g.x,g.reward])}]);
+  const efficiency=[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
+  plot('efficiency',[
+    ...efficiency.map(s=>({...s,faint:true,legend:false})),
+    ...efficiency.map(s=>({...s,name:`${s.name} · media de hasta 512 acciones`,points:movingAverage(s.points)}))
+  ],{unit:'acciones'});
+  const rewards=goals.map(g=>[g.x,g.reward]);
+  plot('reward',[{name:'Media por subobjetivo · hasta 512 acciones',points:movingAverage(rewards)},
+    {name:'Reward individual',points:rewards,muted:true}]);
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));
 }

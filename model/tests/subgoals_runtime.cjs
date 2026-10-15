@@ -37,7 +37,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('path-updates'),'0');
   assert.equal(text('tps'),'2');
   assert.equal(nodes.get('speed-legend').children[0].textContent,'Acciones/s: 2 acciones/s');
-  assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Coste restante: 0');
+  assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Media de actualizaciones · hasta 512 acciones: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Actualización individual: 2');
   assert.match(nodes.get('loss-legend').children[1].title,/acción 1$/,'missing latest sample does not fabricate a zero');
   assert.equal(text('gpu-status'),'GPU · 73 % de uso · 71 °C');
@@ -106,7 +106,7 @@ const text=id=>nodes.get(id).textContent;
   }
   assert.equal(circles('loss').filter(n=>n.children[0].textContent.startsWith('Actualización individual:')).length,1,'missing loss is not a fabricated zero');
   assert.match(circles('loss')[0].children[0].textContent,/: 2 ·/,'mean includes only recorded updates');
-  assert.match(circles('path-loss')[0].children[0].textContent,/Coste restante: 0/,'a genuine zero is retained');
+  assert.match(circles('path-loss')[0].children[0].textContent,/: 0 ·/,'a genuine zero is retained');
   assert.equal(text('subgoals'),'1 / 1');
   nodes.get('tab-path').listeners.click();
   assert.equal(nodes.get('world').hidden,true);
@@ -172,6 +172,54 @@ const text=id=>nodes.get(id).textContent;
     {actions:513,counts:{wrong:1,union:50},predictor_loss:null}];
   assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).error',context),1);
   assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).loss',context),0);
+
+  // Representation and planner averages count measured updates, excluding
+  // action 1 from the final 512-action window and retaining a real zero.
+  report.curves=[{actions:1,representation_loss:100,path_loss:100},
+    {actions:32,representation_loss:6,path_loss:8},
+    {actions:33,representation_loss:null,path_loss:null},
+    {actions:64,representation_loss:0,path_loss:null},
+    {actions:512,representation_loss:2,path_loss:0},
+    {actions:513,representation_loss:4,path_loss:4},
+    {actions:514,representation_loss:null,path_loss:null}];
+  await vm.runInContext('poll()',context);
+  for(const [id,value,rawCount] of [['representation-loss',3,5],['path-loss',4,4]]) {
+    const average=circles(id).filter(n=>n.opacity===1);
+    assert.match(average.at(-1).children[0].textContent,new RegExp(`: ${value} · acción 514$`));
+    assert.equal(circles(id).filter(n=>n.opacity<1).length,rawCount);
+    assert.ok(circles(id).some(n=>n.opacity<1&&n.children[0].textContent.includes(': 0 ·')));
+    assert.match(nodes.get(id+'-legend').children[0].textContent,new RegExp(`: ${value}$`));
+  }
+  report.curves=[{actions:1026,representation_loss:null,path_loss:null}];
+  await vm.runInContext('poll()',context);
+  for(const id of ['representation-loss','path-loss']) {
+    assert.equal(circles(id).length,0,'no updates means no invented average');
+    assert.match(nodes.get(id+'-legend').children[0].textContent,/: —$/);
+  }
+
+  // Goal statistics average events in an action window, not the last N goals.
+  // Simultaneous completions count equally, failures affect reward only, and a
+  // censored segment without reward never dilutes the denominator.
+  const oldEpisodes=report.episodes;
+  const goal=(actions,minimum_actions,reward,success=true)=>({actions,minimum_actions,reward,success});
+  report.episodes=[[1,[goal(100,50,-50)]],[32,[goal(6,3,-3)]],
+    [33,[goal(160,0,-160,false)]],[64,[goal(0,0,0)]],[512,[goal(2,1,-1)]],
+    [513,[goal(4,2,-2),goal(6,4,-2)]],[514,[goal(2,2,null,false)]]]
+    .map(([end_action,segments])=>({game:'a',level:1,end_action,segments,success:segments.every(s=>s.success)}));
+  await vm.runInContext('poll()',context);
+  const efficiencyMean=circles('efficiency').filter(n=>n.opacity===1);
+  assert.ok(efficiencyMean.some(n=>n.children[0].textContent.endsWith(': 3,6 · acción 513')));
+  assert.ok(efficiencyMean.some(n=>n.children[0].textContent.endsWith(': 2 · acción 513')));
+  assert.equal(efficiencyMean.filter(n=>n.children[0].textContent.includes('acción 513')).length,2,
+    'one mean per action and metric includes all simultaneous goals');
+  assert.ok(circles('efficiency').some(n=>n.opacity<1&&n.children[0].textContent==='Real: 6 · acción 513'));
+  assert.equal(nodes.get('efficiency-legend').children.length,2,'individual lines share their metric colors');
+  const rewardMean=circles('reward').filter(n=>n.opacity===1);
+  assert.match(rewardMean.at(-1).children[0].textContent,/: -28 · acción 514$/);
+  assert.ok(rewardMean.some(n=>n.children[0].textContent.endsWith(': -26,5 · acción 32')),'future goals cannot change an earlier mean');
+  assert.ok(circles('reward').some(n=>n.opacity<1&&n.children[0].textContent==='Reward individual: -160 · acción 33'));
+  assert.match(nodes.get('reward-legend').children[0].textContent,/: -28$/);
+  report.episodes=oldEpisodes;
 
   // The trailing 512-action window excludes action 1. Missing measurements are
   // excluded, but measured zero changes count. Unequal blocks are not averaged.
