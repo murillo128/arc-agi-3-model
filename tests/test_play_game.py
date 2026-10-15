@@ -230,6 +230,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('subgoals',str(self.state()))
         self.select('sc01-v1','synthetic')
         self.assertEqual(debug().status_code,403)
+        self.select('sy11-v1','synthetic')
+        self.assertEqual(help_info()['help']['controls'][5],
+                         'Reflect across shown axis · tap (44, 56)')
+        self.assertIn('axis turns with the piece',help_info()['help']['text'])
 
     def test_action_validation_and_real_animation(self):
         initial = self.state()

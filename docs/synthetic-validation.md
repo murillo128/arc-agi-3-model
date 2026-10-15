@@ -395,3 +395,30 @@ archives and regression red/green logs are under `artifacts/symbols-v2/`.
 Browser captures are under `artifacts/square-cross/`. These remain ignored.
 No live release was refreshed: independent review/merge and actual durable
 endpoint verification remain separate from this successful isolated acceptance.
+
+### Reflection-axis audit correction
+
+The audit of `79c84f5a8374527067e3274715af8ff08073482f` found that Transform's
+reflection pictogram always showed a vertical axis, although the existing
+flip-before-rotation semantics reflect the visible piece up/down at odd quarter
+turns. The correction preserves those semantics and orients the native cue to
+the visible effect; human guidance refers to the shown axis.
+
+Regression plan: extend the literal presentation tests with independently drawn
+vertical/horizontal 7×7 control fixtures and explicit reflected coordinates for
+an asymmetric three-cell piece at all four rotations, both flip states and
+palette/size extremes. Extend the real SDK tests with the audit's reachable
+`sy11-v1`, seed 0, level 3 sequence, asserting native pixels and coordinates
+before/after Rotate and Reflect. Existing replay owns all-profile logical
+equivalence; the existing real browser suites own display/input/HELP integration.
+Run the new regressions on the pre-fix implementation before the correction,
+then run focused coverage and the complete on-demand acceptance path.
+
+The new literal fixture failed on the pre-fix code for all 16 odd-rotation
+palette/size/flip combinations, while the even-rotation cases passed. The SDK
+reproducer also failed at the horizontal-axis pixel assertion, after successful
+native setup and rotation. Both now pass, along with all 11 presentation tests
+and the focused HELP protocol test. Red/green logs are retained in
+`artifacts/symbols-v2/reflection-*.log`. Browser coverage also exercises a rotated
+and reflected level-three piece through desktop clicks/mobile touches, captures
+both native/display states with HELP closed, and checks the updated control text.

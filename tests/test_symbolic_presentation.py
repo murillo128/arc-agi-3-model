@@ -94,6 +94,47 @@ class PresentationTests(unittest.TestCase):
         p.undo()
         np.testing.assert_array_equal(p.render()[4:61],f[4:61])
 
+    def test_reflection_cue_matches_visible_axis_at_every_orientation(self):
+        # Literal cells for the level-three L at anchor (2,2), before/after flip.
+        cells = (
+            (((2,2),(2,3),(3,2)), ((1,2),(2,2),(2,3))),
+            (((1,2),(2,2),(2,3)), ((1,2),(2,1),(2,2))),
+            (((1,2),(2,1),(2,2)), ((2,1),(2,2),(3,2))),
+            (((2,1),(2,2),(3,2)), ((2,2),(2,3),(3,2))),
+        )
+        for palette in (tuple(range(6,16)),tuple(range(15,5,-1))):
+            color=palette[1]
+            vertical=[
+                [2,2,2,2,2,2,2],
+                [2,color,5,2,5,color,2],
+                [2,color,5,2,5,color,2],
+                [color,color,5,2,5,color,color],
+                [2,5,5,2,5,5,2],
+                [2,5,5,2,5,5,2],
+                [2,2,2,2,2,2,2],
+            ]
+            horizontal=[
+                [2,2,2,color,2,2,2],
+                [2,color,color,color,5,5,2],
+                [2,5,5,5,5,5,2],
+                [2,2,2,2,2,2,2],
+                [2,5,5,5,5,5,2],
+                [2,color,color,color,5,5,2],
+                [2,2,2,color,2,2,2],
+            ]
+            for size in (3,5):
+                for rotation in range(4):
+                    for flip in (0,1):
+                        with self.subTest(palette=palette,size=size,rotation=rotation,flip=flip):
+                            p=self.puzzle('sy11'); p.palette=palette; p.size=size
+                            p.state=(2,2,rotation,flip,2); p.target=((4,4),)
+                            cue=horizontal if rotation in (1,3) else vertical
+                            self.assertEqual(p.cells(p.state),cells[rotation][flip])
+                            np.testing.assert_array_equal(p.render()[53:60,41:48],cue)
+                            p.click(44,56)
+                            self.assertEqual(p.cells(p.state),cells[rotation][1-flip])
+                            np.testing.assert_array_equal(p.render()[53:60,41:48],cue)
+
     def test_exact_quantity_trays_zero_missing_excess_and_maximum(self):
         p=self.puzzle('sy46',6)
         p.target=(0,1,2,0,0)

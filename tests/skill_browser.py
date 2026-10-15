@@ -131,6 +131,21 @@ def check_contexts(page,url,session,mobile):
                 expect(page.locator('#help-panel')).to_be_hidden()
                 assert_display_pixels(page,session.payload())
                 capture(page,f'symbols-{context}-L{level}-{"mobile" if mobile else "desktop"}')
+                if context=='transform' and level==3:
+                    # Move away from the seed-42 target so rotation stays in
+                    # this level; exercise the changed cue through real input.
+                    click_command(page,session,3,touch=mobile)
+                    click_command(page,session,4,touch=mobile)
+                    assert p.level==3 and p.state[2]==1
+                    assert_display_pixels(page,session.payload())
+                    capture(page,f'symbols-reflection-horizontal-{"mobile" if mobile else "desktop"}')
+                    click_command(page,session,5,touch=mobile)
+                    assert p.cells(p.state)==((1,1),(2,0),(2,1))
+                    assert_display_pixels(page,session.payload())
+                    capture(page,f'symbols-reflection-flipped-{"mobile" if mobile else "desktop"}')
+                    expect(page.locator('#control-legend')).to_contain_text('Reflect across shown axis')
+                    page.locator('#restart').click(); settled(page)
+                    p=session.env._game.puzzle
                 page.locator('#debug-enabled').check(); page.evaluate('() => detailsQueue')
             commands=plan(p)
             for command in commands:

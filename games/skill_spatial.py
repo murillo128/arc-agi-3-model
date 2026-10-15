@@ -13,7 +13,7 @@ class Transform(Puzzle):
         self.pattern = ((0,0),) if self.level == 1 else tuple((i%2,i//2) for i in range(min(4,self.level)))
         self.mirror = self.spec.skill in ('simetria','razonamiento_inverso')
         self.moving_axis = self.spec.skill == 'marcos_de_referencia'
-        self.commands=('Up','Down','Left','Right','Rotate clockwise','Reflect left/right')
+        self.commands=('Up','Down','Left','Right','Rotate clockwise','Reflect across shown axis')
         if self.moving_axis: self.commands += ('Move mirror left','Move mirror right')
         self.state=(1,1,0,0,self.m//2)
         self.reachable_target(2*self.level-1)
@@ -60,9 +60,16 @@ class Transform(Puzzle):
         if command<4: c.arrow(x,y,*DIRS[command],c.color(1))
         elif command==4: c.turn(x,y,color=c.color(1))
         elif command==5:
-            c.rect(x,y-2,1,5,2)
-            c.line((x-2,y-2),(x-2,y),c.color(1)); c.line((x+2,y-2),(x+2,y),c.color(1))
-            c.rect(x-3,y,2,1,c.color(1)); c.rect(x+2,y,2,1,c.color(1))
+            # cells() flips in local coordinates before rotating the piece.
+            # Odd quarter-turns therefore reflect the visible piece up/down.
+            if self.state[2]%2:
+                c.rect(x-2,y,5,1,2)
+                c.line((x-2,y-2),(x,y-2),c.color(1)); c.line((x-2,y+2),(x,y+2),c.color(1))
+                c.rect(x,y-3,1,2,c.color(1)); c.rect(x,y+2,1,2,c.color(1))
+            else:
+                c.rect(x,y-2,1,5,2)
+                c.line((x-2,y-2),(x-2,y),c.color(1)); c.line((x+2,y-2),(x+2,y),c.color(1))
+                c.rect(x-3,y,2,1,c.color(1)); c.rect(x+2,y,2,1,c.color(1))
         else:
             c.rect(x,y-2,1,5,c.color(3))
             c.arrow(x,y,-1 if command==6 else 1,0)
