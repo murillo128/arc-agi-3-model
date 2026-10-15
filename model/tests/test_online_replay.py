@@ -93,7 +93,7 @@ class ReplayTests(unittest.TestCase):
 
         model = nn.Module()
         model.encoder, model.decoder, model.dynamics = nn.Linear(1, 1), Decoder(), Dynamics()
-        engine = SimpleNamespace(model=model, config=TrainConfig(prediction_delta_loss='union', delta_overlap_weight=0.),
+        engine = SimpleNamespace(model=model, config=TrainConfig(prediction_delta_loss='union', delta_overlap_weight=2.),
             device=torch.device('cpu'), optimizer_bits=32, autocast=nullcontext,
             predict=model.dynamics, decode=model.decoder, actions=lambda a: torch.zeros(len(a), 12))
         learner = OnlinePredictor(engine, threshold=None)
@@ -109,6 +109,7 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(result['latent'], 5.)
         self.assertEqual(result['rollout'], .5)
         self.assertEqual(result['total'], 5.5)
+        self.assertEqual(set(result['terms']), {'latent', 'delta_nll', 'rollout'})
         self.assertEqual(sum(gradients), -7.)
         self.assertEqual(result['batch_size'], 2)
         self.assertEqual(learner.updates, 1)

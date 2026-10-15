@@ -102,7 +102,7 @@ class OnlineLearningTests(unittest.TestCase):
         change_union_delta_loss(empty_logits, before, before).sum().backward()
         self.assertEqual(int(torch.count_nonzero(empty_logits.grad)), 0)
 
-    def test_online_union_nll_reaches_dynamics_at_one_and_three_steps_with_decoder_frozen(self):
+    def test_online_predictor_uses_only_mse_and_nll_at_one_and_three_steps_with_decoder_frozen(self):
         before, actual, probability = union_example()
 
         class Dynamics(nn.Module):
@@ -124,7 +124,7 @@ class OnlineLearningTests(unittest.TestCase):
         model = nn.Module()
         model.encoder, model.dynamics, model.decoder = nn.Linear(1, 1), Dynamics(), Decoder()
         engine = SimpleNamespace(model=model, device=torch.device('cpu'), optimizer_bits=32,
-            config=TrainConfig(prediction_delta_loss='union', false_change_weight=2., delta_overlap_weight=0.),
+            config=TrainConfig(prediction_delta_loss='union', false_change_weight=2., delta_overlap_weight=2.),
             autocast=nullcontext, predict=model.dynamics, decode=model.decoder,
             actions=lambda actions: torch.tensor([a.features() for a in actions]))
         online = OnlinePredictor(engine, threshold=None)
@@ -139,6 +139,7 @@ class OnlineLearningTests(unittest.TestCase):
         self.assertAlmostEqual(result['visual'], expected, places=6)
         self.assertAlmostEqual(result['rollout'], expected, places=6)
         self.assertAlmostEqual(result['total'], 2 * expected, places=6)
+        self.assertEqual(set(result['terms']), {'latent', 'delta_nll', 'rollout'})
         # One-step dz/dw=1; three-step dz/dw=3. Latent MSE has zero gradient here.
         self.assertAlmostEqual(captured[0], (.8 + .1 + .2 + .3 - 4), places=6)
         self.assertGreater(float(model.dynamics.weight.detach()), 0.)
@@ -307,7 +308,8 @@ class OnlineLearningTests(unittest.TestCase):
         result = online.update(state, Action(1), np.zeros((1, 1), dtype=np.uint8), after, target, 1.,
             rollout=(anchor, [Action(1)] * 3, np.zeros((1, 1), dtype=np.uint8)))
         self.assertAlmostEqual(result['latent'], 1.)
-        self.assertAlmostEqual(result['total'], 37 + 2 * math.log(16) + 2 * 15 / 16, places=5)
+        # Two latent errors (1 + 36) and two uniform-color NLLs; no overlap.
+        self.assertAlmostEqual(result['total'], 37 + 2 * math.log(16), places=5)
         self.assertEqual(captured, [-74.])
         self.assertAlmostEqual(result['total'], sum(result['terms'].values()), places=5)
         self.assertIsNone(target.grad)

@@ -135,8 +135,9 @@ class OnlinePredictor:
         latent = F.mse_loss(delta.float(), (target_z - state.z).detach()[None].float())
         visual = visual_delta_loss(logits, before, actual, e.config.false_change_weight,
                                    mode=e.config.prediction_delta_loss).mean()
-        overlap = soft_delta_error(logits, before, actual).mean()
-        terms = dict(latent=latent, delta_nll=visual, delta_overlap=e.config.delta_overlap_weight * overlap)
+        # Predictive supervision is MSE + visual NLL. The shared overlap weight
+        # still belongs to real reconstruction, not either predictive branch.
+        terms = dict(latent=latent, delta_nll=visual)
         rollout_loss = None
         if rollout is not None:
             anchor, actions, reference = rollout
@@ -148,7 +149,6 @@ class OnlinePredictor:
             before = torch.tensor(np.array(reference, copy=True), device=e.device, dtype=torch.long)[None]
             rollout_loss = (F.mse_loss(z.float(), target_z.detach()[None].float())
                 + visual_delta_loss(logits, before, actual, e.config.false_change_weight,
-                                    mode=e.config.prediction_delta_loss).mean()
-                + e.config.delta_overlap_weight * soft_delta_error(logits, before, actual).mean())
+                                    mode=e.config.prediction_delta_loss).mean())
             terms['rollout'] = rollout_loss
         return terms

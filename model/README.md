@@ -33,7 +33,9 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    sólo los píxeles que cambian realmente **o que el predictor intenta cambiar**.
    Así cuentan las omisiones, los cambios inventados y los colores incorrectos,
    además de los cambios reales acertados. El fondo correctamente conservado no
-   diluye la pérdida. Se mantienen el MSE latente y el término de overlap suave.
+   diluye la pérdida. El objetivo del predictor es **MSE latente + NLL visual**,
+   tanto a un paso como en el extremo del rollout de tres pasos. No incluye
+   overlap suave; `delta_overlap_weight` sigue aplicándose a la reconstrucción.
 3. PathValue se incorpora cuando además los errores de predicción a uno y tres
    pasos son ≤10 % durante tres evaluaciones. Aprende al terminar cada segmento
    real de subobjetivo; encoder, decoder y predictor continúan actualizándose.
@@ -224,12 +226,13 @@ contadores, nunca suman acciones de aprendizaje.
 Cada gráfica de pérdida permite desplegar los componentes de la última
 actualización, con sus pesos ya aplicados: su suma coincide con el total. La
 representación distingue CE, delta, overlap, reconstrucción local y regularizadores
-cuando se calculan. El predictor distingue MSE latente, delta, overlap y rollout
+cuando se calculan. El predictor distingue MSE latente, delta visual y rollout
 cuando existe un prefijo suficiente. Un término ausente no se presenta como cero.
 El panel muestra también si SIGReg sigue activo en la fase inicial o está apagado.
 La gráfica **Pérdida por componente** muestra además el histórico del predictor:
-MSE latente, NLL visual, error de solapamiento y total del rollout. Reutiliza
-`curves[].predictor_terms` de `report.json`; esos términos también están presentes
+MSE latente, NLL visual y total del rollout. Los registros anteriores conservan
+el error de solapamiento que sí usaron; las nuevas actualizaciones lo omiten.
+Reutiliza `curves[].predictor_terms` de `report.json`; esos términos también están presentes
 en los eventos del log. Cada curva conserva las actualizaciones individuales y
 su media sobre hasta 512 acciones, contando sólo valores calculados. El rollout
 no existe en todas las actualizaciones, por lo que las medias por componente
@@ -1035,8 +1038,10 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
    ni `false_change_weight`: todos los píxeles de la unión pesan igual.
    Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
-   Añade un término diferenciable de error sobre la unión de deltas: si `c` es
-   el número de celdas realmente cambiadas, `f` la suma de probabilidades de
+   El aprendiz conjunto histórico y la reconstrucción añaden un término
+   diferenciable de error sobre la unión de deltas. El predictor de la campaña
+   incremental (`OnlinePredictor`) no lo utiliza, ni a uno ni a tres pasos.
+   Si `c` es el número de celdas realmente cambiadas, `f` la suma de probabilidades de
    cambio falso en celdas estáticas y `m` la suma de probabilidades de error en
    celdas cambiadas, usa `(m+f)/(c+f)`. Así los cambios inventados pesan según
    el tamaño del delta. En frames sin cambios reales usa la probabilidad media

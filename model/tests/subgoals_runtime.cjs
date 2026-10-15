@@ -289,6 +289,12 @@ const text=id=>nodes.get(id).textContent;
   assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='NLL visual: 0 · acción 513'));
   assert.ok(termPoints.some(n=>n.opacity===1&&n.children[0].textContent==='Rollout · total: 4 · acción 514'));
   assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='Rollout · total: 6 · acción 32'));
+  // New predictor updates omit overlap; do not fabricate a zero contribution.
+  report.curves=[{actions:1026,predictor_terms:{latent:.5,delta_nll:2,rollout:3}}];
+  await vm.runInContext('poll()',context);
+  assert.deepEqual(nodes.get('predictor-components-legend').children.map(n=>n.textContent),
+    ['MSE latente: 0,5','NLL visual: 2','Error de solapamiento: —','Rollout · total: 3']);
+  assert.equal(circles('predictor-components').length,6);
   report.config.prediction_delta_loss='balanced';
   report.curves=[{actions:1026,predictor_terms:null}];
   await vm.runInContext('poll()',context);

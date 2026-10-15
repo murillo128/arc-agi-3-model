@@ -105838,9 +105838,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "One-step latent delta MSE plus visual delta NLL and soft overlap; add the same losses at a fully autoregressive three-step endpoint. Active prediction_delta_loss=union: U=(actual!=reference) OR (argmax(logits)!=reference); NLL=sum_U(-log p(actual))/max(1,|U|), per image. Include invented and missed changes, exclude correctly retained background; empty union gives differentiable zero. Discrete mask, differentiable target NLL, no false_change_weight. Legacy balanced mode remains selectable. Ground truth is real. Encoder/decoder weights fixed for this predictor optimizer call; their separate reconstruction objectives are unchanged and continue on each real action.",
+      "description": "One-step latent delta MSE plus visual delta NLL; add the same two losses at a fully autoregressive three-step endpoint. No soft overlap in either predictor branch. Active prediction_delta_loss=union: U=(actual!=reference) OR (argmax(logits)!=reference); NLL=sum_U(-log p(actual))/max(1,|U|), per image. Include invented and missed changes, exclude correctly retained background; empty union gives differentiable zero. Discrete mask, differentiable target NLL, no false_change_weight. Legacy balanced mode remains selectable. Ground truth is real. Encoder/decoder weights fixed for this predictor optimizer call; their separate reconstruction objectives, including soft overlap, are unchanged.",
       "operation": "loss",
-      "formula": "L = L_latent_1 + L_visual_1 + overlap_1 + available_3 * (L_latent_3 + L_visual_3 + overlap_3)",
+      "formula": "L = L_latent_1 + L_visual_1 + available_3 * (L_latent_3 + L_visual_3)",
       "parent_id": "world.learner"
     },
     {
