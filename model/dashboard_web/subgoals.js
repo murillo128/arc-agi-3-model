@@ -12,18 +12,20 @@ function element(tag, attributes={}, text='') {
   for (const [k,v] of Object.entries(attributes)) node.setAttribute(k, v);
   node.textContent=text; return node;
 }
-function plot(id, series, {markers=[], percent=false, empty='Pendiente de datos de esta ejecución'}={}) {
+function plot(id, series, {markers=[], percent=false, responsive=false, empty='Pendiente de datos de esta ejecución'}={}) {
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
+  const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
+  svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
   const points=series.flatMap(s=>s.points).filter(p=>finite(p[0])&&finite(p[1]));
-  if (!points.length&&!markers.length) {svg.append(element('text',{x:350,y:140,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
+  if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
   const minX=Math.min(...times), maxX=Math.max(minX+1,...times);
   const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+1,...points.map(p=>p[1]));
-  const x=v=>58+(v-minX)/(maxX-minX)*620, y=v=>240-(v-minY)/(maxY-minY)*216;
+  const x=v=>58+(v-minX)/(maxX-minX)*(width-80), y=v=>height-40-(v-minY)/(maxY-minY)*(height-64);
   for(let i=0;i<=4;i++) {const v=minY+(maxY-minY)*i/4;
-    svg.append(element('line',{x1:58,y1:y(v),x2:678,y2:y(v),stroke:'#2a3835'}));
+    svg.append(element('line',{x1:58,y1:y(v),x2:width-22,y2:y(v),stroke:'#2a3835'}));
     svg.append(element('text',{x:50,y:y(v)+4,fill:'#94a7aa','font-size':11,'text-anchor':'end'},fmt(v,2)));
-    const a=minX+(maxX-minX)*i/4;svg.append(element('text',{x:x(a),y:266,fill:'#94a7aa','font-size':11,'text-anchor':'middle'},fmt(a)));
+    const a=minX+(maxX-minX)*i/4;svg.append(element('text',{x:x(a),y:height-14,fill:'#94a7aa','font-size':11,'text-anchor':'middle'},fmt(a)));
   }
   series.forEach((s,i)=>{
     const colorIndex=s.colorIndex??i%4;
@@ -42,8 +44,8 @@ function plot(id, series, {markers=[], percent=false, empty='Pendiente de datos 
   });
   if(markers.length) {
     const span=document.createElement('span');span.textContent='Banda inferior: sin cambios reales ni predichos';span.className='series-muted';legend.append(span);
-    for(const m of markers) {const mark=element('rect',{x:x(m.start),y:245,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`Sin cambios reales ni predichos · acciones ${m.start}–${m.end}`));svg.append(mark);}
-    if(!points.length)svg.append(element('text',{x:350,y:140,fill:'#94a7aa','text-anchor':'middle'},'Sin cambios: no hay porcentaje de error que medir'));
+    for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`Sin cambios reales ni predichos · acciones ${m.start}–${m.end}`));svg.append(mark);}
+    if(!points.length)svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},'Sin cambios: no hay porcentaje de error que medir'));
   }
 }
 function picture(id, frame, mask) {
@@ -118,7 +120,9 @@ function fixedEvaluations(report) {
   }
   return {points,expected:expected.size,pending};
 }
+let displayedReport;
 function render(report) {
+  displayedReport=report;
   const p=report.progress||{}, c=report.config||{};
   const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',failed:'Detenido por error'};
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
@@ -151,7 +155,7 @@ function render(report) {
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
   plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
     {name:'Reconstrucción',points:qualityPoints('reconstruction')},
-    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')}],{percent:true,empty:'Pendiente de una evaluación fija completa'});
+    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')}],{percent:true,responsive:true,empty:'Pendiente de una evaluación fija completa'});
   $('fixed-summary').textContent=(last?`Última completa: ${fmt(last.error,2)} % · acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
     (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
@@ -179,6 +183,11 @@ function render(report) {
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));
 }
-for(const name of ['world','path','evaluation'])$('tab-'+name).addEventListener('click',()=>{for(const tab of ['world','path','evaluation']){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}});
+const tabs=['world','curriculum','path','evaluation'];
+for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
+  for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
+  // A hidden SVG has no measured width; fit it as soon as its tab is visible.
+  if(name==='world'&&displayedReport)render(displayedReport);
+});
 async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);}catch(error){$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 poll();

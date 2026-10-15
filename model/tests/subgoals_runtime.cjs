@@ -85,12 +85,19 @@ const text=id=>nodes.get(id).textContent;
   nodes.get('tab-path').listeners.click();
   assert.equal(nodes.get('world').hidden,true);
   assert.equal(nodes.get('path').hidden,false);
+  nodes.get('tab-curriculum').listeners.click();
+  for(const tab of ['world','curriculum','path','evaluation']) {
+    assert.equal(nodes.get(tab).hidden,tab!=='curriculum');
+    assert.equal(nodes.get('tab-'+tab)['aria-selected'],String(tab==='curriculum'));
+  }
   report.progress.phase='evaluation';
   Object.assign(report.progress,{policy:'path_mpc',evaluation_game:'si01-v1',evaluation_level:2,
     evaluation_episode:1,evaluation_episodes:2,evaluation_action:7});
   report.evaluations.push({actions:32,split:'dev',policy:'path_mpc',game:'si01-v1',level:2,
     successes:1,episodes:2,subgoals:3,attempted_subgoals:4,delta_error:.2,real_actions:50,decision_ms:6});
   await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('curriculum').hidden,false,'live polling preserves the selected tab');
+  assert.equal(nodes.get('world').hidden,true);
   assert.equal(text('actions'),'32','evaluation does not advance the training counter');
   assert.match(text('progress'),/partida 1\/2 · acción 7/);
   assert.equal(nodes.get('evaluation-rows').children[0].children[6].textContent,'20 %');
@@ -111,6 +118,21 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(circles('fixed-delta').length,2);
   assert.match(circles('fixed-delta')[1].children[0].textContent,/: 20 · acción 1000/);
   assert.doesNotMatch(text('fixed-summary'),/En curso/);
+  // Returning to the quality chart fits its full panel immediately, preserving
+  // the measured 20% point. A narrower panel changes geometry, not the data.
+  Object.assign(nodes.get('fixed-delta'),{clientWidth:1200,clientHeight:300});
+  nodes.get('tab-world').listeners.click();
+  assert.equal(nodes.get('fixed-delta').viewBox,'0 0 1200 300');
+  assert.equal(circles('fixed-delta').at(-1).cx,1178);
+  assert.equal(circles('fixed-delta').at(-1).cy,212.8);
+  assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 20 · acción 1000/);
+  Object.assign(nodes.get('fixed-delta'),{clientWidth:360,clientHeight:240});
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('fixed-delta').viewBox,'0 0 360 240');
+  assert.equal(circles('fixed-delta').at(-1).cx,338);
+  assert.equal(circles('fixed-delta').at(-1).cy,164.8);
+  assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 20 · acción 1000/);
+  delete nodes.get('fixed-delta').clientWidth;delete nodes.get('fixed-delta').clientHeight;
 
   // Reports already being written by a running trainer have no pair metadata.
   delete report.config.evaluation_pairs;

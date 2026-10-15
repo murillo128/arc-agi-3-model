@@ -55,7 +55,31 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .prediction-preview p { min-height: 0; }
 @media (max-width: 650px) { .prediction-samples:not([hidden]) { grid-template-columns: 1fr; } }
 .subgoal-dashboard .fixed-evaluation { margin: 20px 0 28px; }
-.subgoal-dashboard .fixed-evaluation svg { max-width: 1000px; margin: auto; }
+.subgoal-dashboard .fixed-evaluation svg { width: 100%; height: clamp(240px, 25vw, 330px); }
+.subgoal-dashboard .run-heading { min-width: 0; }
+.subgoal-dashboard #run-info { margin-bottom: 0; }
+.subgoal-dashboard .run-context { color: #a8bbb5; font-size: 12px; line-height: 1.6; margin: 8px 0 0; }
+.subgoal-dashboard .training-metrics { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.subgoal-dashboard .training-metrics article { padding: 14px; }
+.subgoal-dashboard .training-metrics h2 { font-size: 11px; line-height: 1.4; min-height: 2.8em; margin-bottom: 6px; }
+.subgoal-dashboard .training-metrics strong { font-size: 26px; margin-bottom: 5px; }
+.subgoal-dashboard .training-metrics small { font-size: 11px; }
+.quality-heading { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 16px; }
+.quality-heading h3 { margin: 0; }
+.quality-heading h3 span { float: none; display: block; margin-top: 6px; }
+.quality-meta { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px 20px; margin-bottom: 8px; }
+.quality-meta .legend { min-height: 0; }
+.quality-meta #fixed-summary { min-height: 0; margin: 0; font-size: 11px; }
+.chart-help { position: relative; flex: 0 0 auto; }
+.chart-help summary { display: grid; place-items: center; list-style: none; width: 24px; height: 24px; border: 1px solid #3c504a; border-radius: 50%; color: #a8bbb5; font-size: 13px; cursor: pointer; }
+.chart-help summary::-webkit-details-marker { display: none; }
+.chart-help summary:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
+.chart-help[open] summary { color: #77dabb; border-color: #77dabb; }
+.chart-help > div { position: absolute; z-index: 2; top: 32px; right: 0; width: min(390px, calc(100vw - 64px)); padding: 16px; border: 1px solid #3c504a; border-radius: 8px; background: #172122; box-shadow: 0 8px 24px #0006; }
+.chart-help p { min-height: 0; }
+.chart-help p:last-child { margin-bottom: 0; }
+@media (max-width: 900px) { .subgoal-dashboard .training-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .subgoal-dashboard .training-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .subgoal-dashboard .training-metrics article:last-child { grid-column: 1 / -1; } }
 .subgoal-dashboard .series-muted { color: #94a7aa; }
 .plot { height: 240px; position: relative; }
 canvas { display: block; width: 100%; height: 100%; }
