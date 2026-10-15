@@ -29,11 +29,15 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
    En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
-   La receta activa usa `prediction_delta_loss: "union"`: la NLL visual promedia
-   sólo los píxeles que cambian realmente **o que el predictor intenta cambiar**.
-   Así cuentan las omisiones, los cambios inventados y los colores incorrectos,
-   además de los cambios reales acertados. El fondo correctamente conservado no
-   diluye la pérdida. El objetivo del predictor es **MSE latente + NLL visual**,
+   La receta activa usa `prediction_delta_loss: "focal"`, con temperatura 1.
+   Si `q` es la probabilidad del color real y `C` los píxeles realmente cambiados,
+   suma `-log(q)` en `C` y `lambda*(1-q)^2*(-log(q))` en los estáticos; divide
+   por `max(1, |C|)` en cada imagen y promedia las imágenes del lote.
+   `false_change_weight` fija lambda (1 en esta receta). La máscara y el divisor
+   dependen de la realidad, sin argmax ni cortes de gradiente en los pesos suaves.
+   Los estáticos bien conservados aportan poco, no cero; muchos estáticos dudosos
+   pueden acumular una penalización grande. Una imagen sin cambios conserva
+   supervisión con divisor 1. El objetivo del predictor es **MSE latente + NLL visual**,
    tanto a un paso como en el extremo del rollout de tres pasos. No incluye
    overlap suave; `delta_overlap_weight` sigue aplicándose a la reconstrucción.
 3. PathValue se incorpora cuando además los errores de predicción a uno y tres
@@ -143,9 +147,10 @@ permite cambiar únicamente ese umbral con `--resume`.
 `--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
 deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
 reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
-`--prediction-delta-loss union` permite seleccionar explícitamente la nueva NLL,
+`--prediction-delta-loss focal` permite seleccionar explícitamente la nueva NLL,
 también con `--resume`. Sin esta opción se hereda la pérdida del checkpoint o del
 JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
+Los modos anteriores `balanced` y `union` siguen disponibles sin cambiar sus fórmulas.
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
@@ -1029,7 +1034,7 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
    Lo anterior describe el modo histórico `prediction_delta_loss: "balanced"`.
-   La campaña incremental activa selecciona `"union"` para las ramas predictivas
+   El modo anterior `"union"`, aún disponible, se aplica a las ramas predictivas
    de uno y tres pasos. Con `x` anterior, `y` real y `yhat=argmax(logits)`:
    `U = (y != x) OR (yhat != x)` y
    `L_union = sum(where(U, -log softmax(logits)[y], 0)) / max(1, |U|)`.
@@ -1038,6 +1043,13 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
    ni `false_change_weight`: todos los píxeles de la unión pesan igual.
    Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
+   La receta incremental actual selecciona `"focal"`: suma la NLL de cambios
+   reales y la NLL estática ponderada por `false_change_weight*(1-q)^2`, dividida
+   por `max(1, número de cambios reales)`, con `q=softmax(logits)[y]` y T=1.
+   No selecciona píxeles mediante argmax ni diferencia el divisor; sí diferencia
+   los pesos suaves. Su contribución estática disminuye de forma continua al
+   acertar con más confianza. No es estrictamente invariante a añadir fondo con
+   incertidumbre, y no altera la métrica de evaluación basada en colores argmax.
    El aprendiz conjunto histórico y la reconstrucción añaden un término
    diferenciable de error sobre la unión de deltas. El predictor de la campaña
    incremental (`OnlinePredictor`) no lo utiliza, ni a uno ni a tres pasos.

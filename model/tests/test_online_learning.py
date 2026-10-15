@@ -36,6 +36,56 @@ def union_example():
 
 
 class OnlineLearningTests(unittest.TestCase):
+    def test_focal_delta_loss_has_literal_values_and_gradients_per_image(self):
+        # Image 0: one real change. Image 1: two. Image 2: no real change.
+        before = torch.zeros(3, 1, 3, dtype=torch.long)
+        actual = torch.tensor([[[1, 0, 0]], [[1, 1, 0]], [[0, 0, 0]]])
+        correct = torch.tensor([[[.25, .5, .75]], [[.5, .25, .5]], [[.25, .5, .75]]])
+        probabilities = ((1 - correct[..., None]) / 15).expand(-1, -1, -1, 16).clone()
+        probabilities.scatter_(-1, actual[..., None], correct[..., None])
+        logits = probabilities.log().requires_grad_()
+        loss = visual_delta_loss(logits, before, actual, 2., mode='focal')
+        expected = [math.log(4) + .5 * math.log(2) + .125 * math.log(4 / 3),
+                    (math.log(2) + math.log(4) + .5 * math.log(2)) / 2,
+                    1.125 * math.log(4) + .5 * math.log(2) + .125 * math.log(4 / 3)]
+        torch.testing.assert_close(loss, torch.tensor(expected))
+        loss.mean().backward()
+        for image, change_mask in enumerate(((True, False, False), (True, True, False), (False, False, False))):
+            denominator = max(1, sum(change_mask)) * 3  # per-image normalization then batch mean
+            for pixel, changed in enumerate(change_mask):
+                p = float(correct[image, 0, pixel])
+                gradient = p - 1 if changed else 2 * (2 * p * (1 - p) ** 2 * math.log(p) - (1 - p) ** 3)
+                self.assertAlmostEqual(float(logits.grad[image, 0, pixel, actual[image, 0, pixel]]),
+                                       gradient / denominator, places=6)
+
+    def test_focal_delta_loss_is_smooth_at_winner_change_and_finite_at_extremes(self):
+        before = torch.zeros(1, 1, 2, dtype=torch.long)
+        actual = torch.tensor([[[1, 0]]])
+        losses, gradients = [], []
+        for keep in (.49, .49999, .50001, .51):
+            logits = torch.full((1, 1, 2, 16), -30.)
+            logits[0, 0, 0, :2] = torch.tensor([math.log(.9), math.log(.1)])
+            logits[0, 0, 1, :2] = torch.tensor([math.log(keep), math.log(1 - keep)])
+            logits.requires_grad_()
+            loss = visual_delta_loss(logits, before, actual, mode='focal').sum()
+            loss.backward()
+            losses.append(float(loss.detach()))
+            gradients.append(float(logits.grad[0, 0, 1, 0]))
+        self.assertTrue(all(a > b for a, b in zip(losses, losses[1:])))
+        self.assertLess(abs(losses[1] - losses[2]), .0001)
+        self.assertTrue(all(g < 0 for g in gradients))  # Still supervises a correctly classified static pixel.
+        self.assertLess(abs(gradients[1] - gradients[2]), .0001)
+        for mode in ('changed', 'static'):
+            logits = torch.full((1, 1, 1, 16), -10000.)
+            logits[..., 1] = 10000.
+            logits.requires_grad_()
+            target = torch.zeros(1, 1, 1, dtype=torch.long)
+            loss = visual_delta_loss(logits, target + (mode == 'changed'), target, mode='focal').sum()
+            self.assertEqual(float(loss.detach()), 20000.)
+            loss.backward()
+            self.assertTrue(torch.isfinite(logits.grad).all())
+            self.assertEqual(float(logits.grad[0, 0, 0, 0]), -1.)
+
     def test_frozen_encoder_keeps_exact_latents_while_decoder_and_predictor_learn(self):
         torch.manual_seed(19)
         engine = Engine(WorldModel(NetworkConfig.small()),
@@ -103,49 +153,57 @@ class OnlineLearningTests(unittest.TestCase):
         self.assertEqual(int(torch.count_nonzero(empty_logits.grad)), 0)
 
     def test_online_predictor_uses_only_mse_and_nll_at_one_and_three_steps_with_decoder_frozen(self):
-        before, actual, probability = union_example()
+        for mode in ('union', 'focal'):
+            before, actual, probability = union_example()
 
-        class Dynamics(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.weight = nn.Parameter(torch.tensor(0.))
+            class Dynamics(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.weight = nn.Parameter(torch.tensor(0.))
 
-            def forward(self, z, h, action, height, width):
-                return z + self.weight, h, torch.ones_like(z) * self.weight
+                def forward(self, z, h, action, height, width):
+                    return z + self.weight, h, torch.ones_like(z) * self.weight
 
-        class Decoder(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.logits = nn.Parameter(probability.log())
+            class Decoder(nn.Module):
+                def __init__(self):
+                    super().__init__()
+                    self.logits = nn.Parameter(probability.log())
 
-            def forward(self, z, height, width, **kwargs):
-                return self.logits + z.sum() * torch.nn.functional.one_hot(actual, 16)
+                def forward(self, z, height, width, **kwargs):
+                    return self.logits + z.sum() * torch.nn.functional.one_hot(actual, 16)
 
-        model = nn.Module()
-        model.encoder, model.dynamics, model.decoder = nn.Linear(1, 1), Dynamics(), Decoder()
-        engine = SimpleNamespace(model=model, device=torch.device('cpu'), optimizer_bits=32,
-            config=TrainConfig(prediction_delta_loss='union', false_change_weight=2., delta_overlap_weight=2.),
-            autocast=nullcontext, predict=model.dynamics, decode=model.decoder,
-            actions=lambda actions: torch.tensor([a.features() for a in actions]))
-        online = OnlinePredictor(engine, threshold=None)
-        state = State(torch.zeros(1, 1), torch.zeros(1, 1), (1, 5))
-        after = Observation(actual.numpy().astype(np.uint8), (1,), 'NOT_FINISHED', 0, 1)
-        captured = []
-        model.dynamics.weight.register_hook(lambda grad: captured.append(float(grad)))
-        decoder_before = fingerprint(model.decoder)
-        result = online.update(state, Action(1), before[0].numpy(), after, state.z, 1.,
-            rollout=(state, [Action(1)] * 3, before[0].numpy()))
-        expected = -(math.log(.8) + math.log(.1) + math.log(.2) + math.log(.3)) / 4
-        self.assertAlmostEqual(result['visual'], expected, places=6)
-        self.assertAlmostEqual(result['rollout'], expected, places=6)
-        self.assertAlmostEqual(result['total'], 2 * expected, places=6)
-        self.assertEqual(set(result['terms']), {'latent', 'delta_nll', 'rollout'})
-        # One-step dz/dw=1; three-step dz/dw=3. Latent MSE has zero gradient here.
-        self.assertAlmostEqual(captured[0], (.8 + .1 + .2 + .3 - 4), places=6)
-        self.assertGreater(float(model.dynamics.weight.detach()), 0.)
-        self.assertEqual(fingerprint(model.decoder), decoder_before)
-        self.assertTrue(all(p.grad is None for p in model.decoder.parameters()))
-        self.assertTrue(all(p.grad is None for p in model.encoder.parameters()))
+            model = nn.Module()
+            model.encoder, model.dynamics, model.decoder = nn.Linear(1, 1), Dynamics(), Decoder()
+            engine = SimpleNamespace(model=model, device=torch.device('cpu'), optimizer_bits=32,
+                config=TrainConfig(prediction_delta_loss=mode, false_change_weight=2., delta_overlap_weight=2.),
+                autocast=nullcontext, predict=model.dynamics, decode=model.decoder,
+                actions=lambda actions: torch.tensor([a.features() for a in actions]))
+            online = OnlinePredictor(engine, threshold=None)
+            state = State(torch.zeros(1, 1), torch.zeros(1, 1), (1, 5))
+            after = Observation(actual.numpy().astype(np.uint8), (1,), 'NOT_FINISHED', 0, 1)
+            captured = []
+            model.dynamics.weight.register_hook(lambda grad: captured.append(float(grad)))
+            decoder_before = fingerprint(model.decoder)
+            result = online.update(state, Action(1), before[0].numpy(), after, state.z, 1.,
+                rollout=(state, [Action(1)] * 3, before[0].numpy()))
+            expected = -(math.log(.8) + math.log(.1) + math.log(.2) + math.log(.3)) / 4
+            gradient = .8 + .1 + .2 + .3 - 4
+            if mode == 'focal':
+                expected = -(math.log(.8) + math.log(.1) + math.log(.3)
+                             + 2 * .8 ** 2 * math.log(.2) + 2 * .3 ** 2 * math.log(.7)) / 3
+                static_gradient = sum(2 * (2 * p * (1-p) ** 2 * math.log(p) - (1-p) ** 3) for p in (.2, .7))
+                gradient = 4 * (.8 + .1 + .3 - 3 + static_gradient) / 3
+            self.assertAlmostEqual(result['visual'], expected, places=6)
+            self.assertAlmostEqual(result['rollout'], expected, places=6)
+            self.assertAlmostEqual(result['total'], 2 * expected, places=6)
+            self.assertEqual(set(result['terms']), {'latent', 'delta_nll', 'rollout'})
+            # One-step dz/dw=1; three-step dz/dw=3. Latent MSE has zero gradient here.
+            # float32 backward accumulates both branches; allow two ULPs near 5.
+            self.assertAlmostEqual(captured[0], gradient, delta=1e-6)
+            self.assertGreater(float(model.dynamics.weight.detach()), 0.)
+            self.assertEqual(fingerprint(model.decoder), decoder_before)
+            self.assertTrue(all(p.grad is None for p in model.decoder.parameters()))
+            self.assertTrue(all(p.grad is None for p in model.encoder.parameters()))
 
     def test_local_reconstruction_has_its_weighted_loss_and_encoder_gradient(self):
         class Decoder(nn.Module):

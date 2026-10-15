@@ -289,7 +289,7 @@ def main(argv=None):
     parser.add_argument('--patience', type=int, default=3)
     parser.add_argument('--learning-rate', type=float, default=3e-5)
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
-    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union'),
+    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
                         help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')

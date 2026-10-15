@@ -295,6 +295,11 @@ const text=id=>nodes.get(id).textContent;
   assert.deepEqual(nodes.get('predictor-components-legend').children.map(n=>n.textContent),
     ['MSE latente: 0,5','NLL visual: 2','Error de solapamiento: —','Rollout · total: 3']);
   assert.equal(circles('predictor-components').length,6);
+  report.config.prediction_delta_loss='focal';
+  await vm.runInContext('poll()',context);
+  assert.match(text('predictor-objective'),/penalización focal suave/);
+  assert.match(text('predictor-objective'),/γ=2, T=1/);
+  assert.match(text('predictor-objective'),/sin máscara de argmax/);
   report.config.prediction_delta_loss='balanced';
   report.curves=[{actions:1026,predictor_terms:null}];
   await vm.runInContext('poll()',context);

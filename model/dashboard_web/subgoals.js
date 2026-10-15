@@ -347,7 +347,9 @@ function render(report) {
     ...lossTerms.map(s=>({...s,points:movingAverage(s.points)}))
   ],{digits:4,minimumRange:.001,empty:'Todavía no hay componentes de pérdida registrados'});
   const lossMode=report.config?.prediction_delta_loss;
-  $('predictor-objective').textContent=lossMode==='union'
+  $('predictor-objective').textContent=lossMode==='focal'
+    ? 'NLL activa: cambios reales y penalización focal suave de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales, sin máscara de argmax.'
+    : lossMode==='union'
     ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
     : lossMode==='balanced' ? 'NLL activa: grupos equilibrados de píxeles cambiados y estáticos.'
     : 'Este reporte no identifica el modo de NLL.';
