@@ -36,6 +36,37 @@ def union_example():
 
 
 class OnlineLearningTests(unittest.TestCase):
+    def test_frozen_encoder_keeps_exact_latents_while_decoder_and_predictor_learn(self):
+        torch.manual_seed(19)
+        engine = Engine(WorldModel(NetworkConfig.small()),
+                        replace(TrainConfig(), variance_weight=.1, sigreg_weight=.1))
+        online = OnlineRepresentation(engine, freeze_encoder=True)
+        predictor = OnlinePredictor(engine, threshold=None)
+        observations = [Observation(np.full((1, 8, 8), color, dtype=np.uint8),
+                        (1, 2, 3, 4), 'NOT_FINISHED', 0, 1) for color in (2, 3)]
+        episode = Episode(observations, [Action(4)])
+        initial = {name: fingerprint(getattr(engine.model, name))
+                   for name in ('encoder', 'decoder', 'dynamics')}
+        with torch.no_grad():
+            latent = torch.stack(engine.encode(observations))
+        encoder_parameters = {id(p) for p in engine.model.encoder.parameters()}
+        self.assertFalse(encoder_parameters & {id(p) for p in online.parameters})
+        for _ in range(2):
+            result = online.update(observations)
+            self.assertTrue(math.isfinite(result['total']))
+            self.assertNotIn('sigreg', result['terms'])
+            self.assertNotIn('variance_floor', result['terms'])
+            states = real_states(engine, episode)
+            result = predictor.update(states[0], Action(4), observations[0].final,
+                                      observations[1], states[1].z, 1.)
+            self.assertTrue(math.isfinite(result['total']))
+            self.assertEqual(fingerprint(engine.model.encoder), initial['encoder'])
+            self.assertTrue(all(p.grad is None for p in engine.model.encoder.parameters()))
+            with torch.no_grad():
+                self.assertTrue(torch.equal(torch.stack(engine.encode(observations)), latent))
+        for name in ('decoder', 'dynamics'):
+            self.assertNotEqual(fingerprint(getattr(engine.model, name)), initial[name])
+
     def test_union_nll_counts_missed_invented_and_wrong_colors_without_background_dilution(self):
         before, actual, probability = union_example()
         logits = probability.log().requires_grad_()

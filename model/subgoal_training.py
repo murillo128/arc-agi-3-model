@@ -284,6 +284,8 @@ def main(argv=None):
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
     parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
+    parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
+                        help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')
     args = parser.parse_args(argv)
     if args.update_representation_threshold and not args.resume:
         parser.error('--update-representation-threshold requires --resume')
@@ -339,7 +341,7 @@ def main(argv=None):
                     previous = dict(previous, latent_drift=gates.latent_drift)
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
-            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss') and previous != value:
+            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
@@ -422,13 +424,20 @@ def main(argv=None):
         previous_loss = engine.config.prediction_delta_loss
         selected_loss = args.prediction_delta_loss or previous_loss
         changed_loss = selected_loss != previous_loss
+        previous_freeze = (restored or {}).get('freeze_encoder', False)
+        freeze_encoder = previous_freeze if args.freeze_encoder is None else args.freeze_encoder
+        changed_freeze = freeze_encoder != previous_freeze
         engine.config = replace(engine.config, freeze_representation=False, cache_frozen_latents=True,
             prediction_delta_loss=selected_loss,
             learning_rate=args.learning_rate, train_every=1, loss_steps=1,
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
         report['config']['prediction_delta_loss'] = selected_loss
+        report['config']['freeze_encoder'] = freeze_encoder
         if args.resume and changed_loss:
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
+        if args.resume and changed_freeze:
+            report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
+        if args.resume and (changed_loss or changed_freeze):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
@@ -437,7 +446,7 @@ def main(argv=None):
             evaluator = PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device)
         agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
-        representation = OnlineRepresentation(engine, args.representation_learning_rate)
+        representation = OnlineRepresentation(engine, args.representation_learning_rate, freeze_encoder=freeze_encoder)
         # A shared encoder must not resume distribution shaping when a later
         # level is still in representation-only warmup. Restored permissions
         # also restore this global phase without adding a checkpoint counter.
@@ -530,6 +539,7 @@ def main(argv=None):
             agent_checkpoint.save(args.output / 'latest.pt', agent, training_progress={
                 'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
                 'path_updates': path_learner.updates, 'episodes': episode_index,
+                'freeze_encoder': freeze_encoder,
                 'curriculum': curriculum.snapshot(),
                 'planner_actions': [dict(game=g, level=n, actions=count)
                                    for (g, n), count in planner_actions.items()]})
@@ -545,9 +555,10 @@ def main(argv=None):
                 save()
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
-                path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled)
+                path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled,
+                encoder_frozen=freeze_encoder)
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
-                            or args.update_evaluation_interval or changed_loss):
+                            or args.update_evaluation_interval or changed_loss or changed_freeze):
             save('resume')
         if not args.resume:
             save('initial')

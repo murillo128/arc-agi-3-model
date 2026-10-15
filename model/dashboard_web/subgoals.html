@@ -6,14 +6,14 @@
 <p id="notice" class="notice" hidden></p>
 <section class="metrics training-metrics" aria-label="Métricas del entrenamiento">
 <article><h2>Acciones reales</h2><strong id="actions">—</strong><small id="budget"></small></article>
-<article><h2>Actualizaciones de representación</h2><strong id="representation-updates">—</strong><small>Encoder y decoder · cada acción real</small></article>
+<article><h2>Actualizaciones de representación</h2><strong id="representation-updates">—</strong><small id="representation-update-scope">—</small></article>
 <article><h2>Actualizaciones del predictor</h2><strong id="world-updates">—</strong><small id="gate"></small></article>
 <article><h2>Actualizaciones del Path Planner</h2><strong id="path-updates">—</strong><small>Al terminar el subobjetivo o fracasar</small></article>
 <article><h2>Velocidad</h2><strong id="tps">—</strong><small>Acciones/s desde la primera acción del proceso · incluye pausas posteriores</small></article>
 </section>
 <div class="tabs" role="tablist"><button id="tab-world" role="tab" aria-controls="world" aria-selected="true">Representación y predictor</button><button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false">Currículo</button><button id="tab-path" role="tab" aria-controls="path" aria-selected="false">Subobjetivos y Path Planner</button><button id="tab-evaluation" role="tab" aria-controls="evaluation" aria-selected="false">Evaluación congelada</button></div>
 <section id="curriculum" role="tabpanel" aria-labelledby="tab-curriculum" hidden><article class="chart-card" id="curriculum-panel"><h3>Currículo y activación acumulativa</h3><p id="curriculum-summary" class="muted"></p><p>Representación → representación + predictor → los tres. Una vez habilitado, cada componente sigue aprendiendo; una regresión impide desbloquear otro nivel. Se siguen practicando los niveles anteriores.</p><div class="table-scroll"><table><thead><tr><th>Juego / nivel</th><th>Aprenden</th><th>Reconstrucción</th><th>Deriva latente</th><th>Predicción 1 paso</th><th>Predicción 3 pasos</th><th>Éxito</th><th>Próxima activación</th><th>Evaluaciones para avanzar</th></tr></thead><tbody id="curriculum-rows"></tbody></table></div><p id="thresholds" class="muted"></p></article></section>
-<section id="world" role="tabpanel" aria-labelledby="tab-world"><p class="muted">Encoder y decoder aprenden desde el principio. El predictor se añade cuando la representación está preparada. Las evaluaciones no actualizan pesos.</p>
+<section id="world" role="tabpanel" aria-labelledby="tab-world"><p id="world-training-scope" class="muted"></p>
 <article class="chart-card prediction-preview"><h3>Una acción del predictor <span>Muestra aleatoria reciente · cada 2 s</span></h3><p id="prediction-sample-info">Esperando una predicción y su resultado real…</p>
 <div id="prediction-sample-images" class="prediction-samples" hidden>
 <figure><figcaption>Imagen previa real</figcaption><canvas id="prediction-before" width="64" height="64" aria-label="Tablero real anterior a la acción" class="goal-image"></canvas></figure>

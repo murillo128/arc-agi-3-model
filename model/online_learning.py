@@ -17,13 +17,19 @@ def trainable(engine, *names):
 
 
 class OnlineRepresentation:
-    def __init__(self, engine, learning_rate=3e-6):
+    def __init__(self, engine, learning_rate=3e-6, *, freeze_encoder=False):
         self.engine = engine
-        self.parameters = list(engine.model.encoder.parameters()) + list(engine.model.decoder.parameters())
+        self.freeze_encoder = freeze_encoder
+        self.parameters = list(engine.model.decoder.parameters())
+        if not freeze_encoder:
+            self.parameters = list(engine.model.encoder.parameters()) + self.parameters
+        else:
+            engine.model.encoder.requires_grad_(False).eval()
+            engine.model.encoder.zero_grad(set_to_none=True)
         self.optimizer = optimizer(self.parameters, learning_rate,
                                    engine.device.type == 'cuda', engine.optimizer_bits)
         self.updates = 0
-        self.sigreg_enabled = bool(engine.config.sigreg_weight)
+        self.sigreg_enabled = bool(engine.config.sigreg_weight) and not freeze_encoder
 
     def update(self, observations, *, preview=None):
         """Reconstruct the last two real observations on EVERY learning action.
@@ -36,10 +42,11 @@ class OnlineRepresentation:
         if not observations or len({o.final.shape for o in observations}) != 1:
             return None
         e, c = self.engine, self.engine.config
-        trainable(e, 'encoder', 'decoder')
+        trainable(e, *(['decoder'] if self.freeze_encoder else ['encoder', 'decoder']))
         self.optimizer.zero_grad(set_to_none=True)
         with e.autocast():
-            zs = torch.stack(e.encode(observations, training=True))
+            with torch.set_grad_enabled(not self.freeze_encoder):
+                zs = torch.stack(e.encode(observations, training=not self.freeze_encoder))
             logits = e.decode(zs, *observations[-1].final.shape, checkpoint_blocks=True)
         if preview is not None:
             # Reuse the pre-update reconstruction, without another model pass or
@@ -63,7 +70,7 @@ class OnlineRepresentation:
         # Disabled regularizers do no work and consume no random draws.
         if self.sigreg_enabled and c.sigreg_weight and len(zs) >= c.min_observations:
             terms['sigreg'] = c.sigreg_weight * sigreg(zs, e.model.config.sigreg_slices)
-        if c.variance_weight and len(zs) >= c.min_observations:
+        if not self.freeze_encoder and c.variance_weight and len(zs) >= c.min_observations:
             terms['variance_floor'] = c.variance_weight * variance_floor(zs)
         loss = sum(terms.values())
         loss.backward()

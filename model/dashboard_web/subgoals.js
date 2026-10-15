@@ -272,6 +272,13 @@ function render(report) {
     for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;
   }));
   $('representation-updates').textContent=fmt(p.representation_updates);
+  const encoderFrozen=(p.encoder_frozen??c.freeze_encoder)===true;
+  $('representation-update-scope').textContent=encoderFrozen
+    ? 'Decoder · encoder congelado' : 'Encoder y decoder · cada acción real';
+  $('world-training-scope').textContent=(encoderFrozen
+    ? 'Encoder congelado: los latentes se mantienen fijos para una misma observación. El decoder sigue aprendiendo.'
+    : 'Encoder y decoder aprenden desde el principio.')
+    +' El predictor se añade cuando la representación está preparada. Las evaluaciones no actualizan pesos.';
   $('notice').hidden=!report.error;$('notice').textContent=report.error||'';
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
@@ -339,7 +346,9 @@ function render(report) {
     ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
     : lossMode==='balanced' ? 'NLL activa: grupos equilibrados de píxeles cambiados y estáticos.'
     : 'Este reporte no identifica el modo de NLL.';
-  $('representation-regularization').textContent=p.sigreg_enabled===true
+  $('representation-regularization').textContent=encoderFrozen
+    ? 'Encoder congelado · regularización del encoder desactivada · decoder sigue aprendiendo'
+    : p.sigreg_enabled===true
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
   plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});

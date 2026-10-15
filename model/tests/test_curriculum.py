@@ -35,6 +35,71 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_resume_freezes_only_encoder_inherits_mode_and_can_unfreeze(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root / 'source.pt', path_agent())
+            args = ['--source', str(root / 'source.pt'), '--output', str(root / 'run'),
+                    '--device', 'cpu', '--steps', '2', '--evaluate-every', '4',
+                    '--checkpoint-every', '2', '--evaluation-episodes', '1']
+            main([*args, '--actions', '4'])
+            filename = root / 'run/latest.pt'
+            saved = checkpoint.load(filename)
+            # Legacy progress has no freeze setting. Its default remains trainable.
+            saved['training_progress'].pop('freeze_encoder')
+            saved['training_progress']['curriculum']['levels'][0].update(
+                predictor=True, representation_passes=3, prediction_passes=2, promotion_passes=1)
+            checkpoint.write(filename, saved)
+            old = agent_checkpoint.load(filename)
+            initial = {name: fingerprint(getattr(old.engine.model, name))
+                       for name in ('encoder', 'decoder', 'dynamics')}
+            full = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
+            snapshots = []
+            save = agent_checkpoint.save
+
+            def capture(path, agent, **kwargs):
+                progress = kwargs['training_progress']
+                if progress['actions'] == 4:
+                    self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), full)
+                    self.assertEqual(progress['representation_updates'], 4)
+                    self.assertEqual(progress['updates'], 0)
+                    self.assertTrue(progress['freeze_encoder'])
+                    snapshots.append(progress)
+                return save(path, agent, **kwargs)
+
+            with patch('model.subgoal_training.agent_checkpoint.save', side_effect=capture):
+                main([*args, '--actions', '6', '--resume', '--freeze-encoder'])
+            self.assertEqual(len(snapshots), 1)
+            permissions = snapshots[0]['curriculum']['levels'][0]
+            self.assertTrue(permissions['predictor'])
+            self.assertFalse(permissions['planner'])
+            self.assertEqual([permissions[k] for k in
+                ('representation_passes', 'prediction_passes', 'promotion_passes')], [0, 0, 0])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertEqual(report['resumed_from']['freeze_encoder'], dict(old=False, new=True))
+            self.assertTrue(report['progress']['encoder_frozen'])
+            # Omitting the flag inherits the checkpoint, even if the report disagrees.
+            report['config']['freeze_encoder'] = False
+            (root / 'run/report.json').write_text(json.dumps(report))
+            main([*args, '--actions', '8', '--resume'])
+            current = agent_checkpoint.load(filename)
+            self.assertEqual(fingerprint(current.engine.model.encoder), initial['encoder'])
+            for name in ('decoder', 'dynamics'):
+                self.assertNotEqual(fingerprint(getattr(current.engine.model, name)), initial[name])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertTrue(report['config']['freeze_encoder'])
+            self.assertNotIn('freeze_encoder', report['resumed_from'])
+            self.assertEqual(report['progress']['representation_updates'], 8)
+            self.assertEqual(report['progress']['predictor_updates'], 4)
+            self.assertTrue(checkpoint.load(filename)['training_progress']['freeze_encoder'])
+            main([*args, '--actions', '10', '--resume', '--no-freeze-encoder'])
+            current = agent_checkpoint.load(filename)
+            self.assertNotEqual(fingerprint(current.engine.model.encoder), initial['encoder'])
+            self.assertFalse(checkpoint.load(filename)['training_progress']['freeze_encoder'])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertEqual(report['resumed_from']['freeze_encoder'], dict(old=True, new=False))
+            self.assertFalse(report['progress']['encoder_frozen'])
+
     def test_resume_selects_union_loss_preserving_weights_counters_and_admissions(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
             root = Path(temp)

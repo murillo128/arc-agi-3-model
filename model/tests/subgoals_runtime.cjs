@@ -232,6 +232,21 @@ const text=id=>nodes.get(id).textContent;
   report.progress.sigreg_enabled=false;
   await vm.runInContext('poll()',context);
   assert.equal(text('representation-regularization'),'SIGReg desactivado · reconstrucción continúa');
+  report.progress.encoder_frozen=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('representation-update-scope'),'Decoder · encoder congelado');
+  assert.match(text('world-training-scope'),/^Encoder congelado:/);
+  assert.equal(text('representation-regularization'),
+    'Encoder congelado · regularización del encoder desactivada · decoder sigue aprendiendo');
+  // Current progress wins over configuration; missing progress falls back to it.
+  report.progress.encoder_frozen=false;
+  report.config.freeze_encoder=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('representation-update-scope'),'Encoder y decoder · cada acción real');
+  delete report.progress.encoder_frozen;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('representation-update-scope'),'Decoder · encoder congelado');
+  delete report.config.freeze_encoder;
   delete report.progress.sigreg_enabled;
   report.curves=[];
   await vm.runInContext('poll()',context);
@@ -240,6 +255,8 @@ const text=id=>nodes.get(id).textContent;
     assert.equal(text(id),'Sin una actualización registrada');
   }
   assert.equal(text('representation-regularization'),'Estado de SIGReg no registrado');
+  assert.equal(text('representation-update-scope'),'Encoder y decoder · cada acción real');
+  assert.match(text('world-training-scope'),/^Encoder y decoder aprenden/);
 
   // Historical terms use recorded updates only, not missing terms as zeros.
   // At action 514 the 512-action window contains actions 3, 32 and 513.

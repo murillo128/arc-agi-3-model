@@ -10,8 +10,10 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
 
 **Activación acumulativa, nunca fases que sustituyen al aprendizaje anterior:**
 
-1. Encoder y decoder aprenden desde la primera acción real y siguen aprendiendo
-   durante toda la campaña. Reconstrucción de las dos últimas observaciones:
+1. Por defecto, encoder y decoder aprenden desde la primera acción real y siguen
+   durante toda la campaña. El experimento opcional `--freeze-encoder` fija sólo
+   el encoder y mantiene el aprendizaje del decoder.
+   Reconstrucción de las dos últimas observaciones:
    CE de colores, delta visual y overlap, tanto con el decoder contextual como
    con su lectura local auxiliar (peso 1). La lectura local obliga a conservar
    información visual en z sin depender de la corrección contextual del decoder.
@@ -129,6 +131,17 @@ JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
+`--freeze-encoder` fija sólo el encoder: el decoder y el predictor siguen
+aprendiendo con las mismas pérdidas. No se optimizan ni regularizan los pesos
+del encoder. El modo queda en el checkpoint y se hereda con `--resume`; los
+checkpoints antiguos mantienen el encoder entrenable. `--no-freeze-encoder`
+lo vuelve a activar. Cambiar este modo al reanudar conserva pesos, contadores y
+permisos, reinicia las rachas de evaluación y guarda antes de seguir entrenando.
+El dashboard identifica el encoder congelado; el contador de representación
+pasa a contar actualizaciones del decoder. La primera evaluación tras reanudar
+establece nuevos anclajes de deriva, por lo que no se compara con la anterior.
+Este experimento no cambia la NLL ni demuestra por sí solo una mejora predictiva;
+también se reinician los momentos de los optimizadores al reanudar.
 `--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
 La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
 PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
