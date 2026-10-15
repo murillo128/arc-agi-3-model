@@ -124,7 +124,8 @@ function render(report) {
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
   $('connection').className=report.status==='failed'||report.age_seconds>60?'warn':'';
   $('freshness').textContent=`Última escritura hace ${fmt(report.age_seconds)} s · consulta cada 2 s`;
-  $('run-info').textContent=`Una configuración · semilla ${fmt(c.seed)} · currículo acumulativo · objetivos sintéticos`;
+  const initialization=c.initialization==='random'?' · Inicializado desde cero':c.initialization==='checkpoint'?' · Pesos preentrenados':'';
+  $('run-info').textContent=`${c.game||'Una configuración'} · semilla ${fmt(c.seed)} · currículo acumulativo${initialization}`;
   const curriculum=report.curriculum, limits=curriculum?.thresholds||{};
   const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
   $('curriculum-panel').hidden=!curriculum;
@@ -145,7 +146,7 @@ function render(report) {
   $('tps').textContent=fmt(p.tps,2);
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
-    : `${p.game||'Preparando juegos'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
+    : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
   plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},

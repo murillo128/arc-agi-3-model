@@ -1,6 +1,7 @@
-"""Cumulative level curriculum and incremental representation/dynamics/path learning.
+"""Single-game level curriculum and incremental representation/dynamics/path learning.
 
-Fresh runs initialize path weights; --resume restores a saved curriculum. Only actual SDK
+--init-config initializes every module; --source transfers world weights.
+--resume restores a saved curriculum and all weights. Only actual SDK
 transitions train dynamics; only finished real goal segments train PathValue.
 The environment's teacher stays outside the portable Agent.
 """
@@ -18,12 +19,16 @@ from . import agent_checkpoint, checkpoint
 from .agent import Agent, AgentConfig
 from .behavior_experiment import episode_seeds
 from .campaign import write_report
+from .config import NetworkConfig, TrainConfig
 from .data import Episode, random_action
 from .environment import Factory, SYNTHETIC_LEVELS
+from .learning import Engine
+from .networks import WorldModel
 from .online_learning import OnlinePredictor, OnlineRepresentation
 from .curriculum import Curriculum, CurriculumConfig
 from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
+from .planning import GoalValue
 from .prediction_samples import PredictionSamples
 
 def error_counts(before, actual, predicted):
@@ -230,8 +235,13 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, required=True)
+    initialization = parser.add_mutually_exclusive_group(required=True)
+    initialization.add_argument('--source', type=Path, help='Transfer pretrained world weights')
+    initialization.add_argument('--init-config', type=Path,
+                                help='Initialize all weights from scratch using this network/training JSON')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--game', choices=tuple(SYNTHETIC_LEVELS), default='sc01-v1',
+                        help='One game per campaign; only its unlocked levels are practiced and evaluated')
     parser.add_argument('--resume', action='store_true',
                         help='Continue latest.pt weights/curriculum/counters; optimizer moments restart')
     parser.add_argument('--device', choices=('cpu', 'cuda'), default='cuda')
@@ -259,7 +269,7 @@ def main(argv=None):
             success=args.success, patience=args.patience)
     except ValueError as error:
         parser.error(str(error))
-    curriculum = Curriculum(SYNTHETIC_LEVELS, gates)
+    curriculum = Curriculum({args.game: SYNTHETIC_LEVELS[args.game]}, gates)
     args.output.mkdir(parents=True, exist_ok=True)
     path = args.output / 'report.json'
     if path.exists() and not args.resume:
@@ -267,10 +277,12 @@ def main(argv=None):
     torch.set_num_threads(4)
     torch.set_float32_matmul_precision('high')
     torch.manual_seed(args.seed)
-    all_pairs = list(curriculum.readiness)
+    # Keep each game's evaluation scenarios stable when campaign coverage changes.
+    evaluation_pairs = [(g, n) for g, count in SYNTHETIC_LEVELS.items() for n in range(1, count + 1)]
     report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     report_config['curriculum'] = asdict(gates)
     report_config['horizon'] = PathConfig().horizon
+    report_config['initialization'] = 'random' if args.init_config else 'checkpoint'
     report = dict(kind='synthetic_subgoals', status='running', config=report_config,
                   progress={'phase': 'loading', 'actions': 0, 'total_actions': args.actions},
                   curriculum=curriculum.snapshot(), curves=[], episodes=[], evaluations=[])
@@ -319,22 +331,33 @@ def main(argv=None):
 
     try:
         publish(force=True)
-        source = agent_checkpoint.load(args.output / 'latest.pt' if args.resume else args.source, device=args.device)
-        engine = source.engine
+        if args.resume or args.source:
+            source = agent_checkpoint.load(args.output / 'latest.pt' if args.resume else args.source, device=args.device)
+            engine, heads = source.engine, source.heads
+            evaluator = source.path_evaluator if args.resume else None
+            del source
+        else:
+            initial = json.loads(args.init_config.read_text())
+            net = WorldModel(NetworkConfig(**initial['network'])).to(args.device)
+            engine = Engine(net, TrainConfig(**initial.get('training', {})), compile_model=args.device == 'cuda')
+            heads = GoalValue(net.config.latent, net.config.memory,
+                              width=initial.get('outcome_width', 64)).to(args.device)
+            evaluator = None
         engine.optimizer_bits = 8 if args.device == 'cuda' else 32
         engine.config = replace(engine.config, freeze_representation=False, cache_frozen_latents=True,
             learning_rate=args.learning_rate, train_every=1, loss_steps=1,
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
-        evaluator = (source.path_evaluator if args.resume else
-                     PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device))
-        agent = Agent(engine, source.heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
+        if evaluator is None:
+            if args.resume:
+                raise ValueError('Resuming requires the saved PathValue weights')
+            evaluator = PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device)
+        agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
-        del source
         representation = OnlineRepresentation(engine, args.representation_learning_rate)
         world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
-        factories = {g: Factory(g, Path(__file__).resolve().parents[1] / 'games') for g in SYNTHETIC_LEVELS}
-        actions, episode_index, planner_actions = 0, 0, dict.fromkeys(all_pairs, 0)
+        factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
+        actions, episode_index, planner_actions = 0, 0, dict.fromkeys(curriculum.readiness, 0)
         if restored:
             actions, episode_index = restored['actions'], restored['episodes']
             representation.updates = restored['representation_updates']
@@ -361,7 +384,7 @@ def main(argv=None):
                 pair = game, level
                 readiness = curriculum.readiness[pair]
                 seeds = episode_seeds(split, args.evaluation_episodes,
-                                      offset=700000 + all_pairs.index(pair) * 100)
+                                      offset=700000 + evaluation_pairs.index(pair) * 100)
                 quality, success = None, None
                 for mode in ('random', 'path_mpc'):
                     if mode == 'path_mpc' and not readiness.planner:
@@ -373,7 +396,7 @@ def main(argv=None):
                                 evaluation_episode=i + 1, evaluation_episodes=len(seeds), evaluation_action=row['action'],
                                 predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                                 **{k: row[k] for k in ('goal', 'observation', 'goal_frame', 'goal_mask')})
-                        summaries.append(play(agent, factories[game], level, seed, args.steps,
+                        summaries.append(play(agent, factory, level, seed, args.steps,
                             random_policy=mode == 'random', progress=progress,
                             sample=lambda before, actual, predicted, **meta: previews.add(
                                 before, actual, predicted, phase='evaluation', training_action=actions, **meta),
@@ -449,7 +472,7 @@ def main(argv=None):
                         tps=point['tps'], seconds=seconds, **{k: v for k, v in row.items() if k not in ('counts', 'segment')})
             publish(force=True, phase='warmup' if began_learning is None else 'training', game=game, level=level,
                     predictor_enabled=readiness.predictor, planner_enabled=readiness.planner)
-            result = play(agent, factories[game], level, seed, args.steps,
+            result = play(agent, factory, level, seed, args.steps,
                 representation=representation, world=world if readiness.predictor else None,
                 learner=path_learner if readiness.planner else None,
                 random_policy=not readiness.planner, epsilon=epsilon, progress=progress,

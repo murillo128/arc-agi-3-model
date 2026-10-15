@@ -573,7 +573,7 @@ def subgoal_snapshot(path):
         data = json.loads(path.read_text())
         if data.get('kind') != 'synthetic_subgoals':
             raise ValueError('Expected a synthetic-subgoal report')
-        data['config'] = {k: v for k, v in data.get('config', {}).items() if k not in ('source', 'output')}
+        data['config'] = {k: v for k, v in data.get('config', {}).items() if k not in ('source', 'init_config', 'output')}
         data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
         return data
     except (OSError, ValueError) as error:

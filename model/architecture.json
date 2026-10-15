@@ -106703,7 +106703,7 @@
       "id": "training.curriculum",
       "label": "Cumulative Curriculum & Activation",
       "kind": "operation",
-      "description": "Start each game at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; never discard weights. Encoder/decoder always learn. Admit predictor at reconstruction <=1% and latent drift <=5%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
+      "description": "Select exactly one game per campaign (sc01-v1 by default); training, evaluation and previews use only that game. Start at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; retain weights when advancing. The active campaign initializes encoder, decoder, predictor and PathValue from scratch using subgoal_config.json; counters and permissions start at zero. Encoder/decoder always learn. Admit predictor at reconstruction <=1% and latent drift <=5%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
       "ports": [
         {
           "id": "quality",
@@ -106830,7 +106830,7 @@
       "id": "training.dashboard",
       "label": "Training Dashboard",
       "kind": "output",
-      "description": "One current run. Show all admitted learners, locked/unlocked levels, thresholds, evidence and promotion streaks. Fixed-evaluation curves break when coverage changes; per-level quality drives promotion, aggregate live trends are diagnostic. Every two seconds sample a recent real transition: previous board, real net action delta and causal predicted delta, both relative to that same board. Reuse the prediction made before observing the result/updating weights; no additional inference. An independent display RNG selects from at most 64 disposable samples; this is not learning replay. Show game/level/action/phase and checkerboard for no change. No old campaign results.",
+      "description": "One current single-game run. Identify the selected game and random versus pretrained initialization. Show all admitted learners, locked/unlocked levels, thresholds, evidence and promotion streaks. Fixed-evaluation curves break when coverage changes; per-level quality drives promotion, aggregate live trends are diagnostic. Every two seconds sample a recent real transition: previous board, real net action delta and causal predicted delta, both relative to that same board. Reuse the prediction made before observing the result/updating weights; no additional inference. An independent display RNG selects from at most 64 disposable samples; this is not learning replay. Show game/level/action/phase and checkerboard for no change. No old campaign results.",
       "ports": [
         {
           "id": "curriculum",

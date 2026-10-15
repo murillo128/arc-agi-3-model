@@ -203,10 +203,11 @@ class PathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             file = Path(temp) / 'report.json'
             file.write_text(json.dumps({'kind': 'synthetic_subgoals', 'status': 'running',
-                'config': {'source': '/private/model.pt', 'output': '/private/run', 'seed': 0},
+                'config': {'source': '/private/model.pt', 'init_config': '/private/config.json',
+                           'output': '/private/run', 'seed': 0, 'initialization': 'random'},
                 'progress': {'actions': 1}, 'curves': []}))
             result = subgoal_snapshot(file)
-            self.assertEqual(result['config'], {'seed': 0})
+            self.assertEqual(result['config'], {'seed': 0, 'initialization': 'random'})
             self.assertEqual(result['progress']['actions'], 1)
             self.assertNotIn('campaign', result)
             # Actual transport and assets: old campaign bookmark resolves to

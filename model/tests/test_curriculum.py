@@ -4,7 +4,7 @@ Threshold tests use literal measurements, optimizer tests compare module weights
 and rollout tests use a tiny arithmetic world whose three-step answer is 7.
 """
 from contextlib import nullcontext, redirect_stdout
-from dataclasses import replace
+from dataclasses import asdict, replace
 import io
 import json
 from pathlib import Path
@@ -197,25 +197,32 @@ class CurriculumTests(unittest.TestCase):
         self.assertEqual([s['actions'] for s in result['segments']],[2,0])
         self.assertEqual([s['success'] for s in result['segments']],[True,True])
 
-    def test_entrypoint_trains_representation_while_unqualified_dependents_wait(self):
-        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
-            root = Path(temp)
-            agent_checkpoint.save(root/'source.pt',path_agent())
-            main(['--source',str(root/'source.pt'),'--output',str(root/'run'),
-                  '--device','cpu','--actions','4','--steps','2','--evaluate-every','4',
-                  '--evaluation-episodes','1'])
-            report = json.loads((root/'run/report.json').read_text())
-            self.assertEqual(report['status'],'complete')
-            self.assertEqual(report['progress']['actions'],4)
-            self.assertEqual(report['progress']['representation_updates'],4)
-            self.assertEqual(report['progress']['predictor_updates'],0)
-            self.assertEqual(report['progress']['path_updates'],0)
-            self.assertEqual(report['curriculum']['unlocked'],{'sc01-v1':1,'si01-v1':1})
-            self.assertEqual(sum(r['real_actions'] for r in report['evaluations']),12)
-            self.assertTrue(all(r['quality']['latent_drift'] is None
-                                for r in report['evaluations'] if r['split']=='final'))
-            loaded = agent_checkpoint.load(root/'run/latest.pt')
-            self.assertEqual(loaded.config.mode,'path_mpc')
+    def test_entrypoint_trains_and_evaluates_only_the_selected_game(self):
+        for game, selection in (('sc01-v1', []), ('si01-v1', ['--game', 'si01-v1'])):
+            with self.subTest(game=game), tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+                root = Path(temp)
+                agent_checkpoint.save(root/'source.pt',path_agent())
+                with patch('model.subgoal_training.Factory', wraps=Factory) as factories:
+                    main(['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                          '--device','cpu','--actions','4','--steps','2','--evaluate-every','4',
+                          '--evaluation-episodes','1', *selection])
+                self.assertEqual([call.args[0] for call in factories.call_args_list], [game])
+                report = json.loads((root/'run/report.json').read_text())
+                self.assertEqual(report['status'],'complete')
+                self.assertEqual(report['progress']['actions'],4)
+                self.assertEqual(report['progress']['representation_updates'],4)
+                self.assertEqual(report['progress']['predictor_updates'],0)
+                self.assertEqual(report['progress']['path_updates'],0)
+                self.assertEqual(report['config']['game'],game)
+                self.assertEqual(report['curriculum']['unlocked'],{game:1})
+                for key in ('curves', 'episodes', 'evaluations'):
+                    self.assertEqual({r['game'] for r in report[key]}, {game})
+                self.assertEqual(report['prediction_sample']['game'],game)
+                self.assertEqual(sum(r['real_actions'] for r in report['evaluations']),6)
+                self.assertTrue(all(r['quality']['latent_drift'] is None
+                                    for r in report['evaluations'] if r['split']=='final'))
+                loaded = agent_checkpoint.load(root/'run/latest.pt')
+                self.assertEqual(loaded.config.mode,'path_mpc')
 
     def test_resume_uses_saved_weights_gates_counters_and_discards_unsaved_measurements(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
@@ -251,6 +258,52 @@ class CurriculumTests(unittest.TestCase):
             self.assertEqual(report['resumed_from']['actions'],4)
             self.assertTrue(report['curriculum']['levels'][0]['planner'])
             self.assertIsNotNone(report['prediction_sample'])
+            # A saved single-game run must not silently become another campaign.
+            unchanged = report_path.read_bytes()
+            with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
+                main([*args,'--actions','8','--resume','--game','si01-v1'])
+            self.assertIn('Cannot change game',stderr.getvalue())
+            self.assertEqual(report_path.read_bytes(),unchanged)
+
+    def test_scratch_initialization_never_loads_weights_and_only_trains_representation(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            config = root/'config.json'
+            config.write_text(json.dumps({'network':asdict(path_agent().engine.model.config)}))
+            initial = {}
+            save = agent_checkpoint.save
+            def capture(path, agent, **kwargs):
+                progress = kwargs['training_progress']
+                if progress['actions'] == 0:
+                    initial.update({n:fingerprint(getattr(agent.engine.model,n))
+                                    for n in ('encoder','decoder','dynamics')})
+                    initial['path'] = fingerprint(agent.path_evaluator)
+                    self.assertEqual(progress['representation_updates'],0)
+                    self.assertEqual(progress['updates'],0)
+                    self.assertEqual(progress['path_updates'],0)
+                    self.assertEqual(progress['episodes'],0)
+                    self.assertTrue(all(not r['predictor'] and not r['planner']
+                                        for r in progress['curriculum']['levels']))
+                return save(path,agent,**kwargs)
+            args = ['--init-config',str(config),'--output',str(root/'run'),
+                    '--device','cpu','--steps','2','--evaluate-every','4','--evaluation-episodes','1']
+            with patch('model.subgoal_training.agent_checkpoint.load',side_effect=AssertionError('No pretrained weights')), \
+                 patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture):
+                main([*args,'--actions','2'])
+            self.assertTrue(initial,'the zero-action checkpoint is published before any evaluation/learning')
+            loaded = agent_checkpoint.load(root/'run/latest.pt')
+            for name in ('encoder','decoder'):
+                self.assertNotEqual(fingerprint(getattr(loaded.engine.model,name)),initial[name])
+            self.assertEqual(fingerprint(loaded.engine.model.dynamics),initial['dynamics'])
+            self.assertEqual(fingerprint(loaded.path_evaluator),initial['path'])
+            # Resume still restores the saved modules even for a randomly initialized run.
+            main([*args,'--actions','4','--resume'])
+            report = json.loads((root/'run/report.json').read_text())
+            self.assertEqual(report['config']['initialization'],'random')
+            self.assertEqual(report['resumed_from']['actions'],2)
+            self.assertEqual(report['progress']['representation_updates'],4)
+            self.assertEqual(report['progress']['predictor_updates'],0)
+            self.assertEqual(report['progress']['path_updates'],0)
 
 
 if __name__ == '__main__':

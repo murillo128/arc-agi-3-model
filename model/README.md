@@ -2,9 +2,11 @@
 
 ## Plan activo: aprendizaje incremental y currículo acumulativo
 
-Sustituye las campañas anteriores. Conservamos el mundo preentrenado; PathValue,
-contadores, criterios de activación y resultados empiezan de nuevo. Una sola
-configuración, hasta 262.144 acciones reales, sin barrido de variantes.
+Sustituye las campañas anteriores. La campaña activa empieza desde cero: encoder,
+decoder, predictor y PathValue con pesos nuevos; también contadores, criterios de
+activación y resultados. Un solo juego (`sc01-v1`), hasta 262.144 acciones reales,
+sin barrido de variantes. `subgoal_config.json` conserva los tamaños y la receta
+del modelo, sin depender de checkpoints previos para inicializarlo.
 
 **Activación acumulativa, nunca fases que sustituyen al aprendizaje anterior:**
 
@@ -29,9 +31,10 @@ norma RMS anterior). La primera evaluación no tiene esa comparación y no abre
 permisos. Los umbrales, paciencia y tasas son configurables; son valores iniciales,
 no una conclusión experimental ni garantía de estabilidad.
 
-**Currículo por juego:** primero nivel 1; después 1+2; después 1+2+3, etc. Cada
-juego sintético desbloquea sus niveles independientemente. Se alternan partidas
-nuevas entre todos los niveles desbloqueados, con parámetros aleatorios. No se
+**Un solo juego por campaña:** `--game sc01-v1` por defecto. `si01-v1` también
+puede seleccionarse para otra campaña, pero no se intercalan ambos juegos.
+Primero nivel 1; después 1+2; después 1+2+3, etc. Se alternan partidas nuevas
+entre los niveles desbloqueados del juego elegido, con parámetros aleatorios. No se
 borran pesos al avanzar; la experiencia temporal sí se descarta en cada partida.
 Para abrir un nivel nuevo se exige calidad de representación/predicción y ≥80 %
 de éxito del planner en **todos** los niveles ya abiertos de ese juego durante
@@ -83,11 +86,15 @@ de salida: recupera todos los pesos (incluido PathValue), permisos, niveles y
 contadores, y descarta mediciones posteriores al checkpoint. Los momentos de los
 optimizadores se reinician: no es una continuación numéricamente idéntica. También
 se renuevan los anclajes de deriva en la siguiente evaluación. No cambia los
-hiperparámetros al reanudar; solo permite ampliar el presupuesto de acciones.
+hiperparámetros ni el juego al reanudar; solo permite ampliar el presupuesto de acciones.
+`--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
+La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
+PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
 
 ```sh
 .venv/bin/python -u -m model.subgoal_training \
-  --source model/runs/bootstrap/world.pt \
+  --game sc01-v1 \
+  --init-config model/subgoal_config.json \
   --output model/runs/curriculum/current
 .venv/bin/python -m model.dashboard \
   --subgoal-report model/runs/curriculum/current/report.json
@@ -99,7 +106,7 @@ llamador proporcione el objetivo con `Agent.set_goal`: no descubre objetivos.
 El profesor sintético está fuera del agente y se rechaza para juegos SDK ajenos
 al repositorio. Los resultados no prueban descubrimiento autónomo de reglas/objetivos.
 
-**Dashboard:** una ejecución, una tabla de niveles, componentes habilitados,
+**Dashboard:** una ejecución de un solo juego, una tabla de niveles, componentes habilitados,
 mediciones y evaluaciones consecutivas para avanzar. Curvas fijas de reconstrucción
 y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
 al cambiar la cobertura del currículo. Las curvas de interacción conservan las
