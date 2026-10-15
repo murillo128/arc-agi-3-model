@@ -50,6 +50,7 @@ class TrainConfig:
     local_reconstruction_weight: float = 1.
     delta_overlap_weight: float = 1.
     false_change_weight: float = 1.
+    prediction_delta_loss: str = 'balanced'
     freeze_representation: bool = False
     auto_representation: bool = False
     representation_unfreeze_error: float = .02
@@ -92,8 +93,10 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
-            if k in {'decoder_readout', 'backward_mode'}:
-                allowed = {'contextual', 'local'} if k == 'decoder_readout' else {'fragmented', 'ordinary'}
+            if k in {'decoder_readout', 'backward_mode', 'prediction_delta_loss'}:
+                allowed = {'decoder_readout': {'contextual', 'local'},
+                           'backward_mode': {'fragmented', 'ordinary'},
+                           'prediction_delta_loss': {'balanced', 'union'}}[k]
                 if v not in allowed:
                     raise ValueError(f'Invalid {k}: {v}')
                 continue

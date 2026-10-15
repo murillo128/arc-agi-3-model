@@ -98,7 +98,8 @@ class OnlinePredictor:
             predicted, _, delta = e.predict(state.z[None].detach(), state.h.detach(), e.actions([action]), *state.geometry)
             logits = e.decode(predicted, *state.geometry, checkpoint_blocks=True)
         latent = F.mse_loss(delta.float(), (target_z - state.z).detach()[None].float())
-        visual = visual_delta_loss(logits, before, actual, e.config.false_change_weight).mean()
+        visual = visual_delta_loss(logits, before, actual, e.config.false_change_weight,
+                                   mode=e.config.prediction_delta_loss).mean()
         overlap = soft_delta_error(logits, before, actual).mean()
         loss = latent + visual + e.config.delta_overlap_weight * overlap
         rollout_loss = None
@@ -111,7 +112,8 @@ class OnlinePredictor:
                 logits = e.decode(z, *anchor.geometry, checkpoint_blocks=True)
             before = torch.tensor(np.array(reference, copy=True), device=e.device, dtype=torch.long)[None]
             rollout_loss = (F.mse_loss(z.float(), target_z.detach()[None].float())
-                + visual_delta_loss(logits, before, actual, e.config.false_change_weight).mean()
+                + visual_delta_loss(logits, before, actual, e.config.false_change_weight,
+                                    mode=e.config.prediction_delta_loss).mean()
                 + e.config.delta_overlap_weight * soft_delta_error(logits, before, actual).mean())
             loss = loss + rollout_loss
         loss.backward()

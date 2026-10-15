@@ -282,6 +282,8 @@ def main(argv=None):
     parser.add_argument('--patience', type=int, default=3)
     parser.add_argument('--learning-rate', type=float, default=3e-5)
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
+    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union'),
+                        help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     args = parser.parse_args(argv)
     if args.update_representation_threshold and not args.resume:
         parser.error('--update-representation-threshold requires --resume')
@@ -337,7 +339,7 @@ def main(argv=None):
                     previous = dict(previous, latent_drift=gates.latent_drift)
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
-            if key not in ('resume', 'actions', 'source', 'output') and previous != value:
+            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
@@ -417,9 +419,18 @@ def main(argv=None):
                               width=initial.get('outcome_width', 64)).to(args.device)
             evaluator = None
         engine.optimizer_bits = 8 if args.device == 'cuda' else 32
+        previous_loss = engine.config.prediction_delta_loss
+        selected_loss = args.prediction_delta_loss or previous_loss
+        changed_loss = selected_loss != previous_loss
         engine.config = replace(engine.config, freeze_representation=False, cache_frozen_latents=True,
+            prediction_delta_loss=selected_loss,
             learning_rate=args.learning_rate, train_every=1, loss_steps=1,
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
+        report['config']['prediction_delta_loss'] = selected_loss
+        if args.resume and changed_loss:
+            report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
+            for state in curriculum.readiness.values():
+                state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
             if args.resume:
                 raise ValueError('Resuming requires the saved PathValue weights')
@@ -536,7 +547,7 @@ def main(argv=None):
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled)
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
-                            or args.update_evaluation_interval):
+                            or args.update_evaluation_interval or changed_loss):
             save('resume')
         if not args.resume:
             save('initial')

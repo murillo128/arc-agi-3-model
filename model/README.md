@@ -27,6 +27,11 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
    En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
+   La receta activa usa `prediction_delta_loss: "union"`: la NLL visual promedia
+   sólo los píxeles que cambian realmente **o que el predictor intenta cambiar**.
+   Así cuentan las omisiones, los cambios inventados y los colores incorrectos,
+   además de los cambios reales acertados. El fondo correctamente conservado no
+   diluye la pérdida. Se mantienen el MSE latente y el término de overlap suave.
 3. PathValue se incorpora cuando además los errores de predicción a uno y tres
    pasos son ≤10 % durante tres evaluaciones. Aprende al terminar cada segmento
    real de subobjetivo; encoder, decoder y predictor continúan actualizándose.
@@ -118,6 +123,12 @@ permite cambiar únicamente ese umbral con `--resume`.
 `--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
 deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
 reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
+`--prediction-delta-loss union` permite seleccionar explícitamente la nueva NLL,
+también con `--resume`. Sin esta opción se hereda la pérdida del checkpoint o del
+JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
+El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
+el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
+La reconstrucción del encoder/decoder conserva su pérdida anterior.
 `--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
 La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
 PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
@@ -975,6 +986,16 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    `extra_changes`, `missed_changes`, `wrong_replacement_colors` y `correct_changes`.
    Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
+   Lo anterior describe el modo histórico `prediction_delta_loss: "balanced"`.
+   La campaña incremental activa selecciona `"union"` para las ramas predictivas
+   de uno y tres pasos. Con `x` anterior, `y` real y `yhat=argmax(logits)`:
+   `U = (y != x) OR (yhat != x)` y
+   `L_union = sum(where(U, -log softmax(logits)[y], 0)) / max(1, |U|)`.
+   Se normaliza por imagen y después se promedian las imágenes. La máscara es
+   discreta, sin gradiente a través de argmax; la NLL sí propaga gradiente.
+   Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
+   ni `false_change_weight`: todos los píxeles de la unión pesan igual.
+   Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
    Añade un término diferenciable de error sobre la unión de deltas: si `c` es
    el número de celdas realmente cambiadas, `f` la suma de probabilidades de
    cambio falso en celdas estáticas y `m` la suma de probabilidades de error en

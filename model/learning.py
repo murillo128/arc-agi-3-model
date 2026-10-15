@@ -243,8 +243,25 @@ def delta_log_probabilities(color_logits, reference):
     return torch.cat((replacements, keep), -1)
 
 
-def visual_delta_loss(color_logits, reference, actual, false_change_weight=1.):
-    """Scale static NLL without reducing changed NLL or weighting colors."""
+def change_union_delta_loss(color_logits, reference, actual):
+    """Per-image target NLL over real OR predicted changes, with no background dilution.
+
+    The argmax mask is discrete supervision selection; gradients flow through
+    target log probabilities only. Correctly retained pixels contribute zero,
+    including a differentiable zero for images whose union is empty.
+    """
+    union = (actual != reference) | (color_logits.detach().argmax(-1) != reference)
+    nll = -color_logits.float().log_softmax(-1).gather(-1, actual[..., None]).squeeze(-1)
+    return torch.where(union, nll, 0.).sum((1, 2)) / union.sum((1, 2)).clamp_min(1)
+
+
+def visual_delta_loss(color_logits, reference, actual, false_change_weight=1., *, mode='balanced'):
+    """Per-image NLL: balanced changed/static groups or the discrete change union."""
+    if mode == 'union':
+        # This objective weights every union pixel equally, including false changes.
+        return change_union_delta_loss(color_logits, reference, actual)
+    if mode != 'balanced':
+        raise ValueError(f'Invalid delta NLL mode: {mode}')
     changed = actual != reference
     target = torch.where(changed, actual, 16)
     logp = delta_log_probabilities(color_logits, reference)
@@ -509,7 +526,7 @@ class Learner:
                     # No intermediate observation enters the imagined dynamics.
                     before, actual = (torch.stack([p[i] for p in selected]) for i in (5, 6))
                     part = c.rollout_visual_weight * (visual_delta_loss(
-                        logits, before, actual, c.false_change_weight)
+                        logits, before, actual, c.false_change_weight, mode=c.prediction_delta_loss)
                         + c.delta_overlap_weight * soft_delta_error(logits, before, actual)).sum() / len(rollout_pairs)
                     if c.backward_mode == 'fragmented':
                         part.backward()
@@ -546,7 +563,8 @@ class Learner:
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
                                           checkpoint_blocks=True)
                     part_loss = visual_delta_loss(logits, before, actual,
-                        c.false_change_weight if branch == 0 else 1.).sum() / len(boards)
+                        c.false_change_weight if branch == 0 else 1.,
+                        mode=c.prediction_delta_loss if branch == 0 else 'balanced').sum() / len(boards)
                     overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
                     if c.backward_mode == 'fragmented':
                         (part_loss + overlap).backward()
