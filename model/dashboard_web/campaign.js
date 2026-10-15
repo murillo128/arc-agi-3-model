@@ -187,19 +187,27 @@ function renderDiagnostics(diagnostic) {
 function renderLearningProbe(probe) {
   $('learning-probe').hidden = !probe?.available;
   const table = $('probe-coverage'); table.replaceChildren();
+  const streaming = probe?.scope === 'streaming_real_training_probe';
+  $('probe-description').textContent = 'Mismos pesos iniciales, datos y actualizaciones. Encoder y decoder congelados. Ambas ramas mantienen la pérdida visual a un paso; la segunda añade supervisión visual a dos pasos. '
+    + (streaming ? 'Experiencias nuevas incorporadas progresivamente; la segunda rama recibe exactamente los mismos prefijos en el mismo orden. Eje horizontal: acciones vistas. Sólo se evalúan partidas separadas del aprendizaje.'
+      : '«Datos entrenados» mide ajuste; «Partidas nuevas» mide transferencia a observaciones que no se entrenan. Eje horizontal: actualizaciones.');
+  $('probe-selection').hidden = !streaming;
+  $('probe-behavior').hidden = !probe?.calibration?.records;
+  for (const id of ['probe-best', 'probe-confirmation', 'probe-measurements', 'probe-policies']) $(id).replaceChildren();
   for (const horizon of [1, 2]) {
     const host = $(`probe-chart-${horizon}`); host.replaceChildren();
     if (!probe?.available) continue;
     const series = (probe.results || []).flatMap((row, index) => ['fit', 'development'].map((split, branch) => ({
       label: `${title(row.variant)} · ${split === 'fit' ? 'Datos entrenados' : 'Partidas nuevas'}`,
       color: ['#77d8c4', '#f7bd76', '#b4a5ff', '#7cceff'][index * 2 + branch],
-      points: row.points.filter(p => finite(p[`${split}_${horizon}`])).map(p => [p.updates, p[`${split}_${horizon}`] * 100])
+      points: row.points.filter(p => finite(p[`${split}_${horizon}`])).map(p => [streaming ? p.actions : p.updates, p[`${split}_${horizon}`] * 100])
     }))).filter(s => s.points.length);
     if (!series.length) { host.textContent = 'Esperando la primera evaluación…'; continue; }
     const max = Math.max(1, ...series.flatMap(s => s.points.map(p => p[0])));
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 540 245'); svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', `Error visual a ${horizon} pasos. Eje horizontal: actualizaciones; vertical: 0 a 100 por ciento.`);
+    const unit = streaming ? 'acciones' : 'actualizaciones';
+    svg.setAttribute('aria-label', `Error visual a ${horizon} pasos. Eje horizontal: ${unit}; vertical: 0 a 100 por ciento.`);
     const add = (tag, attrs, text) => {
       const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
       for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
@@ -212,7 +220,7 @@ function renderLearningProbe(probe) {
       add('text', {x: 0, y: y + 4, fill: '#9bb0ac', 'font-size': 12}, `${percent}%`);
     }
     add('text', {x: 42, y: 240, fill: '#9bb0ac', 'font-size': 12}, '0');
-    add('text', {x: 525, y: 240, fill: '#9bb0ac', 'font-size': 12, 'text-anchor': 'end'}, `${fmt(max)} actualizaciones`);
+    add('text', {x: 525, y: 240, fill: '#9bb0ac', 'font-size': 12, 'text-anchor': 'end'}, `${fmt(max)} ${unit}`);
     for (const [index, s] of series.entries()) {
       const coords = s.points.map(([x, y]) => [42 + x / max * 483, 215 - y * 2]);
       add('polyline', {points: coords.map(p => p.join(',')).join(' '), fill: 'none', stroke: s.color, 'stroke-width': 2});
@@ -226,8 +234,37 @@ function renderLearningProbe(probe) {
   if (!probe?.available) return;
   const p = probe.progress || {};
   const phase = {collection: 'Recogiendo datos', loading: 'Preparando / compilando', training: 'Entrenando predictor',
-    evaluation: p.split === 'fit' ? 'Midiendo datos entrenados' : 'Midiendo partidas nuevas', complete: 'Terminado'}[p.phase] || p.phase;
-  $('probe-status').textContent = probe.status === 'failed' ? `Error: ${probe.error}` : `${title(p.variant)} · ${phase} · ${fmt(p.updates)} / ${fmt(p.total_updates)} actualizaciones`;
+    evaluation: p.split === 'fit' ? 'Midiendo datos entrenados' : 'Midiendo partidas nuevas', confirmation: 'Confirmación independiente',
+    calibration_data: 'Preparando experiencias para V/Q', head_calibration: 'Calibrando V/Q', behavior: 'Evaluando políticas', complete: 'Terminado'}[p.phase] || p.phase;
+  const progress = p.phase === 'behavior' ? `${p.policy} · ${p.game} / ${p.level} · partida ${fmt(p.current_episode)}/${fmt(p.total_episodes)} · ${fmt(p.episode_actions)}/${fmt(p.episode_budget)} acciones`
+    : p.phase === 'head_calibration' ? `época ${fmt(p.epoch)}/${fmt(p.epochs)}`
+    : streaming ? `${fmt(p.actions)} / ${fmt(p.total_actions)} acciones · ${fmt(p.updates)} actualizaciones`
+    : `${fmt(p.updates)} / ${fmt(p.total_updates)} actualizaciones`;
+  $('probe-status').textContent = probe.status === 'failed' ? `Error: ${probe.error}` : `${title(p.variant)} · ${phase} · ${progress}`;
+  for (const row of probe.results || []) {
+    if (!finite(row.best?.selection_error)) continue;
+    const tr = document.createElement('tr');
+    tr.append(cell(title(row.variant)), cell(fmt(row.best.actions)), cell(pct(row.best.selection_error)));
+    $('probe-best').append(tr);
+  }
+  $('probe-selected').textContent = probe.selected ? `Seleccionada para esta comprobación: ${title(probe.selected.variant)}, acción ${fmt(probe.selected.actions)}. No promocionada al agente en uso.` : 'Selección pendiente.';
+  for (const row of probe.confirmation || []) {
+    const tr = document.createElement('tr');
+    tr.append(cell(row.variant === 'initial' ? 'Iniciales' : 'Seleccionados'), cell(pct(row['1'])), cell(pct(row['2'])));
+    $('probe-confirmation').append(tr);
+  }
+  for (const row of probe.measurements || []) {
+    const tr = document.createElement('tr');
+    const label = {confirmation_initial: 'Iniciales · confirmación', confirmation_selected: 'Seleccionados · confirmación'}[row.label] || `${title(row.label)} · validación`;
+    tr.append(cell(label), cell(`${row.game} / ${fmt(row.level)}`), cell(fmt(row.horizon)), cell(fmt(row.changed_samples)), cell(pct(row.changed_error)), cell(fmt(row.unchanged_samples)), cell(fmt(row.unchanged_pixels, 2)));
+    $('probe-measurements').append(tr);
+  }
+  $('probe-calibration').textContent = `${fmt(probe.calibration?.records)} transiciones reales; ${fmt(probe.calibration?.successes)} éxitos conservados; ${fmt(probe.calibration?.positive_records)} targets positivos; ${fmt(probe.calibration?.censored_records)} targets censurados. Políticas comparadas con las mismas semillas y presupuesto.`;
+  for (const row of probe.policies || []) {
+    const tr = document.createElement('tr');
+    tr.append(cell({random: 'Azar', q: 'Q directa', value_mpc: 'MPC'}[row.policy] || row.policy), cell(`${fmt(row.wins)} / ${fmt(row.episodes)}`), cell(pct(row.win_rate)), cell(fmt(row.actions_per_success, 1)), cell(fmt(row.decision_ms, 1)), cell(row.complete ? 'Completa' : 'Parcial'));
+    $('probe-policies').append(tr);
+  }
   for (const r of probe.coverage?.per_pair || []) {
     const tr = document.createElement('tr');
     tr.append(cell(`${r.game} / ${fmt(r.level)}`), ...['episodes', 'actions', 'successes', 'failures', 'budget_ends'].map(k => cell(fmt(r[k]))));

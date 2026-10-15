@@ -196,6 +196,40 @@ comparación muestra sus curvas y cobertura aparte de la campaña y del diagnós
 congelado; la página de entrenamiento enlaza la actividad en curso sin mezclarla con
 los contadores de la ejecución seleccionada.
 
+El ensayo siguiente usa `python -m model.streaming_probe --agent agente.pt --output
+model/runs/architecture-evolution/full/streaming-probe`. Recoge 4.096 acciones
+reales nuevas, repartidas por igual entre los diez pares sintéticos juego/nivel.
+La primera receta incorpora partidas nuevas durante el aprendizaje; la segunda
+recibe esos mismos prefijos en el mismo orden, desde RAM, sin acceso anticipado a
+sus observaciones futuras. Se comprueban los pesos iniciales, el hash de los datos
+y el número de actualizaciones de ambas ramas. Encoder y decoder siguen congelados.
+
+Actualiza cada ocho acciones y al cerrar cada partida, con dos prefijos por lote
+y ocho endpoints supervisados. Conserva la configuración y la tasa de aprendizaje
+del checkpoint; sólo cambia la pérdida visual del segundo paso entre recetas.
+La colección termina en el primer progreso, GAME_OVER o 128 acciones. Un corte por
+cuota incompleta se censura; el progreso que entra en otro nivel se conserva como
+etiqueta de valor, pero no como target visual del mundo.
+
+Evalúa aproximadamente cada 1.024 acciones, al final de una partida, con dos
+partidas distintas de hasta 32 acciones por par. El criterio de selección fijado
+antes del ensayo es la media del error de delta visual de cada par y horizonte
+(uno y dos pasos), incluyendo el checkpoint inicial. Guarda separadamente los
+mejores y últimos pesos de cada rama; sólo la validación selecciona. Las gráficas
+agregadas siguen ponderadas por la unión de píxeles. Se muestran además los casos
+con cambios reales y los píxeles inventados por imagen cuando no hubo cambios.
+La ausencia de cambios no acredita haber aprendido la dinámica.
+
+Compara los pesos seleccionados con los iniciales en otras semillas de confirmación.
+Después recalibra V/Q durante doce épocas con todas las experiencias nuevas,
+reencodificadas con el mundo seleccionado y congelado, incluidos los éxitos tempranos.
+Finalmente compara azar, Q directa y MPC con cuatro partidas por par, las mismas
+semillas y 128 acciones por partida. Es un diagnóstico desde un único checkpoint,
+no una demostración de generalización ni una promoción automática al agente activo.
+El dashboard prefiere este ensayo cuando existe, muestra selección, confirmación,
+cobertura y progreso dentro de cada partida. No mezcla sus curvas con el ensayo
+anterior. Los artefactos quedan en directorios ignorados y no se guarda replay.
+
 ### Agente portable y contratos
 
 La campaña puede pausarse entre ejecuciones completadas y conservar su `report.json`

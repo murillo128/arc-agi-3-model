@@ -42,6 +42,19 @@ def merge_rollout_reports(reports, horizons=('1', '2', '4')):
             combined[horizon]['readouts'][readout] = counts | {
                 branch + '_delta_error': counts[branch + '_wrong'] / max(1, counts[branch + '_union'])
                 if samples else None for branch in ('prediction', 'reconstruction')}
+        if groups and all('strata' in group for group in groups):
+            combined[horizon]['strata'] = {}
+            for kind in ('changed', 'unchanged'):
+                subset = [group['strata'][kind] for group in groups]
+                count = sum(group['samples'] for group in subset)
+                row = {'samples': count, 'readouts': {}}
+                for readout in ('contextual', 'local'):
+                    values = {branch + '_' + key: sum(group['readouts'][readout][branch + '_' + key]
+                        for group in subset) for branch in ('prediction', 'reconstruction') for key in ('wrong', 'union')}
+                    row['readouts'][readout] = values | {
+                        branch + '_delta_error': values[branch + '_wrong'] / max(1, values[branch + '_union'])
+                        if count else None for branch in ('prediction', 'reconstruction')}
+                combined[horizon]['strata'][kind] = row
     return combined
 
 

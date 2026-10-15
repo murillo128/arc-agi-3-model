@@ -97,6 +97,23 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.equal(nodes.get('learning-probe').hidden, false);
   assert.equal(nodes.get('probe-coverage').children[0].children[3].textContent, '1');
   assert.equal(nodes.get('probe-chart-1').children.length, 3, 'two named series and one SVG');
+  report.learning_probe.scope = 'streaming_real_training_probe';
+  report.learning_probe.progress = {phase: 'behavior', policy: 'q', game: 'example', level: 1,
+    current_episode: 2, total_episodes: 4, episode_actions: 17, episode_budget: 128};
+  report.learning_probe.results[0].best = {actions: 1024, selection_error: .2};
+  report.learning_probe.results[0].points.forEach((p, i) => p.actions = i * 1024);
+  report.learning_probe.selected = {variant: 'visual_2step', actions: 1024};
+  report.learning_probe.calibration = {records: 4096, successes: 8, positive_records: 30, censored_records: 3};
+  report.learning_probe.policies = [{policy: 'q', complete: false, wins: 0, episodes: 2, win_rate: 0}];
+  report.learning_probe.measurements = [{label: 'visual_2step', game: 'example', level: 1, horizon: 2,
+    changed_samples: 0, changed_error: null, unchanged_samples: 4, unchanged_pixels: 1.5}];
+  await vm.runInContext('pollCampaign()', context);
+  assert.match(text('probe-status'), /partida 2\/4.*17\/128/);
+  assert.equal(nodes.get('probe-selection').hidden, false);
+  assert.match(text('probe-selected'), /1024/);
+  assert.equal(nodes.get('probe-policies').children[0].children[2].textContent, '0 %');
+  assert.equal(nodes.get('probe-measurements').children[0].children[4].textContent, '—');
+  assert.match(text('probe-calibration'), /4096 transiciones.*8 éxitos/);
   report.learning_probe.age_seconds = 200;
   await vm.runInContext('pollCampaign()', context);
   assert.match(text('campaign-connection'), /sin datos recientes/);

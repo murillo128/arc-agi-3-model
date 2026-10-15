@@ -322,6 +322,31 @@ class DashboardTests(unittest.TestCase):
         probe_path.write_text('{broken')
         self.assertFalse(monitor.snapshot()['report']['learning_probe']['available'])
 
+    def test_streaming_probe_reports_selected_weights_strata_and_policies_without_paths(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'failed', 'cells': []}))
+        probe_path = path.parent / 'streaming-probe' / 'report.json'
+        probe_path.parent.mkdir()
+        strata = {
+            'changed': {'samples': 0, 'readouts': {'contextual': {'prediction_delta_error': None}}},
+            'unchanged': {'samples': 4, 'readouts': {'contextual': {'prediction_wrong': 6}}}}
+        measured = {'per_pair': [{'game': 'fixture', 'level': 1, 'rollouts': {'1': {'strata': strata}}}]}
+        probe_path.write_text(json.dumps({'status': 'running', 'scope': 'streaming_real_training_probe',
+            'results': [{'variant': 'visual_2step', 'best': {'actions': 100, 'selection_error': .2, 'checkpoint': '/private'},
+                         'points': [{'actions': 100, 'development': measured}]}],
+            'selected': {'variant': 'visual_2step', 'actions': 100, 'checkpoint': '/private'},
+            'confirmation': [dict(measured, variant='selected')],
+            'calibration': {'records': 100, 'successes': 2},
+            'policies': {'q': {'complete': True, 'summary': {'wins': 0, 'episodes': 4, 'win_rate': 0}}}}))
+        snapshot = CampaignMonitor(self.path, report_path=path).snapshot()['report']['learning_probe']
+        self.assertEqual(snapshot['scope'], 'streaming_real_training_probe')
+        self.assertEqual(snapshot['results'][0]['best']['actions'], 100)
+        self.assertEqual(snapshot['measurements'][0]['unchanged_pixels'], 1.5)
+        self.assertIsNone(snapshot['measurements'][0]['changed_error'])
+        self.assertEqual(snapshot['policies'][0]['win_rate'], 0)
+        self.assertEqual(snapshot['calibration']['successes'], 2)
+        self.assertNotIn('/private', json.dumps(snapshot))
+
     def test_campaign_report_refresh_retention_and_read_only_summary(self):
         path = self.path.with_name('report.json')
         monitor = CampaignMonitor(self.path, max_points=2, report_path=path)

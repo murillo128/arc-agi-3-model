@@ -27,6 +27,28 @@ def episode():
 
 
 class RolloutTests(unittest.TestCase):
+    def test_changed_and_unchanged_anchors_are_counted_separately(self):
+        from model.runner import merge_rollout_reports
+        model = WorldModel(NetworkConfig.small())
+        engine = Engine(model, TrainConfig())
+        # Force a constant decoded board of color 1. On [1,1,3], it is
+        # perfect for the unchanged step and misses all 16 changed pixels.
+        def constant(z, height, width, **kwargs):
+            logits = torch.zeros(len(z), height, width, 16)
+            logits[..., 1] = 1
+            return logits
+        engine.decode = constant
+        data = Episode([observation(1), observation(1), observation(3)], [Action(1)] * 2)
+        measured = evaluate_rollouts(engine, data, horizons=(1, 2))
+        combined = merge_rollout_reports([measured, measured], ('1', '2'))
+        changed, unchanged = (combined['1']['strata'][k] for k in ('changed', 'unchanged'))
+        self.assertEqual((changed['samples'], unchanged['samples']), (2, 2))
+        self.assertEqual(changed['readouts']['contextual']['prediction_wrong'], 32)
+        self.assertEqual(changed['readouts']['contextual']['prediction_delta_error'], 1)
+        self.assertEqual(unchanged['readouts']['contextual']['prediction_union'], 0)
+        self.assertEqual(unchanged['readouts']['contextual']['prediction_delta_error'], 0)
+        self.assertIsNone(combined['2']['strata']['unchanged']['readouts']['contextual']['prediction_delta_error'])
+
     def test_recomputed_history_preserves_joint_frozen_and_burn_in_gradients(self):
         data = Episode([observation(i % 12 + 1) for i in range(9)], [Action(1)] * 8)
         for frozen in (False, True):

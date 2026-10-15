@@ -306,6 +306,9 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                 readouts = {name: {'prediction_wrong': 0, 'prediction_union': 0,
                                    'reconstruction_wrong': 0, 'reconstruction_union': 0}
                             for name in ('contextual', 'local')}
+                strata = {kind: {'samples': 0, 'readouts': {
+                    name: dict(counts) for name, counts in readouts.items()}}
+                    for kind in ('changed', 'unchanged')}
                 for start in range(len(episode.actions) - horizon + 1):
                     window = episode.observations[start:start + horizon + 1]
                     if any(obs.final is None for obs in window):
@@ -326,6 +329,8 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                     shuffled_mse += float(F.mse_loss(counterfactual.float(), actual_z.float()))
                     sensitivity += float(F.mse_loss(counterfactual.float(), predicted.float()))
                     reference, actual = window[0].final, window[-1].final
+                    stratum = strata['changed' if np.any(reference != actual) else 'unchanged']
+                    stratum['samples'] += 1
                     for name, counts in readouts.items():
                         decoded = engine.decode(torch.cat((predicted, actual_z)), *shape,
                                                 local=name == 'local').argmax(-1).cpu().numpy()
@@ -333,6 +338,8 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                             wrong, union, _ = delta_counts(reference, actual, board)
                             counts[branch + '_wrong'] += wrong
                             counts[branch + '_union'] += union
+                            stratum['readouts'][name][branch + '_wrong'] += wrong
+                            stratum['readouts'][name][branch + '_union'] += union
                     samples += 1
                 result[str(horizon)] = {'samples': samples,
                     'latent_mse': latent / samples if samples else None,
@@ -343,6 +350,9 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                         branch + '_delta_error': counts[branch + '_wrong'] / max(1, counts[branch + '_union'])
                         if samples else None for branch in ('prediction', 'reconstruction')}
                         for name, counts in readouts.items()}}
+                # A zero-error unchanged image is useful consistency evidence,
+                # but is not evidence of predicting an actual visual change.
+                result[str(horizon)]['strata'] = strata
             return result
     finally:
         engine.model.train(was_training)

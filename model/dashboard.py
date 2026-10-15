@@ -381,7 +381,9 @@ class CampaignMonitor(LogMonitor):
             return {'available': False}
 
     def _learning_probe(self):
-        path = self.report_path.parent / 'learning-probe' / 'report.json'
+        path = self.report_path.parent / 'streaming-probe' / 'report.json'
+        if not path.exists():
+            path = self.report_path.parent / 'learning-probe' / 'report.json'
         try:
             with path.open('rb') as stream:
                 payload = stream.read(4 * 1024 * 1024 + 1)
@@ -392,7 +394,7 @@ class CampaignMonitor(LogMonitor):
             for row in report.get('results', [])[:4]:
                 points = []
                 for point in row.get('points', [])[-200:]:
-                    values = numbers(point, ('updates', 'seconds'))
+                    values = numbers(point, ('updates', 'seconds', 'actions', 'selection_error'))
                     for split in ('fit', 'development'):
                         for horizon in ('1', '2'):
                             measure = point.get(split, {}).get('rollouts', {}).get(horizon, {})
@@ -401,13 +403,46 @@ class CampaignMonitor(LogMonitor):
                     points.append(values)
                 results.append({'variant': str(row['variant'])[:80], 'complete': row.get('complete') is True,
                                 'frozen_representation_verified': row.get('frozen_representation_verified') is True,
-                                'points': points})
+                                'points': points, 'best': numbers(row.get('best'), ('actions', 'updates', 'selection_error'))})
+            measurements = []
+            def append_measurements(label, measured):
+                for row in measured.get('per_pair', [])[:100]:
+                    for horizon in ('1', '2'):
+                        item = row.get('rollouts', {}).get(horizon, {})
+                        changed = item.get('strata', {}).get('changed', {})
+                        unchanged = item.get('strata', {}).get('unchanged', {})
+                        samples = number(unchanged.get('samples'))
+                        wrong = number(unchanged.get('readouts', {}).get('contextual', {}).get('prediction_wrong'))
+                        measurements.append({'label': label, 'game': str(row['game'])[:80], 'level': number(row.get('level')),
+                            'horizon': int(horizon), 'changed_samples': number(changed.get('samples')),
+                            'changed_error': number(changed.get('readouts', {}).get('contextual', {}).get('prediction_delta_error')),
+                            'unchanged_samples': samples, 'unchanged_pixels': wrong / samples if samples and wrong is not None else None})
+            for row in report.get('results', [])[:4]:
+                best = row.get('best')
+                if best:
+                    point = next((p for p in row.get('points', []) if p.get('actions') == best.get('actions')), {})
+                    append_measurements(str(row['variant'])[:80], point.get('development', {}))
+            confirmations = []
+            for row in report.get('confirmation', [])[:4]:
+                values = {'variant': str(row['variant'])[:80]}
+                for horizon in ('1', '2'):
+                    values[horizon] = number(row.get('rollouts', {}).get(horizon, {}).get('readouts', {}).get('contextual', {}).get('prediction_delta_error'))
+                confirmations.append(values)
+                append_measurements('confirmation_' + values['variant'], row)
+            policies = [{'policy': str(mode)[:40], 'complete': row.get('complete') is True,
+                         **numbers(row.get('summary'), ('wins', 'episodes', 'win_rate', 'actions_per_success', 'decision_ms'))}
+                        for mode, row in list(report.get('policies', {}).items())[:4]]
             keys = ('episodes', 'actions', 'successes', 'failures', 'budget_ends', 'censored_episodes')
             coverage = numbers(report.get('coverage'), keys)
             coverage['per_pair'] = [dict(numbers(row, ('level', *keys)), game=str(row['game'])[:80])
                                    for row in report.get('coverage', {}).get('per_pair', [])[:100]]
             return {'available': True, 'status': str(report['status'])[:80],
+                    'scope': str(report.get('scope', 'fixed_real_training_probe'))[:80],
                     'progress': compact_values(report.get('progress')), 'results': results, 'coverage': coverage,
+                    'measurements': measurements, 'confirmation': confirmations, 'policies': policies,
+                    'calibration': numbers(report.get('calibration'), ('records', 'positive_records', 'censored_records', 'successes')),
+                    'selected': None if not report.get('selected') else dict(
+                        numbers(report['selected'], ('actions', 'updates', 'selection_error')), variant=str(report['selected'].get('variant', ''))[:80]),
                     'error': str(report.get('error', ''))[:240],
                     'age_seconds': max(0, time.time() - path.stat().st_mtime)}
         except (OSError, ValueError, TypeError, KeyError, AttributeError):

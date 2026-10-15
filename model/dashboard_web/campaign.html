@@ -23,10 +23,26 @@
   <section id="learning-probe" class="campaign-results" hidden>
     <h2>Ensayo de aprendizaje</h2>
     <p id="probe-status" role="status"></p>
-    <p>Mismos pesos iniciales, datos y actualizaciones. Encoder y decoder congelados. Ambas ramas mantienen la pérdida visual a un paso; la segunda añade supervisión visual a dos pasos. «Datos entrenados» mide ajuste; «Partidas nuevas» mide transferencia a observaciones que no se entrenan. Este ensayo no promociona pesos.</p>
+    <p id="probe-description"></p>
     <div class="charts">
       <article class="chart-card"><h3>Error visual a un paso <span>% · menor es mejor</span></h3><div id="probe-chart-1"></div></article>
       <article class="chart-card"><h3>Error visual a dos pasos <span>% · menor es mejor</span></h3><div id="probe-chart-2"></div></article>
+    </div>
+    <div id="probe-selection" hidden>
+      <h3>Mejores pesos de validación</h3>
+      <p>Selección por la media del error visual de cada juego/nivel y de ambos horizontes. Las gráficas anteriores agregan por píxeles. La confirmación usa otras partidas y no selecciona los pesos.</p>
+      <div class="table-scroll"><table><thead><tr><th>Variante</th><th>Acción</th><th>Error de selección</th></tr></thead><tbody id="probe-best"></tbody></table></div>
+      <p id="probe-selected"></p>
+      <div class="table-scroll"><table><thead><tr><th>Confirmación independiente</th><th>1 paso</th><th>2 pasos</th></tr></thead><tbody id="probe-confirmation"></tbody></table></div>
+      <details><summary>Cambios reales frente a imágenes sin cambio</summary>
+        <p>Medidas de los mejores pesos. Si no hay cambios reales, el error de cambios queda sin dato. En imágenes sin cambio se cuentan píxeles inventados por imagen, no aciertos de dinámica.</p>
+        <div class="table-scroll"><table><thead><tr><th>Pesos / conjunto</th><th>Juego / nivel</th><th>Pasos</th><th>Con cambios</th><th>Error</th><th>Sin cambios</th><th>Píxeles inventados / imagen</th></tr></thead><tbody id="probe-measurements"></tbody></table></div>
+      </details>
+    </div>
+    <div id="probe-behavior" hidden>
+      <h3>V/Q recalibrado · mundo congelado</h3>
+      <p id="probe-calibration"></p>
+      <div class="table-scroll"><table><thead><tr><th>Política</th><th>Victorias / partidas</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="probe-policies"></tbody></table></div>
     </div>
     <details><summary>Cobertura de las partidas reales del ensayo</summary>
       <p>Éxitos y fracasos observados durante la recogida; no son resultados del planner. El presupuesto corto puede terminar sin ninguno de los dos.</p>
