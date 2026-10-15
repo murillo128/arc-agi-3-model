@@ -18,6 +18,7 @@ from .goal_planning import Goal, GoalConfig
 from .learning import Engine, State
 from .networks import WorldModel
 from .planning import GoalValue, PlanConfig, fingerprint
+from .path_planning import PathConfig, PathValue
 
 
 FORMAT = 'arc3-agent'
@@ -55,12 +56,18 @@ def _read_observation(value):
 def _runtime(agent):
     planner = agent.planner
     goal = getattr(planner, 'goal', None)
+    visual_goal = goal if isinstance(goal, dict) else None
+    if visual_goal is not None:
+        goal = None
     return {'rng': agent.rng.getstate(), 'actions_taken': agent.actions_taken,
             'pending_action': _action(agent.pending_action), 'observation': _observation(agent.observation),
             'state': None if agent.state is None else {
                 'z': None if agent.state.z is None else agent.state.z.detach().cpu(),
                 'h': agent.state.h.detach().cpu(), 'geometry': agent.state.geometry},
             'planner': {
+                'visual_goal': None if visual_goal is None else {
+                    'frame': torch.from_numpy(visual_goal['frame'].copy()),
+                    'mask': torch.from_numpy(visual_goal['pixel_mask'].copy())},
                 'position': getattr(planner, 'position', 0),
                 'goal': None if goal is None else {
                     'z': goal.z.detach().cpu(), 'geometry': goal.geometry,
@@ -71,14 +78,15 @@ def _runtime(agent):
                 'last_states': [z.detach().cpu() for z in getattr(planner, 'last_states', [])]}}
 
 
-def save(path, agent, *, include_runtime=False):
+def save(path, agent, *, include_runtime=False, training_progress=None):
     payload = {'format': FORMAT, 'version': VERSION, 'agent': asdict(agent.config),
                'seed': agent.seed, 'world': {
                    'network': asdict(agent.engine.model.config), 'training': asdict(agent.engine.config),
                    'weights': _weights(agent.engine.model)},
                'outcome_value': {'width': agent.heads.spatial[0].out_channels, 'weights': _weights(agent.heads)},
-               'components': {}, 'runtime': _runtime(agent) if include_runtime else None}
-    for name in ('proposal_policy',):
+               'components': {}, 'runtime': _runtime(agent) if include_runtime else None,
+               'training_progress': dict(training_progress or {})}
+    for name in ('proposal_policy', 'path_evaluator'):
         module = getattr(agent, name)
         if module is not None:
             if not hasattr(module, 'config'):
@@ -95,6 +103,7 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
     values = dict(payload['agent'])
     values['planner'] = PlanConfig(**values['planner'])
     values['goal'] = GoalConfig(**values['goal'])
+    values['path'] = PathConfig(**values.get('path', {}))
     config = AgentConfig(**values)
     if max_actions is not None:
         config = replace(config, max_actions=max_actions)
@@ -113,9 +122,10 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
     if payload['components']:
         from .proposals import ProposalPolicy
         for name, saved in payload['components'].items():
-            if name != 'proposal_policy':
+            if name not in {'proposal_policy', 'path_evaluator'}:
                 raise ValueError(f'Unknown active component: {name}')
-            module = ProposalPolicy(**saved['config']).to(device)
+            cls = ProposalPolicy if name == 'proposal_policy' else PathValue
+            module = cls(**saved['config']).to(device)
             module.load_state_dict(saved['weights'], strict=True)
             components[name] = module
     agent = Agent(engine, heads, config, seed=payload['seed'] if seed is None else seed,
@@ -135,7 +145,11 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
                                 state['h'].to(device), state['geometry'])
         saved = runtime['planner']
         planner = agent.planner
-        if hasattr(planner, 'goal'):
+        if config.mode == 'path_mpc':
+            visual = saved.get('visual_goal')
+            if visual is not None:
+                planner.set_goal(visual['frame'].numpy(), visual['mask'].numpy())
+        elif hasattr(planner, 'goal'):
             goal = saved['goal']
             planner.goal = None if goal is None else Goal(**(goal | {'z': goal['z'].to(device)}))
             planner.position = saved['position']

@@ -566,20 +566,36 @@ class CampaignMonitor(LogMonitor):
                     'report': self._report()}
 
 
-def make_server(address, monitor, behavior=None, campaign=None):
+def subgoal_snapshot(path):
+    try:
+        if path.stat().st_size > MAX_READ:
+            raise ValueError('Subgoal report exceeds dashboard limit')
+        data = json.loads(path.read_text())
+        if data.get('kind') != 'synthetic_subgoals':
+            raise ValueError('Expected a synthetic-subgoal report')
+        data['config'] = {k: v for k, v in data.get('config', {}).items() if k not in ('source', 'output')}
+        data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
+        return data
+    except (OSError, ValueError) as error:
+        return {'kind': 'synthetic_subgoals', 'status': 'waiting', 'message': str(error), 'progress': {}}
+
+
+def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path).path
             if route == '/api/state':
-                state = monitor.snapshot()
-                if behavior is not None:
+                state = {'subgoals': subgoal_snapshot(subgoal_report)} if subgoal_report else monitor.snapshot()
+                if behavior is not None and subgoal_report is None:
                     state['behavior'] = behavior.snapshot()
-                if campaign is not None:
+                if campaign is not None and subgoal_report is None:
                     state['campaign'] = campaign.snapshot()
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js'):
+            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js'):
                 name = 'index.html' if route == '/' else route[1:]
+                if subgoal_report and name in ('index.html', 'campaign.html'):
+                    name = 'subgoals.html'
                 data = (ASSETS / name).read_bytes()
                 mime = {'html': 'text/html', 'css': 'text/css', 'js': 'text/javascript'}[name.rsplit('.', 1)[1]] + '; charset=utf-8'
             else:
@@ -608,20 +624,25 @@ def make_server(address, monitor, behavior=None, campaign=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--log', type=Path, required=True)
+    parser.add_argument('--log', type=Path)
     parser.add_argument('--behavior-log', type=Path, help='Independent goal/planner JSON-line log')
     parser.add_argument('--campaign-log', type=Path, help='Independent architecture comparison JSON-line log')
     parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
+    parser.add_argument('--subgoal-report', type=Path, help='Select the new synthetic-subgoal run for the entire dashboard')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
     args = parser.parse_args()
+    if not args.log and not args.subgoal_report:
+        parser.error('Select --log or --subgoal-report')
+    if args.subgoal_report and any((args.log, args.behavior_log, args.campaign_log, args.campaign_report)):
+        parser.error('--subgoal-report selects one run; do not combine it with legacy log selectors')
     if not 2 <= args.max_points <= 10000:
         parser.error('--max-points must be between 2 and 10000')
-    monitor = LogMonitor(args.log, args.max_points)
+    monitor = LogMonitor(args.log, args.max_points) if args.log else None
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
     campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
-    with make_server((args.host, args.port), monitor, behavior, campaign) as server:
+    with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

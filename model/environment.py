@@ -47,6 +47,20 @@ class Factory:
             self._isolate_synthetic_level(wrapper, level)
         return Environment(wrapper)
 
+    def teacher(self, environment):
+        """Privileged teacher capability, explicitly restricted to bundled games.
+
+        The returned object is trainer-owned and never passed to Agent/Planner.
+        Public/held-out SDK environments cannot opt in by matching a method name.
+        """
+        from arc_agi.local_wrapper import LocalEnvironmentWrapper
+        root = Path(__file__).resolve().parents[1] / 'games'
+        if (self.reserve_final_level or self.environments_dir != root or
+                self.game_id not in SYNTHETIC_LEVELS or version('arcengine') != '0.9.3' or
+                not isinstance(environment.wrapper, LocalEnvironmentWrapper)):
+            raise ValueError('Synthetic teacher is only available for bundled local training games')
+        return environment.wrapper._game
+
     def _isolate_synthetic_level(self, wrapper, level):
         # No portable level-selection API exists in SDK 0.9.9. This explicit,
         # pinned capability is restricted to this repository's synthetic games.

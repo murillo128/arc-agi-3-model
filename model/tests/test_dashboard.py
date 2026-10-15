@@ -17,7 +17,7 @@ from model.dashboard import LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LI
 class DashboardTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for dashboard JavaScript rendering contract')
     def test_full_javascript_poll_and_render(self):
-        for script in ('dashboard_runtime.cjs', 'campaign_runtime.cjs'):
+        for script in ('dashboard_runtime.cjs', 'campaign_runtime.cjs', 'subgoals_runtime.cjs'):
             with self.subTest(script=script):
                 result = subprocess.run(['node', str(Path(__file__).with_name(script))],
                                         text=True, capture_output=True, timeout=20)

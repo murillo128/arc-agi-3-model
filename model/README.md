@@ -1,6 +1,86 @@
 # Modelo residual latente
 
-## Plan de evolución aprobado
+## Plan activo: subobjetivos sintéticos y adaptación por acción
+
+Esta campaña **sustituye las comparaciones anteriores**. Se descartan sus resultados
+para decidir esta fase; se reutiliza únicamente el mundo ya entrenado. El evaluador
+del Path Planner y todos los contadores empiezan de cero.
+
+- **Goal Planner sintético:** los juegos ofrecen `training_subgoals()` después de
+  aleatorizar el nivel. Exportan imágenes y máscaras de objetivos; el profesor
+  conserva las condiciones de llegada y el mínimo de acciones al activar cada
+  objetivo. No proporciona movimientos ni rutas al agente. Clics y selecciones
+  cuentan como acciones incluso cuando no consumen el presupuesto del juego.
+- **Path Planner:** recibe un solo objetivo y el estado real `(z,h)`. Busca en
+  latentes con horizonte 3, beam 4 y 16 candidatos uniformes de clic. El mismo
+  predictor calcula `z_next = z + delta`; cada rama conserva su memoria. Se ejecuta
+  solo la primera acción y se vuelve a planificar desde la observación real.
+- **Predictor online:** se guarda la predicción anterior a cada acción real y se
+  compara el delta visual neto contra el resultado real, con la misma referencia.
+  Si el error de unión de deltas supera 10 %, se hace una actualización (LR 3e-5):
+  MSE del delta latente + NLL visual + overlap. Encoder y decoder congelados; el
+  decoder transmite gradientes al predictor. Sin actualizaciones dentro de la
+  búsqueda. Tras actualizar, se recompone la memoria con la historia real actual.
+- **Aprendizaje del Path Planner:** al alcanzar un subobjetivo, GAME_OVER o agotar
+  128 acciones, el evaluador aprende el coste restante de cada estado real del
+  segmento: acciones realmente necesarias hasta el final, más 128 por fracaso.
+  SmoothL1 sobre `log1p(coste)`, cuatro pasadas, LR 3e-4. El reward mostrado es
+  `-(acciones - mínimo inicial) - 128 * fracaso`: la referencia mínima desplaza
+  el retorno del segmento por una constante y no cambia qué ruta es preferible.
+  Llegar en la última acción es éxito. Un corte administrativo es censurado, no
+  fracaso. No se aprende de trayectorias imaginadas como si fueran reales.
+
+**Una configuración, 65.536 acciones reales**, equilibradas por acciones entre
+los diez pares juego/nivel de `sc01-v1` y `si01-v1`, semilla 0. Exploración uniforme
+de 100 % a 20 % durante las primeras 8.192 acciones; después 20 %. No imitamos una
+ruta docente. Evaluación congelada cada 4.096 acciones, dos partidas por par y
+política, comparando Path Planner con azar sobre las mismas semillas separadas.
+Confirmación final en otra partición de semillas. No elegimos automáticamente
+arquitectura ni pesos por esta muestra. Checkpoint cada 2.048 acciones al finalizar
+la partida; CPU para contratos y CUDA con `torch.compile`, BF16 y límite de 250 W.
+RAM/GPU de experiencia limitada a la partida actual, sin grabar replay en disco.
+
+Quedan fuera de esta campaña: barrido de decoder/regularización, Double-DQN,
+actor por imitación, entrenamiento de un Goal Planner aprendido y optimización
+del encoder/decoder. Un segundo entrenamiento largo con otra semilla se decidirá
+cuando haya una señal clara de éxito y eficiencia del primero.
+
+El checkpoint portátil incluye mundo, evaluador y configuración del Path Planner.
+La API de profesor vive fuera del agente y se rechaza para juegos SDK ajenos al
+repositorio. Un despliegue con `path_mpc` requiere que su llamador aporte el objetivo
+visual actual mediante `Agent.set_goal`; el checkpoint no descubre objetivos.
+
+```sh
+.venv/bin/python -u -m model.subgoal_training \
+  --source model/runs/architecture-evolution/full/streaming-probe/visual_2step-best.pt \
+  --output model/runs/subgoals/current
+```
+
+El dashboard selecciona ese único informe con `--subgoal-report`; interacción,
+aprendizaje y evaluación comparten la ejecución. Se muestran error previo a la
+actualización, gate, optimizadores separados, subobjetivo visual, coste, reward,
+TPS y evaluaciones por nivel. No mezcla las campañas antiguas.
+
+```sh
+.venv/bin/python -m model.dashboard --subgoal-report model/runs/subgoals/current/report.json
+```
+
+LMEX puede seguir `model/runs/subgoals/current/latest.pt`: se publica un checkpoint
+inicial y después los periódicos. El sincronizador acepta el checkpoint portátil
+del agente, conserva los nombres de tensores del mundo y añade `path_evaluator.*`.
+El JSON describe esta campaña, con el profesor fuera del agente y todos los
+puertos conectados; no activa los componentes de experimentos anteriores.
+
+**Validación acotada:** contratos del profesor contra transiciones nativas del
+SDK y fixtures geométricos independientes (clics, colisiones, mínimo y resets);
+búsqueda latente, targets de segmentos, gate por error y actualización exclusiva
+del predictor; guardado/carga del mismo agente; contrato HTTP/JS del dashboard y
+ejecución corta CUDA antes de lanzar el entrenamiento largo. Sin pruebas visuales.
+
+## Protocolos anteriores — fuera de la campaña activa
+
+Los apartados de comparaciones y probes que siguen documentan comandos existentes.
+Sus resultados y criterios de promoción no se aplican al plan activo anterior.
 
 El objetivo de esta iteración es **entrenar, guardar y ejecutar el mismo agente**,
 con `z_next = z + delta` y planificación en latentes. El planner conserva la

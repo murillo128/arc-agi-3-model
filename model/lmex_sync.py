@@ -73,14 +73,28 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                 # The file is atomically replaced by the trainer. mmap avoids
                 # materializing optimizer states or moving anything onto the GPU.
                 payload = torch.load(checkpoint, map_location='cpu', weights_only=True, mmap=True)
-                weights = payload['weights']
+                if payload.get('format') == 'arc3-agent':
+                    if payload.get('version') != 1:
+                        raise ValueError('Unsupported portable agent checkpoint version')
+                    weights = dict(payload['world']['weights'])
+                    # The new subgoal mode uses PathValue, not the legacy outcome
+                    # heads also retained by the backward-compatible checkpoint.
+                    path_value = payload.get('components', {}).get('path_evaluator')
+                    if payload['agent']['mode'] == 'path_mpc':
+                        if path_value is None:
+                            raise ValueError('path_mpc checkpoint is missing its evaluator')
+                        weights.update({f'path_evaluator.{k}': t for k, t in path_value['weights'].items()})
+                    network = payload['world']['network']
+                    progress = dict(payload.get('training_progress', {}))
+                else:
+                    weights = payload['weights']
+                    network = payload['network']
+                    progress = {key: payload['progress'][key] for key in
+                                ('actions', 'updates', 'episodes', 'level_index') if key in payload['progress']}
                 if not weights or any(not isinstance(t, torch.Tensor) or t.device.type != 'cpu'
                                       for t in weights.values()):
                     raise ValueError('Expected CPU state_dict tensors')
                 save_file(weights, str(stage / 'model.safetensors'), metadata={'format': 'pt'})
-                network = payload['network']
-                progress = {key: payload['progress'][key] for key in
-                            ('actions', 'updates', 'episodes', 'level_index') if key in payload['progress']}
                 config = {'model_type': 'arc3_latent_world_model', 'architectures': ['WorldModel'],
                           'name_or_path': model_id, 'hidden_size': network['width'],
                           'num_hidden_layers': network['encoder_depth'],
@@ -89,6 +103,10 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                           'parameter_count': sum(t.numel() for t in weights.values()),
                           'training_status': 'training_checkpoint',
                           'export_purpose': 'latest_saved_training_weights'}
+                if payload.get('format') == 'arc3-agent':
+                    config['agent'] = payload['agent']
+                    if payload['agent']['mode'] == 'path_mpc':
+                        config['architectures'].append('PathValue')
                 dtypes = {str(t.dtype).removeprefix('torch.') for t in weights.values()}
                 if len(dtypes) == 1:
                     config['torch_dtype'] = dtypes.pop()

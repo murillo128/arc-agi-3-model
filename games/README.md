@@ -13,6 +13,32 @@ skill curricula, and these two independent five-level legacy games:
 These games are not held-out evaluation games and do not change the repository's
 training/evaluation splits. No learning or training is performed by the launcher.
 
+## Synthetic subgoal teacher
+
+After the native seeded initialization, both games expose the optional
+`games.subgoals.SyntheticSubgoals` capability to the local training adapter:
+
+- `training_subgoals()` returns an ordered tuple of immutable target images and
+  masks for the randomized level. Navigation uses the fewest straight segments
+  among shortest legal routes (one to three for Square Cross); interaction
+  levels use selection or delivery subgoals. It never exports solved actions.
+- `training_goal_reached(goal)` checks the real native state, including selection
+  events that cannot always be represented as a new picture.
+- `training_goal_distance(goal)` counts the minimum **SDK actions** at goal
+  activation, including clicks even when the game does not charge its HUD budget.
+  Other pieces are stationary at these activation boundaries; this is not a
+  general joint rearrangement oracle for arbitrary states of two pieces.
+
+Only the current goal's image/mask crosses into the agent. The ordered list,
+private geometry, minimum distance and exact success predicate remain on the
+synthetic trainer's side. They are neither fields in SDK observations nor inputs
+to the path planner's search. Reset/level randomization invalidates the list.
+The HUD and unconstrained other pieces are excluded from goal masks. For the first click level, which has no
+persistent selection marker, the mask identifies the object to click without
+inventing a visual change. Goal generation renders copies, never mutates the
+live game or spends actions. This privileged synthetic assistance must not be
+used to claim autonomous goal discovery or held-out SDK performance.
+
 From the repository root, install the existing Python 3.12 dependencies:
 
 ```sh
