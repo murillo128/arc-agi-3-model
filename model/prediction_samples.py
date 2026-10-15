@@ -14,11 +14,12 @@ class PredictionSamples:
         self.sequence = 0
         self.previous = None
 
-    def add(self, reference, actual, predicted, **context):
+    def add(self, reference, actual, predicted, *, reconstruction=None, **context):
         wrong, union, _ = delta_counts(reference, actual, predicted)
         self.sequence += 1
         self.samples.append(dict(id=self.sequence, captured_at=time.time(), **context,
-            previous=reference.copy(), real_delta=visual_delta(reference, actual),
+            previous=reference.copy(), reconstruction=None if reconstruction is None else reconstruction.copy(),
+            real_delta=visual_delta(reference, actual),
             predicted_delta=visual_delta(reference, predicted), wrong=wrong, union=union))
 
     def draw(self):
@@ -27,5 +28,6 @@ class PredictionSamples:
         choices = [s for s in self.samples if s['id'] != self.previous] or list(self.samples)
         selected = self.rng.choice(choices)
         self.previous = selected['id']
-        return {key: value.tolist() if key in ('previous', 'real_delta', 'predicted_delta') else value
+        return {key: value.tolist() if value is not None and key in
+                ('previous', 'reconstruction', 'real_delta', 'predicted_delta') else value
                 for key, value in selected.items()}

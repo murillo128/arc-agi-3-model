@@ -24,7 +24,7 @@ class OnlineRepresentation:
                                    engine.device.type == 'cuda', engine.optimizer_bits)
         self.updates = 0
 
-    def update(self, observations):
+    def update(self, observations, *, preview=None):
         """Reconstruct the last two real observations on EVERY learning action.
 
         Targets include unchanged pixels. No next-frame prediction or imagined
@@ -39,6 +39,10 @@ class OnlineRepresentation:
         with e.autocast():
             zs = torch.stack(e.encode(observations, training=True))
             logits = e.decode(zs, *observations[-1].final.shape, checkpoint_blocks=True)
+        if preview is not None:
+            # Reuse the pre-update reconstruction, without another model pass or
+            # retaining its graph/tensors in the dashboard's sample buffer.
+            preview(logits[0].detach().argmax(-1).to(torch.uint8).cpu().numpy())
         actual = torch.tensor(np.stack([o.final for o in observations]), device=e.device, dtype=torch.long)
         # The initial frame uses an absolute CE target, also on stationary games.
         ce = F.cross_entropy(logits.float().movedim(-1, 1), actual)

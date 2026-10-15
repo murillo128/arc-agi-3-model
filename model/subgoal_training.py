@@ -152,15 +152,24 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             error = counts['wrong'] / max(1, counts['union'])
             for key in totals:
                 totals[key] += counts[key]
-            if sample is not None:
+        capture = None
+        if counts is not None and sample is not None:
+            def capture(reconstruction):
                 sample(before.final, after.final, prediction[0], game=factory.game_id, level=level,
                        episode_seed=seed, episode_action=position + 1,
+                       reconstruction=reconstruction,
                        action=dict(id=action.id, data=dict(action.data)))
         if quality is not None:
             quality.observe(episode, state, agent.state, counts)
         representation_loss = None
         if not boundary and representation is not None:
-            representation_loss = representation.update(episode.observations[-2:])
+            representation_loss = representation.update(episode.observations[-2:], preview=capture)
+        elif capture is not None:
+            # Frozen evaluations have no representation update to reuse. Decode
+            # the same previous latent, without touching weights or random state.
+            with torch.no_grad(), agent.engine.autocast():
+                reconstructed = agent.engine.decode(state.z[None], *before.final.shape).argmax(-1)[0]
+            capture(reconstructed.to(torch.uint8).cpu().numpy())
         refreshed = None
         if representation_loss is not None:
             # Both endpoints and the current goal must use the UPDATED encoder.
@@ -251,7 +260,9 @@ def main(argv=None):
     parser.add_argument('--evaluate-every', type=int, default=1024)
     parser.add_argument('--evaluation-episodes', type=int, default=8)
     parser.add_argument('--checkpoint-every', type=int, default=2048)
-    parser.add_argument('--representation-error', type=float, default=.01)
+    parser.add_argument('--representation-error', type=float, default=.10)
+    parser.add_argument('--update-representation-threshold', action='store_true',
+                        help='With --resume, explicitly change the reconstruction threshold and reset qualification streaks')
     parser.add_argument('--predictor-error', type=float, default=.10)
     parser.add_argument('--latent-drift', type=float, default=.05)
     parser.add_argument('--success', type=float, default=.80)
@@ -259,6 +270,8 @@ def main(argv=None):
     parser.add_argument('--learning-rate', type=float, default=3e-5)
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
     args = parser.parse_args(argv)
+    if args.update_representation_threshold and not args.resume:
+        parser.error('--update-representation-threshold requires --resume')
     if (min(args.actions, args.steps, args.evaluate_every, args.evaluation_episodes, args.checkpoint_every) < 1
             or args.steps > 128 or not 0 <= args.seed < 100
             or not 0 < args.learning_rate < 1 or not 0 < args.representation_learning_rate < 1):
@@ -279,7 +292,8 @@ def main(argv=None):
     torch.manual_seed(args.seed)
     # Keep each game's evaluation scenarios stable when campaign coverage changes.
     evaluation_pairs = [(g, n) for g, count in SYNTHETIC_LEVELS.items() for n in range(1, count + 1)]
-    report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
+                     if k != 'update_representation_threshold'}
     report_config['curriculum'] = asdict(gates)
     report_config['horizon'] = PathConfig().horizon
     report_config['initialization'] = 'random' if args.init_config else 'checkpoint'
@@ -292,12 +306,19 @@ def main(argv=None):
             parser.error('--resume requires report.json and latest.pt in --output')
         report = json.loads(path.read_text())
         for key, value in report_config.items():
-            if key not in ('resume', 'actions', 'source', 'output') and report['config'].get(key) != value:
+            previous = report['config'].get(key)
+            if args.update_representation_threshold:
+                if key == 'representation_error':
+                    continue
+                if key == 'curriculum' and previous is not None:
+                    previous = dict(previous, representation_open=gates.representation_open)
+            if key not in ('resume', 'actions', 'source', 'output') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
         del saved
-        curriculum.restore(restored['curriculum'])
+        curriculum.restore(restored['curriculum'],
+                           update_representation_threshold=args.update_representation_threshold)
         if args.actions <= restored['actions']:
             parser.error('--actions must exceed the saved action counter')
         # Report publication can be ahead of the atomic weight snapshot.
@@ -310,6 +331,9 @@ def main(argv=None):
             progress={'phase': 'loading', 'actions': restored['actions'], 'total_actions': args.actions},
             checkpoint_action=restored['actions'],
             resumed_from={'actions': restored['actions'], 'optimizer_moments': 'reset'})
+        old_threshold = restored['curriculum']['thresholds']['representation_open']
+        if old_threshold != gates.representation_open:
+            report['resumed_from']['representation_threshold'] = dict(old=old_threshold, new=gates.representation_open)
         report.pop('error', None)
         report.pop('prediction_sample', None)
     previews = PredictionSamples()
@@ -439,6 +463,8 @@ def main(argv=None):
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates)
+        if args.resume and args.update_representation_threshold:
+            save()
         if not args.resume:
             save()
             evaluate('dev')  # Baseline and drift anchors; never grants readiness by itself.

@@ -5,7 +5,7 @@ import math
 
 @dataclass(frozen=True)
 class CurriculumConfig:
-    representation_open: float = .01
+    representation_open: float = .10
     prediction_open: float = .10
     latent_drift: float = .05
     success: float = .80
@@ -108,13 +108,21 @@ class Curriculum:
                                  episodes=self.episode_counts[g, n], **asdict(state))
                             for (g, n), state in self.readiness.items()])
 
-    def restore(self, snapshot):
+    def restore(self, snapshot, *, update_representation_threshold=False):
         rows = {(r['game'], r['level']): r for r in snapshot['levels']}
-        if (snapshot['thresholds'] != asdict(self.config) or set(rows) != set(self.readiness)
+        thresholds = dict(snapshot['thresholds'])
+        if update_representation_threshold:
+            thresholds['representation_open'] = self.config.representation_open
+        if (thresholds != asdict(self.config) or set(rows) != set(self.readiness)
                 or set(snapshot['unlocked']) != set(self.levels)
                 or any(not 1 <= n <= self.levels[g] for g, n in snapshot['unlocked'].items())):
             raise ValueError('Checkpoint curriculum does not match this run')
         self.stage, self.unlocked = snapshot['stage'], dict(snapshot['unlocked'])
         for pair, row in rows.items():
             self.readiness[pair] = LevelReadiness(**{k: row[k] for k in LevelReadiness.__dataclass_fields__})
+            if snapshot['thresholds']['representation_open'] != self.config.representation_open:
+                # Keep learned permissions, but require fresh evidence under the
+                # explicitly changed threshold before another activation/promotion.
+                state = self.readiness[pair]
+                state.representation_passes = state.prediction_passes = state.promotion_passes = 0
             self.episode_counts[pair] = row.get('episodes', 0)

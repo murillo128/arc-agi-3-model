@@ -42,6 +42,14 @@ const text=id=>nodes.get(id).textContent;
     phase:'training',action:{id:4,data:{}}};
   await vm.runInContext('poll()',context);
   assert.equal(nodes.get('prediction-sample-images').hidden,false);
+  assert.equal(nodes.get('prediction-reconstruction').hidden,true);
+  assert.equal(nodes.get('prediction-reconstruction-empty').hidden,false);
+  report.prediction_sample.reconstruction=[[9,5,5],[5,15,14]];
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('prediction-reconstruction').hidden,false);
+  assert.equal(nodes.get('prediction-reconstruction-empty').hidden,true);
+  assert.deepEqual(nodes.get('prediction-reconstruction').context.pixels.map(p=>p.color),
+    ['#1e93ff','#000000','#000000','#000000','#a356d6','#4fcc30']);
   assert.equal(nodes.get('prediction-real').width,3);
   assert.equal(nodes.get('prediction-real').height,2);
   assert.deepEqual(nodes.get('prediction-real').context.pixels.map(p=>p.color),
@@ -59,6 +67,7 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(nodes.get('prediction-sample-images').hidden,true);
   assert.equal(nodes.get('prediction-real').context.pixels.length,0,'missing sample clears the old image');
+  assert.equal(nodes.get('prediction-reconstruction').context.pixels.length,0,'missing sample clears the old reconstruction');
   // Aggregate pixel counts, not mean of the two error percentages (50%, 16.7%).
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].error',context),20);
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].count.invented',context),12);

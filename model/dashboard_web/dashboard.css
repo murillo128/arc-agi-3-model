@@ -49,11 +49,12 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .subgoal-dashboard svg { display: block; width: 100%; height: auto; }
 .subgoal-dashboard canvas.goal-image { width: 256px; max-width: 100%; height: auto; image-rendering: pixelated; }
 .subgoal-dashboard .prediction-preview { margin: 20px 0; }
-.prediction-samples:not([hidden]) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 16px 0; }
+.prediction-samples:not([hidden]) { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin: 16px 0; }
 .prediction-samples figure { margin: 0; min-width: 0; }
 .prediction-samples figcaption { margin-bottom: 12px; font-size: 13px; font-weight: 600; }
 .prediction-preview p { min-height: 0; }
-@media (max-width: 650px) { .prediction-samples:not([hidden]) { grid-template-columns: 1fr; } }
+@media (max-width: 950px) { .prediction-samples:not([hidden]) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .prediction-samples:not([hidden]) { grid-template-columns: 1fr; } }
 .subgoal-dashboard .fixed-evaluation { margin: 20px 0 28px; }
 .subgoal-dashboard .fixed-evaluation svg { width: 100%; height: clamp(240px, 25vw, 330px); }
 .subgoal-dashboard .run-heading { min-width: 0; }

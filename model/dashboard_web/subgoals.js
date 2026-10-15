@@ -59,6 +59,10 @@ function picture(id, frame, mask) {
 function predictionSample(sample) {
   $('prediction-sample-images').hidden=!sample;
   picture('prediction-before',sample?.previous);
+  picture('prediction-reconstruction',sample?.reconstruction);
+  const reconstructed=Array.isArray(sample?.reconstruction);
+  $('prediction-reconstruction').hidden=!reconstructed;
+  $('prediction-reconstruction-empty').hidden=reconstructed;
   picture('prediction-real',sample?.real_delta);
   picture('prediction-guessed',sample?.predicted_delta);
   if(!sample) {

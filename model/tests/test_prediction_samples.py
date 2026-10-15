@@ -12,11 +12,15 @@ class PredictionSampleTests(unittest.TestCase):
         previous = np.array([[9, 5, 5], [5, 15, 5]], dtype=np.uint8)
         actual = np.array([[5, 9, 5], [5, 15, 5]], dtype=np.uint8)
         predicted = np.array([[5, 5, 14], [5, 15, 5]], dtype=np.uint8)
+        reconstruction = np.array([[9, 5, 5], [5, 15, 14]], dtype=np.uint8)
         samples = PredictionSamples(seed=12)
-        samples.add(previous, actual, predicted, game='example', level=1, training_action=17)
+        samples.add(previous, actual, predicted, reconstruction=reconstruction,
+                    game='example', level=1, training_action=17)
         previous[:] = 0  # The caller may reuse its buffers after publishing.
+        reconstruction[:] = 0
         sample = samples.draw()
         self.assertEqual(sample['previous'], [[9, 5, 5], [5, 15, 5]])
+        self.assertEqual(sample['reconstruction'], [[9, 5, 5], [5, 15, 14]])
         self.assertEqual(sample['real_delta'], [[5, 9, 16], [16, 16, 16]])
         self.assertEqual(sample['predicted_delta'], [[5, 16, 14], [16, 16, 16]])
         self.assertEqual((sample['wrong'], sample['union']), (2, 3))
@@ -32,6 +36,7 @@ class PredictionSampleTests(unittest.TestCase):
         first, second = samples.draw(), samples.draw()
         self.assertEqual({first['training_action'], second['training_action']}, {2, 3})
         self.assertEqual(second['real_delta'], [[16, 16], [16, 16]])
+        self.assertIsNone(second['reconstruction'])
         self.assertEqual((second['wrong'], second['union']), (0, 0))
         self.assertEqual(random.getstate(), training_rng)
 

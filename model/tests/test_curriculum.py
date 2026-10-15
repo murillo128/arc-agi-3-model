@@ -35,6 +35,19 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_predictor_admission_needs_ten_percent_and_stability_three_times(self):
+        for reconstruction, drift, expected in ((.099, .04, True), (.10, .05, True),
+                                                 (.101, .04, False), (.099, .051, False)):
+            with self.subTest(reconstruction=reconstruction, drift=drift):
+                state = LevelReadiness()
+                quality = dict(GOOD, reconstruction_error=reconstruction, latent_drift=drift)
+                for _ in range(2):
+                    state.observe(quality, None, CurriculumConfig())
+                    self.assertFalse(state.predictor)
+                state.observe(quality, None, CurriculumConfig())
+                self.assertEqual(state.predictor, expected)
+                self.assertFalse(state.planner)
+
     def test_activation_is_incremental_and_regression_blocks_only_promotion(self):
         state, config = LevelReadiness(), CurriculumConfig(patience=2)
         poor_world = dict(GOOD, prediction_error=.8, rollout_error=.9)
@@ -118,16 +131,24 @@ class CurriculumTests(unittest.TestCase):
         original = {n:fingerprint(getattr(e.model,n)) for n in ('encoder','decoder','dynamics')}
         value = fingerprint(agent.path_evaluator)
         samples = []
+        expected_reconstructions = []
+        predict = e.prediction
+        def predict_and_capture(state, action, reference):
+            with torch.no_grad(), e.autocast():
+                expected_reconstructions.append(e.decode(state.z[None], *reference.shape).argmax(-1)[0].cpu().numpy())
+            return predict(state, action, reference)
         def sample(before, actual, predicted, **meta):
             # The first preview must still use the original weights, even when
             # all three learners are updating in this same episode.
             if not samples:
                 for name in original:
                     self.assertEqual(fingerprint(getattr(e.model, name)), original[name])
+            np.testing.assert_array_equal(meta['reconstruction'],expected_reconstructions[-1])
             samples.append((before.copy(), actual.copy(), predicted.copy(), meta))
         # All three receive data in the SAME episode; no mutually-exclusive phase.
-        result = play(agent,factory,1,123,2,representation=representation,
-                      world=predictor,learner=planner,random_policy=True,sample=sample)
+        with patch.object(e,'prediction',side_effect=predict_and_capture):
+            result = play(agent,factory,1,123,2,representation=representation,
+                          world=predictor,learner=planner,random_policy=True,sample=sample)
         self.assertEqual(len(samples), 2)
         self.assertEqual(samples[0][3]['episode_action'], 1)
         self.assertEqual(samples[0][3]['game'], 'sc01-v1')
@@ -144,7 +165,8 @@ class CurriculumTests(unittest.TestCase):
             encoded = e.encode([replace(obs(),frames=goal['frame'][None])])[0]
         torch.testing.assert_close(goal['z'],encoded)
         weights = fingerprint(e.model)
-        play(agent,factory,1,123,3,random_policy=True,quality_horizon=2)
+        with patch.object(e,'prediction',side_effect=predict_and_capture):
+            play(agent,factory,1,123,3,random_policy=True,quality_horizon=2,sample=sample)
         self.assertEqual(fingerprint(e.model),weights)
         with self.assertRaisesRegex(ValueError,'must not update'):
             play(agent,factory,1,123,2,representation=representation,quality_horizon=2)
@@ -230,7 +252,7 @@ class CurriculumTests(unittest.TestCase):
             agent_checkpoint.save(root/'source.pt',path_agent())
             args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
                     '--device','cpu','--steps','2','--evaluate-every','4','--evaluation-episodes','1']
-            main([*args,'--actions','4'])
+            main([*args,'--actions','4','--representation-error','0.01'])
             saved = checkpoint.load(root/'run/latest.pt')
             row = saved['training_progress']['curriculum']['levels'][0]
             row.update(predictor=True, planner=True, representation_passes=3, prediction_passes=3)
@@ -242,12 +264,26 @@ class CurriculumTests(unittest.TestCase):
             report['curves'].append({'actions':999,'predictor_loss':999})
             report['progress']['actions'] = 999
             report_path.write_text(json.dumps(report))
+            unchanged = report_path.read_bytes()
+            with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
+                main([*args,'--actions','6','--resume','--representation-error','0.10'])
+            self.assertIn('Cannot change representation_error',stderr.getvalue())
+            self.assertEqual(report_path.read_bytes(),unchanged)
             starts = []
+            resumed_permissions = []
+            save = agent_checkpoint.save
+            def capture_save(path, agent, **kwargs):
+                progress = kwargs['training_progress']
+                if progress['actions'] == 4:
+                    resumed_permissions.append(progress['curriculum'])
+                return save(path,agent,**kwargs)
             def observe_start(agent, *positional, **kwargs):
                 starts.append((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)))
                 return play(agent,*positional,**kwargs)
-            with patch('model.subgoal_training.play',side_effect=observe_start):
-                main([*args,'--actions','6','--resume'])
+            with patch('model.subgoal_training.play',side_effect=observe_start), \
+                 patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture_save):
+                main([*args,'--actions','6','--resume','--representation-error','0.10',
+                      '--update-representation-threshold'])
             self.assertEqual(starts[0],expected)
             report = json.loads(report_path.read_text())
             self.assertEqual(report['progress']['actions'],6)
@@ -256,6 +292,12 @@ class CurriculumTests(unittest.TestCase):
             self.assertGreater(report['progress']['path_updates'],0)
             self.assertTrue(all(r['actions']<=6 for r in report['curves']))
             self.assertEqual(report['resumed_from']['actions'],4)
+            self.assertEqual(report['resumed_from']['representation_threshold'],dict(old=.01,new=.10))
+            self.assertEqual(resumed_permissions[0]['thresholds']['representation_open'],.10)
+            permissions = resumed_permissions[0]['levels'][0]
+            self.assertTrue(permissions['predictor'] and permissions['planner'])
+            self.assertEqual([permissions[k] for k in
+                              ('representation_passes','prediction_passes','promotion_passes')],[0,0,0])
             self.assertTrue(report['curriculum']['levels'][0]['planner'])
             self.assertIsNotNone(report['prediction_sample'])
             # A saved single-game run must not silently become another campaign.
@@ -263,6 +305,11 @@ class CurriculumTests(unittest.TestCase):
             with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
                 main([*args,'--actions','8','--resume','--game','si01-v1'])
             self.assertIn('Cannot change game',stderr.getvalue())
+            self.assertEqual(report_path.read_bytes(),unchanged)
+            with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
+                main([*args,'--actions','8','--resume','--latent-drift','0.20',
+                      '--update-representation-threshold'])
+            self.assertIn('Cannot change latent_drift',stderr.getvalue())
             self.assertEqual(report_path.read_bytes(),unchanged)
 
     def test_scratch_initialization_never_loads_weights_and_only_trains_representation(self):

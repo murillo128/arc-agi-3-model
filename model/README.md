@@ -14,7 +14,7 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    durante toda la campaña. Reconstrucción de las dos últimas observaciones:
    CE de colores, delta visual, overlap y regularización latente configurada.
    AdamW LR 3e-6, menor que el predictor para limitar el desplazamiento del latente.
-2. El predictor se incorpora cuando la reconstrucción es ≤1 % y la deriva relativa
+2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
    del latente es ≤5 % en tres evaluaciones consecutivas del nivel. Desde entonces
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
@@ -86,7 +86,10 @@ de salida: recupera todos los pesos (incluido PathValue), permisos, niveles y
 contadores, y descarta mediciones posteriores al checkpoint. Los momentos de los
 optimizadores se reinician: no es una continuación numéricamente idéntica. También
 se renuevan los anclajes de deriva en la siguiente evaluación. No cambia los
-hiperparámetros ni el juego al reanudar; solo permite ampliar el presupuesto de acciones.
+hiperparámetros ni el juego al reanudar; permite ampliar el presupuesto de acciones.
+La excepción explícita `--update-representation-threshold --representation-error 0.10`
+permite cambiar únicamente ese umbral con `--resume`: conserva pesos, contadores y
+permisos abiertos, pero reinicia las rachas de evaluaciones para exigir evidencia nueva.
 `--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
 La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
 PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
@@ -116,7 +119,11 @@ ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propi
 contadores, nunca suman acciones de aprendizaje.
 
 El panel del predictor muestra cada dos segundos una muestra aleatoria de las
-últimas 64 transiciones medidas: tablero previo, delta real y delta predicho. Se
+últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,
+delta real y delta predicho. La reconstrucción decodifica el latente de esa misma
+observación, con los pesos anteriores a la actualización: durante el aprendizaje
+reutiliza la salida del decoder ya calculada; en evaluación se decodifica sin
+gradientes. No es una visualización directa de los valores del vector latente. Se
 reutiliza la predicción causal obtenida antes de observar el resultado y actualizar
 pesos; no se vuelve a inferir para dibujarla. Ambos deltas comparan el resultado
 final de la acción con el mismo tablero previo, con código 16/cuadrícula para
