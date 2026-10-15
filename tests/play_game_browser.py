@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from arcengine import GameAction
+from games.skill_core import SPECS
 from flask import Flask
 from werkzeug.serving import make_server
 
@@ -95,12 +96,15 @@ def check_viewport(page, url, name):
     def assert_canvas(data):
         assert_native_pixels(page, data)
 
+    # Infer the HUD role from the initial observation, independent of its
+    # randomized palette. The full budget strip has exactly 180 pixels.
+    bar_color = next(i for i in range(16) if sum(row.count(i) for row in initial['frame']) == 180)
     def bar_pixels(data):
-        return sum(row.count(0) for row in data["frame"])
+        return sum(row.count(bar_color) for row in data["frame"])
 
     def square(data):
         # Seed-42 level 1: find the 25-pixel solid object from observation only.
-        counts = {i: sum(row.count(i) for row in data["frame"]) for i in range(6, 16)}
+        counts = {i: sum(row.count(i) for row in data["frame"]) for i in range(16)}
         color = next(i for i, count in counts.items() if count == 25)
         return {(x, y) for y, row in enumerate(data["frame"]) for x, value in enumerate(row) if value == color}
 
@@ -259,7 +263,8 @@ def check_viewport(page, url, name):
     # Presentation-only response fixtures cover badge updates and WIN without adding a UI solver.
     # Real multi-level/win SDK lifecycle proof remains in test_square_cross.py.
     for completed, total, state in ((1, 5, "NOT_FINISHED"), (5, 5, "WIN"), (0, 0, "NOT_FINISHED")):
-        fixture = dict(initial, levels_completed=completed, win_levels=total, state=state)
+        fixture = dict(initial, epoch=page.request.get(url + '/play/state').json()['epoch'],
+                       levels_completed=completed, win_levels=total, state=state)
         page.route("**/play/state", lambda route: route.fulfill(json=fixture))
         page.reload()
         page.evaluate("() => queue")
@@ -314,7 +319,8 @@ def check_switching(page, url, name):
     expect(picker).to_be_enabled()
     assert picker.bounding_box()['height'] >= 44
     assert sorted(page.locator('optgroup[label="Synthetic"] option').all_text_contents()) == [
-        'sc01-v1 · Square Cross', 'si01-v1 · Square Cross Interactions']
+        'sc01-v1 · Square Cross', 'si01-v1 · Square Cross Interactions',
+        *[s.game_id+'-v1 · Skills: '+s.title for s in SPECS]]
     expect(page.locator('optgroup[label="Original ARC-AGI-3"] option')).to_have_text('tp01-v1 · Input test fixture (not official)')
     # Native popup, opened by touch on mobile and keyboard on desktop.
     if name == 'mobile':

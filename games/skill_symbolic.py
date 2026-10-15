@@ -76,7 +76,7 @@ def execute_program(codes: tuple[int,...], *, call_depth=1, recursive_arguments=
 class Program(Puzzle):
     def setup(self):
         self.recursive=self.spec.skill=='recursion'
-        self.n=min(3,1+(self.level-1)//2) if self.recursive else min(6,self.level)
+        self.n=self.level
         self.depth=1+(self.level-1)//2 if self.spec.skill=='pila_de_ejecucion' else 1
         self.commands=tuple(f'Toggle bit {i%2} of instruction {i//2+1}' for i in range(2*self.n))+('Run program',)
         self.run_command=2*self.n
@@ -121,8 +121,8 @@ class Sigils(Puzzle):
         from itertools import combinations
         self.n=min(3,self.level)
         self.mod=2 if self.level<3 else 3
-        weight=min(4,self.level)
-        options=list(combinations(range(9),weight))
+        self.weight=self.level
+        options=list(combinations(range(9),self.weight))
         self.patterns=tuple(sum(1<<i for i in cells) for cells in self.rng.sample(options,self.n))
         self.state=((0,)*self.n,0)
         self.target=tuple(self.rng.randrange(1,self.mod) for _ in range(self.n))

@@ -102,6 +102,12 @@
   #help-panel { margin-top: 20px; padding: 20px; border: 1px solid #65505f; border-radius: 14px; background: #211a20; line-height: 1.6; }
   #help-panel h2 { margin: 0; font-size: 18px; }
   #help-panel p { margin: 10px 0; }
+  #control-legend { padding-left: 22px; columns: 2; font-size: 13px; }
+  #control-legend li { break-inside: avoid; }
+  #debug-panel { margin-top: 20px; padding: 16px; border: 1px solid #65505f; border-radius: 14px; overflow-wrap: anywhere; }
+  #debug-panel label { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+  #debug-note, #subgoals { font-size: 12px; line-height: 1.6; }
+  #subgoals li { margin: 8px 0; }
   #close-help { min-height: 44px; padding: 0 16px; border: 1px solid #bcaebb; border-radius: 8px; background: #392b35; color: #fff; }
   @media (max-width: 480px) {
     body { padding: 24px 16px; }
@@ -149,9 +155,17 @@
   <section id="help-panel" aria-labelledby="help-title" tabindex="-1" hidden>
     <h2 id="help-title">How to play</h2>
     <p id="game-help"></p>
-    <p>Enabled controls follow the current game: arrows / D-pad, Space, canvas click or tap, and Z for undo. CLICK indicates that the screen accepts a coordinate; it is not a toggle.</p>
+    <p id="control-addressing"></p>
+    <ul id="control-legend"></ul>
+    <p id="keyboard-help">Enabled controls follow the current game: arrows / D-pad, Space, canvas click or tap, and Z for ACTION7. CLICK indicates that the screen accepts a coordinate; it is not a toggle.</p>
+    <p id="cost-help"></p>
     <p>RESET follows the game's SDK restart rules. Switching games starts a fresh session with the same seed and discards previous progress. Tabs share one session.</p>
     <button id="close-help">Close help</button>
+  </section>
+  <section id="debug-panel" aria-label="Local human debug inspector">
+    <label><input type="checkbox" id="debug-enabled" disabled> Show synthetic subgoals (human debug only)</label>
+    <p id="debug-note">Disabled by default. Start with --debug-subgoals to enable supported synthetic games. Legacy and original games are unsupported.</p>
+    <div id="subgoals" aria-live="polite" hidden></div>
   </section>
 </main>
 <script>
@@ -168,6 +182,10 @@ let switching = false;
 let queueVersion = 0;
 let animationToken = 0;
 let queue = Promise.resolve();
+let detailsVersion = 0;
+const debugToggle = document.querySelector('#debug-enabled');
+const subgoals = document.querySelector('#subgoals');
+let detailsQueue = Promise.resolve();
 const gameKey = data => JSON.stringify([data.source, data.game || data.id]);
 const terminal = () => current && ['WIN', 'GAME_OVER'].includes(current.state);
 const allowed = action => ready && !switching && !terminal() && current.available_actions.includes(Number(action.slice(6)));
@@ -192,6 +210,8 @@ function paint(frame, palette) {
   }
 }
 function draw(data) {
+  detailsVersion++;
+  subgoals.replaceChildren();
   current = data;
   ready = true;
   selector.value = gameKey(data);
@@ -208,6 +228,51 @@ function draw(data) {
     'Explore the game and infer its rules from the screen and the available actions.';
   controls();
 }
+async function details(data) {
+  const version = ++detailsVersion;
+  const info = await request(`/play/help?epoch=${encodeURIComponent(data.epoch)}`);
+  if (version !== detailsVersion) return;
+  const h = info.help;
+  document.querySelector('#help-title').textContent = h ? h.title : 'How to play';
+  if (h) document.querySelector('#game-help').textContent = h.text;
+  document.querySelector('#control-addressing').textContent = h ? h.addressing : '';
+  document.querySelector('#keyboard-help').textContent = h ? h.keyboard : 'Use enabled controls; their meaning follows this game. CLICK sends a coordinate, not a toggle.';
+  document.querySelector('#cost-help').textContent = h ? h.cost : '';
+  const legend = document.querySelector('#control-legend');
+  legend.replaceChildren();
+  for (const text of h ? h.controls : []) {
+    const li = document.createElement('li'); li.textContent = text; legend.append(li);
+  }
+  debugToggle.disabled = !info.debug_available;
+  document.querySelector('#debug-note').textContent = info.debug_available ?
+    'Human debug labels only. Conditions can become false again; Undo and RESET can reverse progress.' :
+    h ? 'Inspector disabled on this server. Start with --debug-subgoals to enable it.' :
+    'Subgoal inspection is unsupported for this legacy or original game.';
+  if (!info.debug_available) debugToggle.checked = false;
+  subgoals.hidden = !debugToggle.checked;
+  if (!debugToggle.checked) return;
+  const debug = await request(`/play/debug/subgoals?epoch=${encodeURIComponent(data.epoch)}`);
+  if (version !== detailsVersion || !debugToggle.checked) return;
+  subgoals.replaceChildren();
+  const heading = document.createElement('p');
+  heading.textContent = `${debug.game} · Level ${debug.level} · ${debug.steps} / ${debug.budget} actions · ${debug.subgoals.filter(g => g.achieved).length} / ${debug.subgoals.length} conditions`;
+  const list = document.createElement('ul');
+  for (const goal of debug.subgoals) {
+    const li = document.createElement('li');
+    li.dataset.goal = goal.id;
+    li.dataset.achieved = String(goal.achieved);
+    li.textContent = `${goal.achieved ? '✓' : '○'} ${goal.id}: ${JSON.stringify(goal.current)} → ${JSON.stringify(goal.target)}. ${goal.monotonic ? 'Forward progress; Undo can reverse it.' : 'Can become false again.'} Dependencies: ${goal.depends_on.join(', ') || 'none'}.`;
+    list.append(li);
+  }
+  subgoals.append(heading, list);
+}
+debugToggle.addEventListener('change', () => {
+  detailsVersion++;
+  subgoals.replaceChildren();
+  subgoals.hidden = !debugToggle.checked;
+  // Wait for any in-flight action before reading labels for its final frame.
+  detailsQueue = queue.then(() => details(current)).catch(err => { subgoals.textContent = err.message; });
+});
 async function present(data, token, animate) {
   draw(data);
   const frames = animate && data.frames && !matchMedia('(prefers-reduced-motion: reduce)').matches ? data.frames : [data.frame];
@@ -217,6 +282,7 @@ async function present(data, token, animate) {
   }
   // The final observation remains authoritative even when a queued reset cancels presentation.
   paint(data.frame, data.palette);
+  await details(data);
 }
 async function request(path, body) {
   const response = await fetch(path, body ? {
@@ -235,6 +301,8 @@ function enqueue(path, body) {
   const key = gameKey(current);
   const selecting = path === '/play/select';
   if (selecting || body.action === 'RESET') animationToken++;
+  detailsVersion++;
+  subgoals.replaceChildren();
   if (selecting) { switching = true; controls(); }
   queue = queue.then(async () => {
     if (version !== queueVersion) return;
