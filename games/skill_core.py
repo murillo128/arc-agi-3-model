@@ -5,6 +5,7 @@ Privileged labels are returned only through the opt-in teacher methods.
 """
 from __future__ import annotations
 
+from games.foundation import MatchColor, Unlock, Move, Rotate, Reflect, Loop, Transfer, Pair
 from games.skill_common import Canvas, LEVELS, Puzzle, SkillSpec
 from games.skill_spatial import (Boxes, Centroid, Ghost, Gravity, Linkage, Maze,
                                 Timing, Transform, Twins)
@@ -76,7 +77,21 @@ _ROWS = (
     ('fase_temporal', 'Cross in the right phase', 'timing'),
     ('orden_de_eventos', 'Move before the hazard', 'timing'),
 )
-SPECS = tuple(SkillSpec(f'sy{i:02d}', *row) for i, row in enumerate(_ROWS, 1))
+SKILL_SPECS = tuple(SkillSpec(f'sy{i:02d}', *row) for i, row in enumerate(_ROWS, 1))
+_FOUNDATIONS = (
+    ('match_color', 'Match a color', 'basic_color', ('sy01','sy02','sy06')),
+    ('unlock_next', 'Unlock the next control', 'basic_unlock', ('sy08','sy09','sy27')),
+    ('move_to_target', 'Move onto a target', 'basic_move', ('sc01','sy11','sy14')),
+    ('turn_shape', 'Turn a shape', 'basic_rotate', ('sy11','sy15')),
+    ('follow_reflection', 'Follow a reflection', 'basic_reflect', ('sy12','sy13')),
+    ('turn_loop', 'Turn one loop', 'basic_loop', ('sy31','sy32')),
+    ('transfer_unit', 'Transfer one unit', 'basic_transfer', ('sy40','sy41')),
+    ('remember_pair', 'Remember a pair', 'basic_pair', ('sy55','sy56','sy57')),
+)
+FOUNDATION_SPECS = tuple(SkillSpec(f'bf{i:02d}', *row[:3]) for i,row in enumerate(_FOUNDATIONS,1))
+LATER_PRACTICE = {spec.game_id: tuple(g+'-v1' for g in row[3])
+                  for spec,row in zip(FOUNDATION_SPECS,_FOUNDATIONS)}
+SPECS = FOUNDATION_SPECS + SKILL_SPECS
 CATALOG = {s.skill: s for s in SPECS}
 BY_ID = {s.game_id: s for s in SPECS}
 
@@ -86,7 +101,9 @@ CONTEXTS = dict(dials=Dials, keys=Keys, transform=Transform, paint=Paint,
                 loops=Loops, pegs=Pegs, boxes=Boxes, agents=Agents, tanks=Tanks,
                 flow=Flow, gravity=Gravity, merge=Merge, rules=Rules,
                 program=Program, sigils=Sigils, memory=Memory, ghost=Ghost,
-                timing=Timing)
+                timing=Timing, basic_color=MatchColor, basic_unlock=Unlock,
+                basic_move=Move, basic_rotate=Rotate, basic_reflect=Reflect,
+                basic_loop=Loop, basic_transfer=Transfer, basic_pair=Pair)
 
 
 def make_puzzle(skill: str, seed: int=0, level: int=1, *, appearance_seed: int | None=None) -> Puzzle:

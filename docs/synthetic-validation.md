@@ -99,3 +99,118 @@ contextual HELP and inspector off/on in the browser. Enable `--debug-subgoals`
 only for the local human debug capability; its checkbox must still start off.
 Record the actual served revision and startup method. Do not host from a
 throwaway issue/review worktree or disturb the training checkout.
+
+
+## Foundation tier (issue #62)
+
+The catalog now adds `bf01-v1`–`bf08-v1`: eight separate contexts and 48 short
+levels. The 62 previous entries remain intact, including sy08's cyclic
+prerequisites and sy26's nonmonotonic rods. No model, campaign selection,
+training policy, dashboard, or SDK pin changes are part of this addition.
+
+### Progression and measured witness lengths
+
+The table records constructive real-action witness lengths for seeds 0–63.
+The witnesses use advertised click hitboxes or directional actions, without
+selection or execute overhead. These are finite engineering checks, not a
+human study, learned-agent result, transfer claim, or proof for every seed.
+Memory's counts assume the pairs are known; blind exploration may take longer.
+All opening levels take 1–2 actions; observed later witnesses take at most six.
+
+| ID / context | Structural progression over levels 1–6 | Observed actions, L1 → L6 | Suitable later practice |
+| --- | --- | --- | --- |
+| bf01 / Match a color | Independent two-colour tiles: 1, 1, 2, 2, 3, 3; even levels consolidate | 1, 1, 2, 2, 3, 3 | sy01, sy02, sy06 |
+| bf02 / Unlock the next control | One switch; chain of 2; two independent goals; chain of 3; two chains of 2; two branches feeding a final switch | 1, 2, 2, 3, 4, 5 | sy08, sy09, sy27 |
+| bf03 / Move onto a target | One object; distances 1, 2 straight, 2 with a turn, 3, 4, 6 on an unobstructed 5×5 board | 1, 2, 2, 3, 4, 6 | sc01, sy11, sy14 |
+| bf04 / Turn a shape | One piece at 1/2/3 clockwise quarter turns; second asymmetric shape at L4; two independent pieces at L5–6 | 1, 2, 3, 1, 2, 3 | sy11, sy15 |
+| bf05 / Follow a reflection | One fixed vertical mirror; one controlled object and one reflection; distances 1–6, direction and placement vary | 1, 2, 3, 4, 5, 6 | sy12, sy13 |
+| bf06 / Turn one loop | One loop with 2, 2, 3, 3, 4, 4 tokens; paired levels consolidate the same structure | 1, 1, 1, 1, 1–2, 1–2 | sy31, sy32 |
+| bf07 / Transfer one unit | Two tanks with capacity 2, 2, 4, 4; three tanks with capacity 4 at L5–6; conserved units, both directions | 1, 2, 3, 4, 4, 6 | sy40, sy41 |
+| bf08 / Remember a pair | Pairs: 1, 1, 2, 2, 3, 3; even levels consolidate; no timer or reshuffle | 2, 2, 4, 4, 6, 6 (known pairs) | sy55–sy57 |
+
+Logical generation and appearance use separate deterministic streams. Appearance
+changes palettes, sizes and offsets while preserving state, targets and rules.
+Undo costs one action and restores the prior command state; it can reverse a
+monotonic switch or matched pair. RESET preserves the existing native retry/full
+restart contract. Budgets remain generous (96–256 actions), with no new hazards.
+Memory emits eight reveal frames before hiding a mismatch; the existing player
+shows the faces for about 640 ms. Under reduced motion, the foundation pair
+game holds one native reveal image still for 640 ms before hiding; RESET or
+switching cancels that hold through the existing presentation token. Old games
+retain their existing reduced-motion presentation. No rule, SDK frame, action
+cost or actor-payload field changes are needed.
+
+### Test plan, provenance and execution
+
+The existing on-demand command `python tests/validate_synthetic.py` now includes
+all foundation lanes in addition to every applicable existing synthetic check.
+Missing Python 3.12, arc-agi 0.9.9, real ARCEngine, Playwright or Chromium fails
+acceptance. It adds no always-on workflow or new testing framework.
+
+| Boundary / primary test owner | Independent assertions and defects covered | Matrix / evidence |
+| --- | --- | --- |
+| `test_foundations.py`: literal rules | Hand-written expected states for all eight mechanics; two colours only, prerequisite blocking including arbitrary downstream nodes, final conjunctions, clockwise rotation, mirrored directions, capacity/empty guards, mismatches, permanent forward progress and Undo | Literal small fixtures are independent of the production transitions; solving witnesses alone cannot establish semantics |
+| `test_foundations.py` + `foundation_reference.py`: generation | Non-solved starts, prescribed progression, real-click witness bounds, no text glyphs, detached labels, same-seed instances; cosmetic interventions cannot alter logical state or target | All 8×6×64 = 3,072 instances, each at native appearance and two palette/placement/footprint extremes (9,216 exercised variants); non-clipping drawing assertions and disjoint inclusive hitbox corners |
+| `test_foundation_sdk.py`: real adapter | Discovery, all six sequential levels, native WIN/loss/retry/full reset, one action per transition, old-level before/after versus new-level labels, simultaneous tank goals, perceivable memory frames and ordinary FrameData privacy | 192 level completions at seeds 0, 1, 42, 123; all eight native lifecycle checks |
+| `legacy_fingerprint.py`: preservation | Base-derived initial frames, seeded action/state/subgoal/animation fingerprints, native frames and resets, without refreshing expectations from new behavior | All 62 old IDs at seeds 0 and 42; all six pure sy levels plus real SDK sequences; existing full legacy/skill suites retained |
+| `foundation_browser.py`: real input/rendering | Every foundation solved through all six levels on desktop/mobile; arrows via keyboard/D-pad, pieces via mouse/touch, canvas/native pixels, accurate six-level badge, HELP/later practice, debug opt-in, Undo/reset, memory reveal timing/cancellation and switching back to sy08/sy26/sc01/si01 | Intro/final screenshots for all eight contexts in both viewports; existing protocol and both browser regression suites also required |
+
+The committed legacy fingerprints were captured from an isolated archive of
+`ad2b6f756d47ec02485995690e38b09cb0b35136`, using the same Python/SDK environment.
+They cover `sc01-v1`, `si01-v1`, and every ID from `sy01-v1` through `sy60-v1`.
+To reproduce the baseline capture, extract `git archive <base>` into an isolated
+directory and run `python tests/legacy_fingerprint.py /path/to/base output.json`.
+The test compares that compact fixture with a fresh digest of the current tree;
+legacy source files and the shared adapter are unchanged.
+
+Visual inspection of introductory/final examples found that the reflection's
+outline originally touched its fill. A literal pixel-gap regression failed
+before the fix and passed after reducing the inner reflection footprint; the
+controlled solid and outlined reflection are now visually distinct at both size
+extremes. Browser fixture repair focused the actual directional button before
+keyboard input (the canvas is not focusable). Consolidation geometry initially coincided for some seeds (for example bf01
+seed 29 at L3/L4 and bf08 seed 11 at L1/L2). A regression failed before adding
+deliberate even-level placement changes and passed afterward; the pair/tile
+counts and rules stay the same. Catalog assertions now identify
+Originals by source instead of assuming group index 1, preserving source/privacy
+checks after adding the foundation group.
+
+Full logs, per-level structural/action ranges, environment/revision metadata and
+screenshots remain in ignored `artifacts/synthetic-validation/`. The original
+browser suites also retain their ignored `artifacts/square-cross/` screenshots.
+Validation uses CPU, Python 3.12.14, arc-agi 0.9.9, ARCEngine 0.9.3, NumPy 2.5.4,
+Playwright 1.63.0 and Chromium 153.0.8010.12. The existing runner settings confirm
+GPT-6 Astra / high. Exact final results belong to the implementation PR.
+
+### Reduced-motion audit correction
+
+The first independent audit found that the shared player discarded the new
+memory game's informative mismatch frames when reduced motion was enabled.
+The real Chromium regression in `check_reduced_motion_pairs` failed on
+`a0cb57df45a29be6e8b1786a571571c689810373`: neither canvas paint showed both
+face colours. The test uses the actual card centres/face colours, rather than
+assuming that any returned animation frame contains the required information.
+It now requires a still both-face reveal for at least 500 ms on desktop/mobile,
+followed by hiding, with unchanged one-action cost and no teacher fields.
+Actual RESET and game-switch inputs cancel the hold without a delayed repaint.
+The existing ordinary-motion, old-game reduced-motion and epoch/cancellation
+regressions remain required in the on-demand acceptance command. Red/green
+logs are retained under ignored `artifacts/synthetic-validation/audit-repair/`.
+
+### Live refresh remains a separate post-merge step
+
+Read-only inspection of the durable deployment record on 2026-10-15 identifies
+release `ad2b6f756d47ec02485995690e38b09cb0b35136` under
+`/home/sergio/.local/share/arc-agi-3-play/releases/`, system service
+`arc3-play.service`, loopback port 8001 and the existing `/arc3-play/` proxy.
+This supersedes the older pre-deployment host observations above. It is a record,
+not a fresh process-liveness or public-endpoint claim.
+
+Issue #62 preserves reviewed-merge-before-live-refresh. This implementation does
+not restart or deploy the game service. After reviewed merge, re-identify the
+listener and current release paths, refresh only that service through its durable
+release mechanism, and verify the actual user-facing endpoint contains 70
+synthetic entries (eight foundations plus the unchanged 62), along with legacy
+controls, HELP and inspector privacy. Keep training, its checkout, dashboard,
+shared App Server, proxy and TLS settings untouched. Never serve this issue's
+ephemeral worktree as a live release. Isolated acceptance is not live deployment.

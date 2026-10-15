@@ -1,0 +1,12 @@
+{
+  "game_id": "bf06-v1",
+  "title": "Foundations: Turn one loop",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_loop",
+    "turn_loop"
+  ],
+  "default_fps": 10
+}

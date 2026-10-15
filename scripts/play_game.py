@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts.play_help import human_help, skill_game
+from games.skill_core import FOUNDATION_SPECS
 
 TERMINAL = {GameState.WIN, GameState.GAME_OVER}
 
@@ -103,10 +104,14 @@ def web_routes(session):
 
         @app.get("/play/games")
         def games():
-            return jsonify(groups=[{"source": source, "label": label,
-                                    "games": [g for g in session.games if g["source"] == source]}
-                                   for source, label in (("synthetic", "Synthetic"),
-                                                         ("original", "Original ARC-AGI-3"))])
+            basics = {s.game_id+'-v1' for s in FOUNDATION_SPECS}
+            return jsonify(groups=[
+                {"source": "synthetic", "label": "Synthetic · Foundations / Basics",
+                 "games": [g for g in session.games if g["source"] == "synthetic" and g["id"] in basics]},
+                {"source": "synthetic", "label": "Synthetic · Skills and legacy",
+                 "games": [g for g in session.games if g["source"] == "synthetic" and g["id"] not in basics]},
+                {"source": "original", "label": "Original ARC-AGI-3",
+                 "games": [g for g in session.games if g["source"] == "original"]}])
 
         @app.get("/play/state")
         def state():

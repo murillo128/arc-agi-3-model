@@ -1,0 +1,12 @@
+{
+  "game_id": "bf05-v1",
+  "title": "Foundations: Follow a reflection",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_reflect",
+    "follow_reflection"
+  ],
+  "default_fps": 10
+}

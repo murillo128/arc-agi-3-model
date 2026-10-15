@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from games.skill_core import SPECS
+from games.skill_core import SPECS, SKILL_SPECS
 from skill_reference import plan
 
 HAS_SDK = find_spec('arc_agi') is not None and find_spec('arcengine') is not None
@@ -34,7 +34,7 @@ class OfflineSDKTests(unittest.TestCase):
         expected = {s.game_id+'-v1' for s in SPECS} | {'sc01-v1','si01-v1'}
         self.assertEqual(ids, expected)
         self.assertEqual(len(self.arcade.get_environments()), len(ids))
-        for spec in SPECS:
+        for spec in SKILL_SPECS:
             for seed in (0,1,42,123):
                 with self.subTest(skill=spec.skill, seed=seed):
                     env = self.arcade.make(spec.game_id+'-v1', seed=seed, scorecard_id=self.card)

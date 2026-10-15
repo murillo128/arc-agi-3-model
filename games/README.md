@@ -1,8 +1,8 @@
 # Original synthetic games
 
 This directory contains our own versioned ARCEngine environments, separate from
-ignored downloaded `environment_files/`. Two independent synthetic training games
-are discovered by the SDK:
+ignored downloaded `environment_files/`. The SDK discovers 70 entries: eight six-level foundation games, 60 six-level
+skill curricula, and these two independent five-level legacy games:
 
 - [Square Cross](square_cross/README.md), `sc01-v1`: five perception/navigation levels.
 - [Square Cross Interactions](square_cross_interactions/README.md), `si01-v1`:
@@ -26,12 +26,12 @@ python scripts/play_game.py --mode sdk --game si01-v1 --seed 42 --max-actions 10
 ```
 
 The web command prints `http://127.0.0.1:8001/`. Open it in a local browser.
-The top-left game badge is a native dropdown with **Synthetic** and
-**Original ARC-AGI-3** groups, populated by two separate SDK catalogs. Selecting
+The top-left game badge is a native dropdown with **Synthetic · Foundations / Basics**,
+**Synthetic · Skills and legacy**, and **Original ARC-AGI-3** groups, populated by two separate SDK catalogs. Selecting
 a game initializes it with the current seed in the same 64 × 64 console;
 switching away discards its progress. Choosing the current game does not reset it.
-The default remains `sc01-v1`. Both synthetic entries can be selected without
-restarting the server; their initial badges are 1/5 and 1/3 respectively.
+The default remains `sc01-v1`. All entries can be selected without restarting the server. Both legacy entries
+start at 1/5; foundation and skill entries start at 1/6.
 Use RESET to follow the game's SDK restart rules. For both Square Cross games,
 reset retries the current level after movement/loss and starts at level 1 after a win.
 
@@ -220,3 +220,21 @@ control and select Square Cross again. Screenshots are saved under ignored
 For a temporary browser cache, set `PLAYWRIGHT_BROWSERS_PATH=/tmp/arc3-playwright`
 for both install and test commands. On hosts with an unwritable matplotlib
 config directory, `MPLCONFIGDIR=/tmp/arc3-mpl` avoids its cache warning.
+
+## Foundations / Basics
+
+`bf01-v1`–`bf08-v1` add 48 short preparatory levels without changing `sc01-v1`,
+`si01-v1`, or `sy01-v1`–`sy60-v1`. The existing harder games remain available.
+The eight contexts teach two-colour matching, permanent switch chains, movement,
+rotation, a fixed reflection, one loop, unit transfer, and matching pairs.
+Pieces and pictorial arrows are directly clickable; movement also uses the
+keyboard/D-pad. No letters, digits, selection command or execution opcode is
+required on a foundation board. HELP explains the active controls and suggests
+suitable later practice; those suggestions do not schedule or modify training.
+
+`games/skill_core.py` owns the catalog and preparatory relationships.
+`python scripts/skill_catalog.py` lists both families; `--game bf01-v1` selects
+an instance. `--teacher-info` is an explicit privileged inspection path, separate
+from ordinary actor frames. The existing opt-in web inspector works unchanged.
+See [foundation progression and validation](../docs/synthetic-validation.md#foundation-tier-issue-62)
+for structural parameters, action bounds, test commands, and evidence limits.

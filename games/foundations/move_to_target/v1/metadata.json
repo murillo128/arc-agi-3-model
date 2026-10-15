@@ -1,0 +1,12 @@
+{
+  "game_id": "bf03-v1",
+  "title": "Foundations: Move onto a target",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_move",
+    "move_to_target"
+  ],
+  "default_fps": 10
+}

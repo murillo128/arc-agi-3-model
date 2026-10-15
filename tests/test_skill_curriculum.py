@@ -13,8 +13,9 @@ import unittest
 
 import numpy as np
 
-from games.skill_core import (BY_ID, CATALOG, CONTEXTS, SPECS, Canvas,
+from games.skill_core import (BY_ID, CATALOG, CONTEXTS, Canvas,
                              execute_program, make_puzzle)
+from games.skill_core import SKILL_SPECS as SPECS
 from skill_reference import expand, plan
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -320,7 +321,7 @@ class GenerationTests(unittest.TestCase):
                 self.assertTrue(np.all(c.pixels[51:] == 5),game)
 
     def test_catalog_and_sdk_entrypoints(self):
-        self.assertEqual(len(SPECS),60); self.assertEqual(len(CONTEXTS),22)
+        self.assertEqual(len(SPECS),60); self.assertEqual(len(CONTEXTS),30)
         self.assertEqual(len(CATALOG),len(BY_ID))
         for spec in SPECS:
             directory = ROOT/'games'/'skills'/spec.skill/'v1'
