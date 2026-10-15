@@ -15,7 +15,7 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    CE de colores, delta visual, overlap y regularización latente configurada.
    AdamW LR 3e-6, menor que el predictor para limitar el desplazamiento del latente.
 2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
-   del latente es ≤5 % en tres evaluaciones consecutivas del nivel. Desde entonces
+   del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
    En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
@@ -88,8 +88,10 @@ optimizadores se reinician: no es una continuación numéricamente idéntica. Ta
 se renuevan los anclajes de deriva en la siguiente evaluación. No cambia los
 hiperparámetros ni el juego al reanudar; permite ampliar el presupuesto de acciones.
 La excepción explícita `--update-representation-threshold --representation-error 0.10`
-permite cambiar únicamente ese umbral con `--resume`: conserva pesos, contadores y
-permisos abiertos, pero reinicia las rachas de evaluaciones para exigir evidencia nueva.
+permite cambiar únicamente ese umbral con `--resume`.
+`--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
+deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
+reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
 `--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
 La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
 PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.

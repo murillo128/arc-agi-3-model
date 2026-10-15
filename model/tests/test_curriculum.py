@@ -36,8 +36,8 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 class CurriculumTests(unittest.TestCase):
     def test_predictor_admission_needs_ten_percent_and_stability_three_times(self):
-        for reconstruction, drift, expected in ((.099, .04, True), (.10, .05, True),
-                                                 (.101, .04, False), (.099, .051, False)):
+        for reconstruction, drift, expected in ((.099, .14, True), (.10, .15, True),
+                                                 (.101, .14, False), (.099, .151, False)):
             with self.subTest(reconstruction=reconstruction, drift=drift):
                 state = LevelReadiness()
                 quality = dict(GOOD, reconstruction_error=reconstruction, latent_drift=drift)
@@ -251,7 +251,8 @@ class CurriculumTests(unittest.TestCase):
             root = Path(temp)
             agent_checkpoint.save(root/'source.pt',path_agent())
             args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
-                    '--device','cpu','--steps','2','--evaluate-every','4','--evaluation-episodes','1']
+                    '--device','cpu','--steps','2','--evaluate-every','4','--evaluation-episodes','1',
+                    '--latent-drift','0.05']
             main([*args,'--actions','4','--representation-error','0.01'])
             saved = checkpoint.load(root/'run/latest.pt')
             row = saved['training_progress']['curriculum']['levels'][0]
@@ -271,10 +272,11 @@ class CurriculumTests(unittest.TestCase):
             self.assertEqual(report_path.read_bytes(),unchanged)
             starts = []
             resumed_permissions = []
+            saved_action = 4
             save = agent_checkpoint.save
             def capture_save(path, agent, **kwargs):
                 progress = kwargs['training_progress']
-                if progress['actions'] == 4:
+                if progress['actions'] == saved_action:
                     resumed_permissions.append(progress['curriculum'])
                 return save(path,agent,**kwargs)
             def observe_start(agent, *positional, **kwargs):
@@ -310,6 +312,35 @@ class CurriculumTests(unittest.TestCase):
                 main([*args,'--actions','8','--resume','--latent-drift','0.20',
                       '--update-representation-threshold'])
             self.assertIn('Cannot change latent_drift',stderr.getvalue())
+            self.assertEqual(report_path.read_bytes(),unchanged)
+            # Relax drift explicitly without resetting learned modules or permissions.
+            old = agent_checkpoint.load(root/'run/latest.pt')
+            expected = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
+            starts.clear()
+            resumed_permissions.clear()
+            saved_action = 6
+            with patch('model.subgoal_training.play',side_effect=observe_start), \
+                 patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture_save):
+                main([*args,'--actions','8','--resume','--representation-error','0.10',
+                      '--latent-drift','0.15','--update-latent-drift-threshold'])
+            self.assertEqual(starts[0],expected)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['progress']['actions'],8)
+            self.assertEqual(report['progress']['representation_updates'],8)
+            self.assertEqual(report['progress']['predictor_updates'],4)
+            self.assertEqual(report['resumed_from']['latent_drift_threshold'],dict(old=.05,new=.15))
+            self.assertEqual(resumed_permissions[0]['thresholds']['latent_drift'],.15)
+            permissions = resumed_permissions[0]['levels'][0]
+            self.assertTrue(permissions['predictor'] and permissions['planner'])
+            self.assertEqual([permissions[k] for k in
+                              ('representation_passes','prediction_passes','promotion_passes')],[0,0,0])
+            saved = checkpoint.load(root/'run/latest.pt')
+            self.assertEqual(saved['training_progress']['curriculum']['thresholds'],report['config']['curriculum'])
+            unchanged = report_path.read_bytes()
+            with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
+                main([*args,'--actions','10','--resume','--representation-error','0.20',
+                      '--latent-drift','0.15','--update-latent-drift-threshold'])
+            self.assertIn('Cannot change representation_error',stderr.getvalue())
             self.assertEqual(report_path.read_bytes(),unchanged)
 
     def test_scratch_initialization_never_loads_weights_and_only_trains_representation(self):

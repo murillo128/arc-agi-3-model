@@ -7,7 +7,7 @@ import math
 class CurriculumConfig:
     representation_open: float = .10
     prediction_open: float = .10
-    latent_drift: float = .05
+    latent_drift: float = .15
     success: float = .80
     patience: int = 3
     minimum_samples: int = 8
@@ -108,11 +108,14 @@ class Curriculum:
                                  episodes=self.episode_counts[g, n], **asdict(state))
                             for (g, n), state in self.readiness.items()])
 
-    def restore(self, snapshot, *, update_representation_threshold=False):
+    def restore(self, snapshot, *, update_representation_threshold=False,
+                update_latent_drift_threshold=False):
         rows = {(r['game'], r['level']): r for r in snapshot['levels']}
         thresholds = dict(snapshot['thresholds'])
         if update_representation_threshold:
             thresholds['representation_open'] = self.config.representation_open
+        if update_latent_drift_threshold:
+            thresholds['latent_drift'] = self.config.latent_drift
         if (thresholds != asdict(self.config) or set(rows) != set(self.readiness)
                 or set(snapshot['unlocked']) != set(self.levels)
                 or any(not 1 <= n <= self.levels[g] for g, n in snapshot['unlocked'].items())):
@@ -120,7 +123,7 @@ class Curriculum:
         self.stage, self.unlocked = snapshot['stage'], dict(snapshot['unlocked'])
         for pair, row in rows.items():
             self.readiness[pair] = LevelReadiness(**{k: row[k] for k in LevelReadiness.__dataclass_fields__})
-            if snapshot['thresholds']['representation_open'] != self.config.representation_open:
+            if snapshot['thresholds'] != asdict(self.config):
                 # Keep learned permissions, but require fresh evidence under the
                 # explicitly changed threshold before another activation/promotion.
                 state = self.readiness[pair]

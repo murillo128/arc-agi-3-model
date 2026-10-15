@@ -105742,7 +105742,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Latched permission from the training controller, per game/level. Initially closed; opens after three fixed evaluations with reconstruction <=10% and relative latent drift <=5%. Once opened, predictor keeps learning with representation. Low instantaneous prediction error does not turn learning off; later regressions block level promotion only.",
+      "description": "Latched permission from the training controller, per game/level. Initially closed; opens after three fixed evaluations with reconstruction <=10% and relative latent drift <=15%. Once opened, predictor keeps learning with representation. Low instantaneous prediction error does not turn learning off; later regressions block level promotion only.",
       "operation": "cumulative_activation",
       "formula": "enabled = training and real_target_valid and predictor_started_for_level",
       "parent_id": "world.learner"
@@ -106703,7 +106703,7 @@
       "id": "training.curriculum",
       "label": "Cumulative Curriculum & Activation",
       "kind": "operation",
-      "description": "Select exactly one game per campaign (sc01-v1 by default); training, evaluation and previews use only that game. Start at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; retain weights when advancing. The active campaign initializes encoder, decoder, predictor and PathValue from scratch using subgoal_config.json; counters and permissions start at zero. Encoder/decoder always learn. Admit predictor at reconstruction <=10% and latent drift <=5%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
+      "description": "Select exactly one game per campaign (sc01-v1 by default); training, evaluation and previews use only that game. Start at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; retain weights when advancing. The active campaign initializes encoder, decoder, predictor and PathValue from scratch using subgoal_config.json; counters and permissions start at zero. Encoder/decoder always learn. Admit predictor at reconstruction <=10% and latent drift <=15%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
       "ports": [
         {
           "id": "quality",
