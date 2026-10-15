@@ -6,6 +6,8 @@ const fmt = (x, n=0) => finite(x) ? x.toLocaleString('es-ES', {maximumFractionDi
 const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31','#1e93ff','#88d8f1','#ffdc00','#ff851b','#921231','#4fcc30','#a356d6'];
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
 const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
+const predictorLossKinds = [['MSE latente','latent'],['NLL visual','delta_nll'],
+  ['Error de solapamiento','delta_overlap'],['Rollout · total','rollout']];
 const namespace = 'http://www.w3.org/2000/svg';
 const chartStates = new Map();
 function gpuStatus(sample) {
@@ -326,6 +328,17 @@ function render(report) {
     {...series('Actualización individual','representation_loss'),muted:true}]);
   lossBreakdown('representation-loss-terms',rows,'representation_terms');
   lossBreakdown('loss-terms',rows,'predictor_terms');
+  const lossTerms=predictorLossKinds.map(([name,key],colorIndex)=>({name,colorIndex,
+    points:rows.map(r=>[r.actions,r.predictor_terms?.[key]])}));
+  plot('predictor-components',[
+    ...lossTerms.map(s=>({...s,faint:true,legend:false})),
+    ...lossTerms.map(s=>({...s,points:movingAverage(s.points)}))
+  ],{digits:4,minimumRange:.001,empty:'Todavía no hay componentes de pérdida registrados'});
+  const lossMode=report.config?.prediction_delta_loss;
+  $('predictor-objective').textContent=lossMode==='union'
+    ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
+    : lossMode==='balanced' ? 'NLL activa: grupos equilibrados de píxeles cambiados y estáticos.'
+    : 'Este reporte no identifica el modo de NLL.';
   $('representation-regularization').textContent=p.sigreg_enabled===true
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';

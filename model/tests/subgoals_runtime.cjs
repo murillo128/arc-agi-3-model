@@ -241,6 +241,33 @@ const text=id=>nodes.get(id).textContent;
   }
   assert.equal(text('representation-regularization'),'Estado de SIGReg no registrado');
 
+  // Historical terms use recorded updates only, not missing terms as zeros.
+  // At action 514 the 512-action window contains actions 3, 32 and 513.
+  report.config.prediction_delta_loss='union';
+  report.curves=[{actions:1,predictor_terms:{latent:100,delta_nll:100,delta_overlap:100,rollout:100}},
+    {actions:3,predictor_terms:{latent:.25,delta_nll:2,delta_overlap:0}},
+    {actions:32,predictor_terms:{latent:.5,delta_nll:4,delta_overlap:.5,rollout:6}},
+    {actions:513,predictor_terms:{latent:0,delta_nll:0,delta_overlap:1,rollout:2}},
+    {actions:514,predictor_terms:null}];
+  await vm.runInContext('poll()',context);
+  assert.match(text('predictor-objective'),/unión de cambios reales y predichos/);
+  assert.deepEqual(nodes.get('predictor-components-legend').children.map(n=>n.textContent),
+    ['MSE latente: 0,25','NLL visual: 2','Error de solapamiento: 0,5','Rollout · total: 4']);
+  const termPoints=circles('predictor-components');
+  assert.equal(termPoints.filter(n=>n.opacity<1).length,15,'3 terms at action 3; 4 at each other measured action');
+  assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='NLL visual: 0 · acción 513'));
+  assert.ok(termPoints.some(n=>n.opacity===1&&n.children[0].textContent==='Rollout · total: 4 · acción 514'));
+  assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='Rollout · total: 6 · acción 32'));
+  report.config.prediction_delta_loss='balanced';
+  report.curves=[{actions:1026,predictor_terms:null}];
+  await vm.runInContext('poll()',context);
+  assert.match(text('predictor-objective'),/grupos equilibrados/);
+  assert.equal(circles('predictor-components').length,0);
+  assert.ok(nodes.get('predictor-components-legend').children.every(n=>n.textContent.endsWith(': —')));
+  delete report.config.prediction_delta_loss;
+  await vm.runInContext('poll()',context);
+  assert.match(text('predictor-objective'),/no identifica el modo/);
+
   // Goal statistics average events in an action window, not the last N goals.
   // Simultaneous completions count equally, failures affect reward only, and a
   // censored segment without reward never dilutes the denominator.

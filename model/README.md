@@ -198,6 +198,16 @@ representación distingue CE, delta, overlap, reconstrucción local y regulariza
 cuando se calculan. El predictor distingue MSE latente, delta, overlap y rollout
 cuando existe un prefijo suficiente. Un término ausente no se presenta como cero.
 El panel muestra también si SIGReg sigue activo en la fase inicial o está apagado.
+La gráfica **Pérdida por componente** muestra además el histórico del predictor:
+MSE latente, NLL visual, error de solapamiento y total del rollout. Reutiliza
+`curves[].predictor_terms` de `report.json`; esos términos también están presentes
+en los eventos del log. Cada curva conserva las actualizaciones individuales y
+su media sobre hasta 512 acciones, contando sólo valores calculados. El rollout
+no existe en todas las actualizaciones, por lo que las medias por componente
+pueden no sumar la media de la pérdida total. Se indica el modo activo de NLL;
+un reporte antiguo sin ese campo no recibe un modo inventado. Estas pérdidas
+no son porcentajes de acierto ni recompensas; los aciertos aparecen en el desglose
+de deltas. No hace falta reiniciar el entrenamiento para mostrar este histórico.
 
 El panel del predictor muestra cada dos segundos una muestra aleatoria de las
 últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,
