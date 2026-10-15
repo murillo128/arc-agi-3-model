@@ -134,7 +134,11 @@ Undo costs one action and restores the prior command state; it can reverse a
 monotonic switch or matched pair. RESET preserves the existing native retry/full
 restart contract. Budgets remain generous (96–256 actions), with no new hazards.
 Memory emits eight reveal frames before hiding a mismatch; the existing player
-shows the faces for about 640 ms unless reduced motion suppresses animation.
+shows the faces for about 640 ms. Under reduced motion, the foundation pair
+game holds one native reveal image still for 640 ms before hiding; RESET or
+switching cancels that hold through the existing presentation token. Old games
+retain their existing reduced-motion presentation. No rule, SDK frame, action
+cost or actor-payload field changes are needed.
 
 ### Test plan, provenance and execution
 
@@ -177,6 +181,21 @@ browser suites also retain their ignored `artifacts/square-cross/` screenshots.
 Validation uses CPU, Python 3.12.14, arc-agi 0.9.9, ARCEngine 0.9.3, NumPy 2.5.4,
 Playwright 1.63.0 and Chromium 153.0.8010.12. The existing runner settings confirm
 GPT-6 Astra / high. Exact final results belong to the implementation PR.
+
+### Reduced-motion audit correction
+
+The first independent audit found that the shared player discarded the new
+memory game's informative mismatch frames when reduced motion was enabled.
+The real Chromium regression in `check_reduced_motion_pairs` failed on
+`a0cb57df45a29be6e8b1786a571571c689810373`: neither canvas paint showed both
+face colours. The test uses the actual card centres/face colours, rather than
+assuming that any returned animation frame contains the required information.
+It now requires a still both-face reveal for at least 500 ms on desktop/mobile,
+followed by hiding, with unchanged one-action cost and no teacher fields.
+Actual RESET and game-switch inputs cancel the hold without a delayed repaint.
+The existing ordinary-motion, old-game reduced-motion and epoch/cancellation
+regressions remain required in the on-demand acceptance command. Red/green
+logs are retained under ignored `artifacts/synthetic-validation/audit-repair/`.
 
 ### Live refresh remains a separate post-merge step
 

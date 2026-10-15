@@ -112,6 +112,66 @@ def check(page,url,session,mobile):
     print(f'Foundations: 8 sequential six-level WINs, controls/HELP/Undo/reset/privacy/memory/cancellation ({"mobile" if mobile else "desktop"})',flush=True)
 
 
+
+def check_reduced_motion_pairs(page,url,session,mobile):
+    page.emulate_media(reduced_motion='reduce')
+    page.goto(url); settled(page)
+    load(page,'synthetic','bf08-v1')
+    for _ in range(2):
+        for index in plan(session.env._game.puzzle): command(page,session,index,mobile)
+    p=session.env._game.puzzle
+    first=0; second=next(i for i,v in enumerate(p.deck) if v!=p.deck[first])
+    command(page,session,first,mobile)
+    page.evaluate('() => {window.frameLog=[]; window.savedPaint=paint; paint=(frame,palette)=>{frameLog.push({frame,time:performance.now()}); savedPaint(frame,palette)}}')
+    command(page,session,second,mobile)
+    frames=page.evaluate('frameLog')
+    # Independent visible-card expectation: both centres contain their face
+    # colours, not the common back. Native frames alone aren't the oracle.
+    centers=[(x+w//2,y+h//2) for x,y,w,h in p.button_rects()]
+    def both_faces(frame):
+        return all(frame[centers[i][1]][centers[i][0]]==p.palette[p.deck[i]] for i in (first,second))
+    reveals=[i for i,item in enumerate(frames) if both_faces(item['frame'])]
+    assert reveals,'Reduced motion discarded the second card identity on a mismatch'
+    start=reveals[0]
+    hidden=next(i for i in range(start+1,len(frames)) if not both_faces(frames[i]['frame']))
+    assert frames[hidden]['time']-frames[start]['time']>=500
+    assert all(item['frame']==frames[start]['frame'] for item in frames[start:hidden]),'Reveal must be still'
+    native=[f.tolist() for f in session.frame.frame]
+    assert all(item['frame'] in native for item in frames),'Presentation must use only native actor frames'
+    assert p.state==(0,-1,-1) and p.steps==2
+    assert_native_pixels(page,session.payload())
+    assert not {'deck','target','subgoals','training_info'} & session.payload().keys()
+    page.evaluate('() => {paint=savedPaint}')
+
+    # Cancel the still hold through actual inputs; queued actions keep their
+    # existing epoch/animation guards, and no delayed reveal may repaint later.
+    for cancel in ('reset','switch'):
+        if cancel=='reset':
+            page.locator('#restart').click(); settled(page)
+        p=session.env._game.puzzle
+        command(page,session,first,mobile)
+        page.evaluate('() => {window.frameLog=[]; window.savedPaint=paint; paint=(frame,palette)=>{frameLog.push({frame,time:performance.now()}); savedPaint(frame,palette)}}')
+        x,y,w,h=p.button_rects()[second]
+        page.locator('#game').scroll_into_view_if_needed()
+        box=page.locator('#game').bounding_box()
+        (page.touchscreen.tap if mobile else page.mouse.click)(box['x']+(x+w/2)*box['width']/64,box['y']+(y+h/2)*box['height']/64)
+        page.wait_for_function('frameLog.length > 0')
+        if cancel=='reset':
+            page.locator('#restart').click(); settled(page)
+            assert session.env._game.puzzle.steps==0
+            assert session.env._game.puzzle.level==3
+        else:
+            load(page,'synthetic','sy08-v1')
+            assert session.selected['id']=='sy08-v1'
+        count=page.evaluate('frameLog.length')
+        page.wait_for_timeout(700)
+        assert page.evaluate('frameLog.length')==count,'Cancelled reveal repainted a newer session'
+        assert_native_pixels(page,session.payload())
+        page.evaluate('() => {paint=savedPaint}')
+    page.emulate_media(reduced_motion='no-preference')
+    print(f'PASS reduced-motion pairs: still mismatch reveal, one-action cost, privacy, RESET/switch cancellation ({"mobile" if mobile else "desktop"})',flush=True)
+
+
 def main():
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
@@ -127,6 +187,7 @@ def main():
                     errors=[]
                     page.on('pageerror',lambda e: errors.append(str(e)))
                     check(page,url,session,mobile)
+                    check_reduced_motion_pairs(page,url,session,mobile)
                     assert not errors,errors
                     page.close()
         finally: browser.close()

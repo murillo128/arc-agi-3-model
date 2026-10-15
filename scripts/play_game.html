@@ -277,10 +277,24 @@ debugToggle.addEventListener('change', () => {
 });
 async function present(data, token, animate) {
   draw(data);
-  const frames = animate && data.frames && !matchMedia('(prefers-reduced-motion: reduce)').matches ? data.frames : [data.frame];
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Foundation pairs reveal information before hiding it. Keep that native
+  // image still under reduced motion; other games retain their presentation.
+  const stillReveal = reducedMotion && animate && data.source === 'synthetic' &&
+    data.game === 'bf08-v1' && data.frames && data.frames.length > 1 &&
+    JSON.stringify(data.frames[0]) !== JSON.stringify(data.frame);
+  const frames = stillReveal ? [data.frames[0], data.frame] :
+    animate && data.frames && !reducedMotion ? data.frames : [data.frame];
   for (let i = 0; i < frames.length && token === animationToken; i++) {
     paint(frames[i], data.palette);
-    if (i < frames.length - 1) await new Promise(resolve => setTimeout(resolve, Math.min(80, 2000 / frames.length)));
+    if (i < frames.length - 1) {
+      const delay = stillReveal ? 640 : Math.min(80, 2000 / frames.length);
+      // Check the existing cancellation token during a still hold as often as
+      // during ordinary animation, so RESET/switch needn't wait for the reveal.
+      for (let elapsed = 0; elapsed < delay && token === animationToken; elapsed += 80) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(80, delay - elapsed)));
+      }
+    }
   }
   // The final observation remains authoritative even when a queued reset cancels presentation.
   paint(data.frame, data.palette);
