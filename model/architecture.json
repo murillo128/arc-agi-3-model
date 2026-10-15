@@ -218,7 +218,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "One portable Agent: observe, imagine, act, set_goal(image,mask). The training controller is outside inference. Encoder/decoder learn from the start; predictor and then PathValue are admitted per level after repeated fixed development checks. Activation is cumulative: earlier learners continue. Frozen evaluation updates no weights. Synthetic teacher exposes one current goal; private predicates and distances never enter search. Checkpoint saves all active modules and curriculum progress.",
+      "description": "One portable Agent: observe, imagine, act, set_goal(image,mask). The training controller is outside inference. Encoder/decoder learn from the start; predictor and then PathValue are admitted per level after repeated fixed development checks. Activation is cumulative: earlier learners continue. Frozen evaluation updates no weights. Synthetic teacher exposes one current goal; private predicates and distances never enter search. Checkpoint saves all active modules and curriculum progress. SIGUSR1 queues an additional atomic save at the next completed episode/evaluation boundary, then training continues; optimizer moments are not stored.",
       "children": [
         "world.representation",
         "world_model",

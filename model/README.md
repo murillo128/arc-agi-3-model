@@ -105,6 +105,23 @@ reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia n
 La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
 PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
 
+En Linux, `SIGUSR1` solicita un checkpoint adicional y el entrenamiento continúa.
+La señal sólo encola la petición: los pesos y contadores se guardan atómicamente
+en `latest.pt` al terminar la partida o la evaluación en curso. Varias señales
+pendientes se agrupan en un guardado; una recibida durante la escritura queda
+pendiente para el siguiente punto seguro. Para el servicio de esta campaña:
+
+```sh
+systemctl --user kill --kill-whom=main --signal=SIGUSR1 arc3-curriculum.service
+```
+
+Para un proceso lanzado desde un shell, usa `kill -USR1 <PID>`. El log confirma
+el guardado con `checkpoint_saved`, `reason: "signal"` y el contador de acciones;
+`report.json` actualiza `checkpoint_action` y `last_checkpoint`. El campo
+`checkpoint_signal: "SIGUSR1"` indica que esta versión tiene instalado el handler.
+No enviar esta señal a procesos antiguos que no lo tengan. Se mantiene el formato
+portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador.
+
 ```sh
 .venv/bin/python -u -m model.subgoal_training \
   --game sc01-v1 \

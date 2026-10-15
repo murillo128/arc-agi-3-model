@@ -4,12 +4,15 @@
 --resume restores a saved curriculum and all weights. Only actual SDK
 transitions train dynamics; only finished real goal segments train PathValue.
 The environment's teacher stays outside the portable Agent.
+SIGUSR1 requests an atomic checkpoint at the next episode/evaluation boundary
+without stopping training.
 """
 import argparse
 from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import random
+import signal
 import time
 
 import numpy as np
@@ -372,6 +375,18 @@ def main(argv=None):
         report.pop('prediction_sample', None)
     previews = PredictionSamples()
     last_write, started = 0., time.monotonic()
+    checkpoint_requests = saved_requests = 0
+
+    def request_checkpoint(signum, frame):
+        # No disk/CUDA work in a signal handler. Count requests so a signal
+        # received DURING a save remains pending for the next safe boundary.
+        nonlocal checkpoint_requests
+        checkpoint_requests += 1
+
+    checkpoint_signal = getattr(signal, 'SIGUSR1', None)
+    previous_handler = (signal.signal(checkpoint_signal, request_checkpoint)
+                        if checkpoint_signal is not None else None)
+    report['checkpoint_signal'] = 'SIGUSR1' if checkpoint_signal is not None else None
 
     def publish(force=False, **values):
         nonlocal last_write
@@ -485,8 +500,14 @@ def main(argv=None):
                 if promotions:
                     report.setdefault('promotions', []).append(dict(actions=actions, levels=promotions))
                 publish(force=True)
+            save_requested()
 
-        def save():
+        def save(reason='scheduled'):
+            nonlocal saved_requests
+            requests = checkpoint_requests
+            if requests != saved_requests:
+                reason = 'signal'
+            previous_phase = report['progress']['phase']
             publish(force=True, phase='checkpoint')
             agent_checkpoint.save(args.output / 'latest.pt', agent, training_progress={
                 'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
@@ -494,16 +515,26 @@ def main(argv=None):
                 'curriculum': curriculum.snapshot(),
                 'planner_actions': [dict(game=g, level=n, actions=count)
                                    for (g, n), count in planner_actions.items()]})
+            saved_requests = requests
             report['checkpoint_action'] = actions
+            report['last_checkpoint'] = dict(actions=actions, reason=reason, saved_at=time.time())
+            print(json.dumps(dict(event='checkpoint_saved', **report['last_checkpoint'],
+                                  path=str(args.output / 'latest.pt'))), flush=True)
+            publish(force=True, phase=previous_phase)
+
+        def save_requested():
+            if checkpoint_requests != saved_requests:
+                save()
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates)
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval):
-            save()
+            save('resume')
         if not args.resume:
-            save()
+            save('initial')
             evaluate('dev')  # Baseline and drift anchors; never grants readiness by itself.
+        save_requested()
         while actions < args.actions:
             pair = curriculum.next_pair()
             game, level = pair
@@ -545,6 +576,9 @@ def main(argv=None):
                 **{k: v for k, v in result.items() if k not in ('records', 'quality')}))
             report['episodes'] = report['episodes'][-2000:]
             episode_index += 1
+            # The snapshot does not contain an unfinished episode's buffer.
+            # Save only once its learning, counters and seed have all advanced.
+            save_requested()
             if actions >= next_eval:
                 evaluate('dev')
                 next_eval = (actions // args.evaluate_every + 1) * args.evaluate_every
@@ -559,6 +593,9 @@ def main(argv=None):
         report['status'], report['error'] = 'failed', str(error)
         publish(force=True, phase='failed')
         raise
+    finally:
+        if checkpoint_signal is not None:
+            signal.signal(checkpoint_signal, previous_handler)
 
 
 if __name__ == '__main__':
