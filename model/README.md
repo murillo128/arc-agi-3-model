@@ -1,96 +1,117 @@
 # Modelo residual latente
 
-## Plan activo: subobjetivos sintéticos y adaptación por acción
+## Plan activo: aprendizaje incremental y currículo acumulativo
 
-Esta campaña **sustituye las comparaciones anteriores**. Se descartan sus resultados
-para decidir esta fase; se reutiliza únicamente el mundo ya entrenado. El evaluador
-del Path Planner y todos los contadores empiezan de cero.
+Sustituye las campañas anteriores. Conservamos el mundo preentrenado; PathValue,
+contadores, criterios de activación y resultados empiezan de nuevo. Una sola
+configuración, hasta 262.144 acciones reales, sin barrido de variantes.
 
-- **Goal Planner sintético:** los juegos ofrecen `training_subgoals()` después de
-  aleatorizar el nivel. Exportan imágenes y máscaras de objetivos; el profesor
-  conserva las condiciones de llegada y el mínimo de acciones al activar cada
-  objetivo. No proporciona movimientos ni rutas al agente. Clics y selecciones
-  cuentan como acciones incluso cuando no consumen el presupuesto del juego.
-- **Path Planner:** recibe un solo objetivo y el estado real `(z,h)`. Busca en
-  latentes con horizonte 3, beam 4 y 16 candidatos uniformes de clic. El mismo
-  predictor calcula `z_next = z + delta`; cada rama conserva su memoria. Se ejecuta
-  solo la primera acción y se vuelve a planificar desde la observación real.
-- **Predictor online:** se guarda la predicción anterior a cada acción real y se
-  compara el delta visual neto contra el resultado real, con la misma referencia.
-  Si el error de unión de deltas supera 10 %, se hace una actualización (LR 3e-5):
-  MSE del delta latente + NLL visual + overlap. Encoder y decoder congelados; el
-  decoder transmite gradientes al predictor. Sin actualizaciones dentro de la
-  búsqueda. Tras actualizar, se recompone la memoria con la historia real actual.
-- **Aprendizaje del Path Planner:** al alcanzar un subobjetivo, GAME_OVER o agotar
-  128 acciones, el evaluador aprende el coste restante de cada estado real del
-  segmento: acciones realmente necesarias hasta el final, más 128 por fracaso.
-  SmoothL1 sobre `log1p(coste)`, cuatro pasadas, LR 3e-4. El reward mostrado es
-  `-(acciones - mínimo inicial) - 128 * fracaso`: la referencia mínima desplaza
-  el retorno del segmento por una constante y no cambia qué ruta es preferible.
-  Llegar en la última acción es éxito. Un corte administrativo es censurado, no
-  fracaso. No se aprende de trayectorias imaginadas como si fueran reales.
+**Activación acumulativa, nunca fases que sustituyen al aprendizaje anterior:**
 
-**Una configuración, 65.536 acciones reales**, equilibradas por acciones entre
-los diez pares juego/nivel de `sc01-v1` y `si01-v1`, semilla 0. Exploración uniforme
-de 100 % a 20 % durante las primeras 8.192 acciones; después 20 %. No imitamos una
-ruta docente. Evaluación congelada cada 4.096 acciones, dos partidas por par y
-política, comparando Path Planner con azar sobre las mismas semillas separadas.
-Confirmación final en otra partición de semillas. No elegimos automáticamente
-arquitectura ni pesos por esta muestra. Checkpoint cada 2.048 acciones al finalizar
-la partida; CPU para contratos y CUDA con `torch.compile`, BF16 y límite de 250 W.
-RAM/GPU de experiencia limitada a la partida actual, sin grabar replay en disco.
+1. Encoder y decoder aprenden desde la primera acción real y siguen aprendiendo
+   durante toda la campaña. Reconstrucción de las dos últimas observaciones:
+   CE de colores, delta visual, overlap y regularización latente configurada.
+   AdamW LR 3e-6, menor que el predictor para limitar el desplazamiento del latente.
+2. El predictor se incorpora cuando la reconstrucción es ≤1 % y la deriva relativa
+   del latente es ≤5 % en tres evaluaciones consecutivas del nivel. Desde entonces
+   aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
+   LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
+   En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
+3. PathValue se incorpora cuando además los errores de predicción a uno y tres
+   pasos son ≤10 % durante tres evaluaciones. Aprende al terminar cada segmento
+   real de subobjetivo; encoder, decoder y predictor continúan actualizándose.
 
-Quedan fuera de esta campaña: barrido de decoder/regularización, Double-DQN,
-actor por imitación, entrenamiento de un Goal Planner aprendido y optimización
-del encoder/decoder. Un segundo entrenamiento largo con otra semilla se decidirá
-cuando haya una señal clara de éxito y eficiencia del primero.
+Los permisos se mantienen una vez abiertos **para cada juego/nivel**. Una regresión
+se muestra y bloquea avanzar de nivel, pero no apaga componentes ya habilitados.
+La reconstrucción baja por sí sola no prueba estabilidad: la deriva compara z de
+las mismas imágenes iniciales entre evaluaciones (norma RMS de la diferencia /
+norma RMS anterior). La primera evaluación no tiene esa comparación y no abre
+permisos. Los umbrales, paciencia y tasas son configurables; son valores iniciales,
+no una conclusión experimental ni garantía de estabilidad.
 
-El checkpoint portátil incluye mundo, evaluador y configuración del Path Planner.
-La API de profesor vive fuera del agente y se rechaza para juegos SDK ajenos al
-repositorio. Un despliegue con `path_mpc` requiere que su llamador aporte el objetivo
-visual actual mediante `Agent.set_goal`; el checkpoint no descubre objetivos.
+**Currículo por juego:** primero nivel 1; después 1+2; después 1+2+3, etc. Cada
+juego sintético desbloquea sus niveles independientemente. Se alternan partidas
+nuevas entre todos los niveles desbloqueados, con parámetros aleatorios. No se
+borran pesos al avanzar; la experiencia temporal sí se descarta en cada partida.
+Para abrir un nivel nuevo se exige calidad de representación/predicción y ≥80 %
+de éxito del planner en **todos** los niveles ya abiertos de ese juego durante
+tres evaluaciones consecutivas. No basta una media global ni agotar un presupuesto.
+
+**Evaluación:** cada 1.024 acciones, ocho partidas por nivel desbloqueado, con
+semillas fijas de desarrollo y pesos sin actualizar. La política aleatoria sirve
+para medir representación y predicción sobre las mismas situaciones. El planner
+se evalúa aparte una vez habilitado, con las mismas semillas y presupuesto de
+128 acciones. Antes de habilitarlo, recoge datos la exploración aleatoria.
+La calidad predictiva requiere al menos ocho muestras y cuatro con cambios reales
+a cada horizonte. Una predicción exacta sin cambios tiene error cero, pero no
+sustituye la cobertura de transiciones con cambios. Para tareas que terminan sin
+cambiar píxeles, se admite una evaluación enteramente estática solo si incluye
+una terminación nativa observada; se decide por evidencia pública, no por el juego.
+El éxito del planner sigue siendo obligatorio para avanzar. La confirmación final utiliza
+otras semillas y no modifica permisos ni currículo.
+
+**Subobjetivos desde el inicio:** los juegos generan la lista después de
+aleatorizarse. El agente recibe solamente la imagen/máscara del objetivo actual;
+una lista de longitud uno usa el mismo contrato que una lista de varios objetivos.
+Solo la confirmación real del profesor avanza la lista. La memoria recurrente se
+conserva entre objetivos de la misma partida. El mínimo de acciones es una referencia
+para métricas, nunca una ruta ni una etiqueta privilegiada para decidir acciones.
+
+**Path Planner:** búsqueda latente con horizonte 3, beam 4 y 16 candidatos uniformes
+de clic. Replanifica tras cada acción real; cada rama imaginada conserva su propio h.
+Tras habilitarse, exploración de 100 % a 20 % en sus primeras 8.192 acciones por
+nivel. PathValue aprende `log1p(acciones restantes + 128 * fracaso)` de segmentos
+reales completos, SmoothL1, cuatro pasadas, LR 3e-4. El estado final de éxito tiene
+coste cero. Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`.
+Un corte administrativo queda censurado, no se etiqueta como fracaso.
+
+**Coherencia de los pesos:** representación, predictor y planner tienen optimizadores
+separados sobre los mismos módulos del agente. Tras actualizar representación se
+invalidan los latentes de inferencia, se recodifican historial y objetivo, y se
+recompone h. El predictor compara ambos extremos con el encoder actualizado y usa
+el decoder sin actualizar sus pesos en ESA llamada; el decoder sí aprende con su
+propio optimizador. Después de modificar dinámica se recompone h otra vez. No
+actualizamos pesos dentro de una búsqueda ni mezclamos predicciones con datos reales.
+
+CUDA usa `torch.compile`, BF16 y momentos AdamW de 8 bits para representación y
+predictor; CPU usa float32 y AdamW normal. Se conserva el límite de GPU a 250 W.
+La partida actual es el único buffer; no se guardan grabaciones/replay en disco.
+Checkpoint portátil inicial y cada 2.048 acciones, al terminar la partida. Incluye
+pesos y configuración de módulos activos y resumen del currículo. Este comando
+inicia una campaña nueva, no restaura momentos de optimizador ni continúa contadores.
 
 ```sh
 .venv/bin/python -u -m model.subgoal_training \
-  --source model/runs/architecture-evolution/full/streaming-probe/visual_2step-best.pt \
-  --output model/runs/subgoals/current
+  --source model/runs/bootstrap/world.pt \
+  --output model/runs/curriculum/current
+.venv/bin/python -m model.dashboard \
+  --subgoal-report model/runs/curriculum/current/report.json
 ```
 
-El dashboard selecciona ese único informe con `--subgoal-report`; interacción,
-aprendizaje y evaluación comparten la ejecución. Se muestran error previo a la
-actualización, gate, optimizadores separados, subobjetivo visual, coste, reward,
-TPS y evaluaciones por nivel. No mezcla las campañas antiguas.
+LMEX sigue `model/runs/curriculum/current/latest.pt`; el sincronizador reutiliza el
+`architecture.json` del repositorio. El checkpoint `path_mpc` necesita que su
+llamador proporcione el objetivo con `Agent.set_goal`: no descubre objetivos.
+El profesor sintético está fuera del agente y se rechaza para juegos SDK ajenos
+al repositorio. Los resultados no prueban descubrimiento autónomo de reglas/objetivos.
 
-La curva principal utiliza solo evaluaciones de desarrollo completas con política
-aleatoria: mismas partidas y acciones en cada punto, media con igual peso por par
-juego/nivel, conservando toda la ejecución. No mezcla la política del planner ni
-la confirmación con semillas distintas. Dos partidas por par son una señal inicial.
-El diagnóstico durante la interacción conserva las últimas 4.096 acciones, con
-datos por bloques de 32 y una tendencia móvil de hasta 512 acciones. El error de
-la tendencia es la suma de errores dividida por la suma de uniones de deltas,
-no la media de porcentajes. Los bloques sin cambios reales ni predichos se marcan
-aparte y dejan un hueco en la serie original. La pérdida solo promedia las
-actualizaciones realizadas; una acción sin actualización no es una pérdida cero.
-El desglose del delta muestra cada categoría en píxeles por acción medida: tendencia
-de hasta 512 acciones destacada y bloques de 32 tenues, con los mismos cuatro colores.
-Ambas medias incluyen acciones medidas sin cambios y excluyen datos ausentes;
-los bloques parciales usan su número real de mediciones, no el tamaño de la ventana.
+**Dashboard:** una ejecución, una tabla de niveles, componentes habilitados,
+mediciones y evaluaciones consecutivas para avanzar. Curvas fijas de reconstrucción
+y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
+al cambiar la cobertura del currículo. Las curvas de interacción conservan las
+últimas 4.096 acciones: bloques de 32 y tendencia de 512. El error suma errores y
+uniones de deltas; el desglose usa píxeles por acción medida. Datos ausentes no son
+ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
+contadores, nunca suman acciones de aprendizaje.
 
-```sh
-.venv/bin/python -m model.dashboard --subgoal-report model/runs/subgoals/current/report.json
-```
+Quedan fuera: Goal Planner aprendido, actor por imitación, Double-DQN, barrido de
+arquitecturas y etiquetas de distancia privilegiadas para PathValue. Se observa
+primero si las activaciones progresivas y el repaso de niveles estabilizan el
+aprendizaje, antes de introducir otra variante.
 
-LMEX puede seguir `model/runs/subgoals/current/latest.pt`: se publica un checkpoint
-inicial y después los periódicos. El sincronizador acepta el checkpoint portátil
-del agente, conserva los nombres de tensores del mundo y añade `path_evaluator.*`.
-El JSON describe esta campaña, con el profesor fuera del agente y todos los
-puertos conectados; no activa los componentes de experimentos anteriores.
-
-**Validación acotada:** contratos del profesor contra transiciones nativas del
-SDK y fixtures geométricos independientes (clics, colisiones, mínimo y resets);
-búsqueda latente, targets de segmentos, gate por error y actualización exclusiva
-del predictor; guardado/carga del mismo agente; contrato HTTP/JS del dashboard y
-ejecución corta CUDA antes de lanzar el entrenamiento largo. Sin pruebas visuales.
+Validación proporcional: contratos CPU de activación acumulativa, cobertura,
+promoción, ownership de gradientes, renovación de latentes y rollout autónomo;
+contratos existentes de múltiples subobjetivos y API SDK; checkpoint del mismo
+agente; HTTP/JS del dashboard; prueba corta CUDA compilada. Sin pruebas visuales.
 
 ## Protocolos anteriores — fuera de la campaña activa
 

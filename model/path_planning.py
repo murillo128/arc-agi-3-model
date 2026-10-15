@@ -135,7 +135,7 @@ class PathPlanner:
 def real_states(engine, episode):
     """Refresh recurrent memory using CURRENT predictor weights and real frames."""
     with engine.autocast():
-        zs = engine.encode_frozen_episode(episode)
+        zs = engine.encode_detached_episode(episode)
         h = torch.zeros(1, engine.model.config.memory, device=engine.device)
         result = [State(zs[0], h, episode.observations[0].final.shape)]
         for action, z, obs in zip(episode.actions, zs[1:], episode.observations[1:]):

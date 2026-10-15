@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-synthetic-subgoals-online-path-planner",
-  "name": "ARC3 synthetic subgoal agent",
+  "architecture_revision": "arc3-cumulative-curriculum-incremental-learning",
+  "name": "ARC-AGI-3 · Incremental latent world and synthetic subgoals",
   "scope": "high_level_world_model_and_behavior_components",
   "coverage": "partial",
   "symbols": [
@@ -153,6 +153,13 @@
           "direction": "output",
           "shape": null,
           "value_type": "BundledSyntheticCapability {randomized scene, native state, generation lifetime}; trainer-only"
+        },
+        {
+          "id": "curriculum",
+          "label": "curriculum",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Trainer-selected unlocked game/level, not an inference observation"
         }
       ],
       "parameter_ids": [],
@@ -211,7 +218,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "One shared portable Agent with observe/act/imagine and set_goal(image,mask). The trainer holds the synthetic teacher; Agent never receives its list, private geometry, completion predicate or minimum distance for choosing actions. Training-owned learner invocations update the same predictor/PathValue modules shown here. Frozen evaluation omits both learners. Checkpoints jointly save compatible world and path evaluator weights/configuration; optional runtime retains current goal and independent branch state.",
+      "description": "One portable Agent: observe, imagine, act, set_goal(image,mask). The training controller is outside inference. Encoder/decoder learn from the start; predictor and then PathValue are admitted per level after repeated fixed development checks. Activation is cumulative: earlier learners continue. Frozen evaluation updates no weights. Synthetic teacher exposes one current goal; private predicates and distances never enter search. Checkpoint saves all active modules and curriculum progress.",
       "children": [
         "world.representation",
         "world_model",
@@ -319,7 +326,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Residual latent dynamics: (z_t,h_t,a_t) -> (z_t + d_hat_t+1,h_t+1). Online learning uses real one-action targets and the pre-update visual-error gate. Latent search uses the same weights, fixed for each search. No decoder or new visual observation is needed for imagined successors.",
+      "description": "Residual latent dynamics: (z_t,h_t,a_t) -> (z_t+d_hat_t+1,h_t+1). Predictor joins ongoing representation learning after readiness checks. Learn one-step and autoregressive three-step real endpoints; imagined branches have independent h and need no decoder or visual observation. Search never changes weights.",
       "children": [
         "world.dynamics",
         "world.learner"
@@ -389,7 +396,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Frozen pretrained visual encoder and current-episode memory. Preserve real frames/animation order and action_input. Cache detached z within this episode only; refresh h from real history whenever dynamics changes. On reset/game over, discard episode memory. The path learner never receives synthetic goal lists or private game state.",
+      "description": "Shared trainable representation and current-episode memory. Encoder and decoder update on each real learning action even after predictor and planner activation. After encoder updates invalidate detached z caches, re-encode real history and current goal, and rebuild h. Predictor-only updates rebuild h; reset discards the episode. No across-game replay.",
       "children": [
         "observation",
         "world.encoder",
@@ -622,7 +629,7 @@
           "value": 91527680
         }
       ],
-      "description": "Frozen Visual Encoder shared by live frames, cached real episode observations and one visual subgoal. Native 4x4 packing retains all pixels, producing 1024 channels per patch. Real animation context remains part of z; hypothetical goals are encoded as one frame. Subgoal encoding is an invocation of these same weights, not another learned encoder.",
+      "description": "Visual Encoder shared by real observations, reconstruction training and current visual goal. Updates continue throughout the campaign at LR 3e-6. Native 4x4 packing retains every pixel in 1024 channels per patch. Animation context remains part of z. Goal encoding uses the same weights on one frame and is refreshed after every representation update.",
       "parent_id": "world.representation",
       "children": [
         "world.encoder.live",
@@ -1223,7 +1230,7 @@
           "value": 58280208
         }
       ],
-      "description": "Shared visual readout outside imagination. Decode the predicted latent before each real action for delta diagnostics; after the response, a differentiable invocation sends visual-delta gradients to the predictor through these same frozen decoder weights. Encoder and decoder reuse the selected pretrained world checkpoint. No standalone decoder optimizer runs in this campaign.",
+      "description": "Shared visual readout outside imagination. Representation learner updates decoder weights on real reconstruction on every action. Predictor learner uses the same decoder with its weights fixed for THAT optimizer step while preserving gradients with respect to predicted latents. Acting/evaluation are no-grad. Not a permanently frozen phase.",
       "parent_id": "agent",
       "children": [
         "world.decoder.reference",
@@ -1329,7 +1336,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "model.path_planning.PathPlanner: beam search in shared latent dynamics, horizon 3, beam 4, up to 16 uniformly sampled legal click coordinates. Score depth + predicted remaining action cost; execute only the first action and replan from real observation. Epsilon exploration decays 1.0 -> 0.2 over 8192 real actions. Fresh PathValue learns after finished real subgoal segments; no imitation of solved action sequences or gradients through search/world.",
+      "description": "Path MPC: horizon 3, beam 4, up to 16 uniform click candidates. Before per-level world readiness use random exploration. Once admitted, search with the predictor, execute one action and replan; epsilon decays 1 -> .2 over 8192 admitted actions PER level. PathValue learns from completed real goal segments while representation and predictor continue learning.",
       "children": [
         "path.goal_encoder",
         "path.search",
@@ -1412,7 +1419,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Independent invocation of the same visual encoder. Shared weights across these calls; no synchronization with the other input stream. Replay unpacks real observations without crossing episode boundaries. In the optional frozen-representation stage this invocation runs without encoder gradients; it still processes each sampled real prefix rather than caching learned states. Independent cloned spatial microbatches avoid torch.compile guards on the underlying full-prefix storage size.",
+      "description": "No-gradient invocation of the current shared encoder for actual observations. Detached cache entries are guarded by encoder parameter versions and invalidated after every representation optimizer step.",
       "children": [
         "world.encoder.live.frames",
         "world.encoder.live.deltas",
@@ -8495,7 +8502,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Training invocation of the shared visual encoder. Reuse immutable prepared inputs for the complete current-episode prefix and encode them under the latest weights. Checkpoint the complete encoder invocation and individual Transformer blocks; backward recomputes activations to bound memory. No previous-episode mixture or stale learned latent cache.",
+      "description": "Differentiable shared-encoder invocation for the latest two real observations; reconstruct both absolute frames and the latest net action delta. Real episode history is re-encoded without gradients to refresh carry after an update. No replay from previous games.",
       "children": [
         "world.encoder.replay.frames",
         "world.encoder.replay.deltas",
@@ -32142,7 +32149,7 @@
       "id": "world.decoder.learning.readout",
       "parent_id": "world.decoder",
       "kind": "group",
-      "label": "Differentiable Readout (shared, frozen)",
+      "label": "Differentiable Readout (shared)",
       "ports": [
         {
           "id": "batch",
@@ -32169,7 +32176,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Same decoder weights as visual inspection. Inputs retain gradients so visual-delta loss can train dynamics; all decoder parameters remain frozen. No reconstruction update in the subgoal campaign.",
+      "description": "Same decoder as reconstruction and visual inspection. Predictor supervision retains gradients through its input while decoder parameters are fixed only for that optimizer call. The representation optimizer continues updating this shared decoder separately on every real action.",
       "children": [
         "world.decoder.learning.readout.inputs",
         "world.decoder.learning.readout.queries",
@@ -105593,12 +105600,19 @@
           "direction": "output",
           "shape": null,
           "value_type": "Shared module parameters; weights are not activations or a version signal"
+        },
+        {
+          "id": "update",
+          "label": "update",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Decoder optimizer step"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Frozen decoder weights, bound by parameter_ids on the exact operations. Both invocations use the same tensors.",
+      "description": "Shared current decoder parameters. Updated by the representation optimizer; reused for diagnostics and differentiable supervision of the predictor.",
       "parent_id": "world.decoder"
     },
     {
@@ -105659,7 +105673,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "model.subgoal_training.OnlinePredictor: after every real action compare the pre-update visual delta to ground truth. If wrong/union > 0.10, perform one optimizer step on dynamics only. No weight updates during a search or frozen evaluation. Exclude cross-level visual transitions; include valid terminal frames. Rebuild real recurrent carry with current dynamics after each update; discard imagined branches.",
+      "description": "model.online_learning.OnlinePredictor. Once enabled for a level, one update on EVERY usable real action, in addition to the representation update. Recompute both real endpoints under current encoder weights. One-step latent delta plus visual supervision; add a three-step autoregressive endpoint loss when enough real history exists. No updates during evaluation/search; exclude cross-level targets; rebuild current carry afterwards.",
       "parent_id": "world_model",
       "children": [
         "world.monitor",
@@ -105711,11 +105725,11 @@
       "kind": "operation",
       "ports": [
         {
-          "id": "error",
-          "label": "error",
+          "id": "permission",
+          "label": "permission",
           "direction": "input",
           "shape": null,
-          "value_type": "float32 scalar"
+          "value_type": "Latched predictor permission for this game/level"
         },
         {
           "id": "enabled",
@@ -105728,9 +105742,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Strict threshold: update only when error > 10%, with a usable real target. Evaluation never invokes either learner.",
-      "operation": "threshold",
-      "formula": "enabled = real_target_valid and training and error > 0.10",
+      "description": "Latched permission from the training controller, per game/level. Initially closed; opens after three fixed evaluations with reconstruction <=1% and relative latent drift <=5%. Once opened, predictor keeps learning with representation. Low instantaneous prediction error does not turn learning off; later regressions block level promotion only.",
+      "operation": "cumulative_activation",
+      "formula": "enabled = training and real_target_valid and predictor_started_for_level",
       "parent_id": "world.learner"
     },
     {
@@ -105784,7 +105798,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Only the latest real action supplies the target. Frozen encoder latents may be cached within the current episode. The first observation initializes carry and is not a made-up transition.",
+      "description": "Latest real one-action target and, when available, last three-action endpoint from the current episode. Fresh detached endpoints share the current encoder. Three-step prediction receives ONLY its own predicted z and h at intermediate steps. No fake transition from initialization.",
       "parent_id": "world.learner"
     },
     {
@@ -105824,9 +105838,9 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "MSE on latent delta plus visual_delta_loss and configured soft_delta_error. Labels are real palette pixels, with unchanged/changed masks against the same before frame. Decoder input gradients are preserved; encoder/decoder parameters are frozen.",
+      "description": "One-step latent delta MSE plus visual delta NLL and soft overlap; add the same losses at a fully autoregressive three-step endpoint. Ground truth is real. Encoder/decoder weights fixed for this predictor optimizer call; the separate representation optimizer continues on each real action.",
       "operation": "loss",
-      "formula": "L = MSE(d_hat, stopgrad(z_after-z_before)) + visual_delta_loss(logits, before, after) + delta_overlap_weight * soft_delta_error(logits, before, after)",
+      "formula": "L = L_latent_1 + L_visual_1 + overlap_1 + available_3 * (L_latent_3 + L_visual_3 + overlap_3)",
       "parent_id": "world.learner"
     },
     {
@@ -105866,7 +105880,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Backward, finite gradient check, clip norm 1, AdamW at 3e-5; CUDA fused FP32 moments/weights with BF16 forward and torch.compile. Exactly one gated update per real action. CPU ordinary AdamW. No encoder, decoder or path evaluator gradients.",
+      "description": "AdamW LR 3e-5, clip norm 1. CUDA torch.compile, BF16, 8-bit optimizer moments; CPU float32 AdamW. One update per valid real action once admitted. Only dynamics parameters receive this step. The representation and planner optimizers are independent and remain active.",
       "parent_id": "world.learner"
     },
     {
@@ -105892,7 +105906,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "One shared predictor for real actions, latent search and training. Updated in place by OnlinePredictor. No revision-number ports or automatic weight resets. Checkpoints save its weights together with frozen representation and the current PathValue.",
+      "description": "Shared predictor for acting, imagined search and learning. No revision ports or resets. Checkpoint saves it with current representation and PathValue.",
       "parent_id": "world.learner"
     },
     {
@@ -105925,7 +105939,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Programmed teacher in games/subgoals.py and the training runner. Generate an ordered visual list AFTER seeded randomization; expose only one current image/mask to Agent. Exact goal completion and minimum legal SDK actions stay outside the planner. Advance on confirmed completion, terminate on game over/budget; resets discard the list. This is synthetic assistance, not learned goal discovery.",
+      "description": "Programmed teacher in games/subgoals.py and the training runner. Generate an ordered visual list AFTER seeded randomization; expose only one current image/mask to Agent. Exact goal completion and minimum legal SDK actions stay outside the planner. Advance on confirmed completion, terminate on game over/budget; resets discard the list. This is synthetic assistance, not learned goal discovery. Multi-subgoal lists are supported from level 1; a one-goal level is just a list of length one. Goals advance only on real teacher-confirmed completion, not predicted arrival.",
       "children": [
         "goal.generator",
         "goal.progress"
@@ -105999,7 +106013,7 @@
     },
     {
       "id": "path.goal_encoder",
-      "label": "Goal Encoder (shared, frozen)",
+      "label": "Goal Encoder (shared invocation)",
       "kind": "operation",
       "ports": [
         {
@@ -106020,7 +106034,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Invoke the existing frozen Visual Encoder once per active subgoal image. Average-pool the pixel mask to patch resolution. Shared weights; no optimizer and no private scene/rules.",
+      "description": "No-gradient invocation of the current shared Visual Encoder on the active goal frame. Refresh after each representation update. Average-pool the pixel mask to patch resolution. No independent encoder, no private rules and no goal-specific optimizer.",
       "parent_id": "action.selector"
     },
     {
@@ -106192,12 +106206,19 @@
           "direction": "output",
           "shape": null,
           "value_type": "SubgoalMetrics {loss, real_actions, minimum_actions, excess_actions, success, reward}"
+        },
+        {
+          "id": "enabled",
+          "label": "enabled",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Latched planner permission"
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "At success: remaining real actions; final success state target 0. At failure: remaining actions + one full budget. Optimize SmoothL1(log1p cost), four passes in batches of 16, AdamW 3e-4, clip 1. Recompute real h with latest dynamics; all world/goal tensors detached. Report reward = -(actions - minimum_at_activation) - budget*failure. The minimum is a reporting baseline, not supplied to action search. No learning from administratively truncated or imagined sequences.",
+      "description": "At success: remaining real actions; final success state target 0. At failure: remaining actions + one full budget. Optimize SmoothL1(log1p cost), four passes in batches of 16, AdamW 3e-4, clip 1. Recompute real h with latest dynamics; all world/goal tensors detached. Report reward = -(actions - minimum_at_activation) - budget*failure. The minimum is a reporting baseline, not supplied to action search. No learning from administratively truncated or imagined sequences. Enabled only after three development checks of <=10% one- and three-step visual prediction error with stable representation and sufficient changed samples. Permission then latches. Representation/predictor keep updating. Refresh goal and real-state encodings before training; never reset recurrent state merely because a subgoal completes.",
       "parent_id": "action.selector"
     },
     {
@@ -106613,6 +106634,230 @@
       "references": [],
       "attributes": [],
       "description": "Dashboard: real action cost vs minimum, terminal success/failure reward, PathValue loss. Predictor statistics are computed from the same real response stream by the runner; evaluation uses separate counters."
+    },
+    {
+      "id": "training",
+      "label": "Training Controller",
+      "kind": "group",
+      "description": "Trainer-only invocations of the same inference modules. Cumulative level curriculum per synthetic game, quality-based START permissions, continued lower-layer learning. Fixed random evaluations and separate planner evaluations do not update weights; final confirmation cannot activate learners or promote levels.",
+      "ports": [],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "children": [
+        "training.evaluation",
+        "training.curriculum",
+        "training.representation",
+        "training.representation.parameters",
+        "training.dashboard"
+      ]
+    },
+    {
+      "id": "training.evaluation",
+      "label": "Fixed Quality Evaluation",
+      "kind": "operation",
+      "description": "Eight fixed development seeds per unlocked game/level, no optimizer calls. Measure net visual-delta reconstruction, one-step and autoregressive three-step prediction. At least 8 samples and 4 changed samples at both horizons before admitting planner. Measure relative RMS latent drift of the same initial boards between sweeps. Planner success uses the same seed partition only after admission. Final seeds do not change training decisions. For fully stationary pixel trajectories, require at least one observed native completion instead of invented changed-pixel evidence; no game-name exception. This does not waive planner success for promotion.",
+      "ports": [
+        {
+          "id": "world",
+          "label": "world",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "encoder",
+          "label": "encoder",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "decoder",
+          "label": "decoder",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "path",
+          "label": "path",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "quality",
+          "label": "quality",
+          "direction": "output",
+          "shape": null,
+          "value_type": "PerLevelQuality {reconstruction_error, latent_drift, prediction_error, rollout_error, samples, changed, success}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "training"
+    },
+    {
+      "id": "training.curriculum",
+      "label": "Cumulative Curriculum & Activation",
+      "kind": "operation",
+      "description": "Start each game at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; never discard weights. Encoder/decoder always learn. Admit predictor at reconstruction <=1% and latent drift <=5%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
+      "ports": [
+        {
+          "id": "quality",
+          "label": "quality",
+          "direction": "input",
+          "shape": null,
+          "value_type": "PerLevelQuality"
+        },
+        {
+          "id": "predictor",
+          "label": "predictor",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Latched predictor training permission"
+        },
+        {
+          "id": "planner",
+          "label": "planner",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Latched planner training permission"
+        },
+        {
+          "id": "levels",
+          "label": "levels",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Unlocked game/level sampling configuration"
+        },
+        {
+          "id": "metrics",
+          "label": "metrics",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Curriculum state, thresholds, streaks and measured errors"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "training"
+    },
+    {
+      "id": "training.representation",
+      "label": "Representation Learner",
+      "kind": "operation",
+      "description": "OnlineRepresentation: every real action, including after predictor/planner admission. Shared encoder and decoder on the latest two real observations. Absolute color CE + net delta NLL + soft overlap + SIGReg + variance floor (configured weights). AdamW 3e-6, clip 1; CUDA BF16/torch.compile and 8-bit moments, CPU float32. No dynamics/PathValue gradients. Invalidate inference latents and re-encode the current goal/history afterwards.",
+      "ports": [
+        {
+          "id": "real_batch",
+          "label": "real_batch",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Current real episode"
+        },
+        {
+          "id": "encoder",
+          "label": "encoder",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "decoder",
+          "label": "decoder",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        },
+        {
+          "id": "encoder_update",
+          "label": "encoder_update",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Encoder optimizer step"
+        },
+        {
+          "id": "decoder_update",
+          "label": "decoder_update",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Decoder optimizer step"
+        },
+        {
+          "id": "metrics",
+          "label": "metrics",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Reconstruction loss and representation update count"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "training"
+    },
+    {
+      "id": "training.representation.parameters",
+      "label": "Encoder Parameters",
+      "kind": "state",
+      "description": "Same encoder parameters bound to encoder operation parameter_ids. Reused for observed frames and goal images; updates preserve geometry and parameter shapes.",
+      "ports": [
+        {
+          "id": "update",
+          "label": "update",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Encoder optimizer step"
+        },
+        {
+          "id": "parameters",
+          "label": "parameters",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Shared module parameters; not activations or version signals"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "training"
+    },
+    {
+      "id": "training.dashboard",
+      "label": "Training Dashboard",
+      "kind": "output",
+      "description": "One current run. Show all admitted learners, locked/unlocked levels, thresholds, evidence and promotion streaks. Fixed-evaluation curves break when coverage changes; per-level quality drives promotion, aggregate live trends are diagnostic. No old campaign results.",
+      "ports": [
+        {
+          "id": "curriculum",
+          "label": "curriculum",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Curriculum metrics"
+        },
+        {
+          "id": "representation",
+          "label": "representation",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Representation metrics"
+        },
+        {
+          "id": "prediction",
+          "label": "prediction",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Pre-update real-action error"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "training"
     }
   ],
   "edges": [
@@ -134889,18 +135134,6 @@
       "kind": "data"
     },
     {
-      "id": "subgoal.2357.world.monitor.error--world.learning_gate.error",
-      "source": {
-        "node_id": "world.monitor",
-        "port_id": "error"
-      },
-      "target": {
-        "node_id": "world.learning_gate",
-        "port_id": "error"
-      },
-      "kind": "data"
-    },
-    {
       "id": "subgoal.2358.world.learning_gate.enabled--world.training_pair.enabled",
       "source": {
         "node_id": "world.learning_gate",
@@ -135605,6 +135838,198 @@
       "target": {
         "node_id": "result.goal",
         "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "curriculum.world.model_state.parameters.parameters--training.evaluation.world",
+      "source": {
+        "node_id": "world.model_state.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.evaluation",
+        "port_id": "world"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.training.representation.parameters.parameters--training.evaluation.encoder",
+      "source": {
+        "node_id": "training.representation.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.evaluation",
+        "port_id": "encoder"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.world.decoder.parameters.parameters--training.evaluation.decoder",
+      "source": {
+        "node_id": "world.decoder.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.evaluation",
+        "port_id": "decoder"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.path.parameters.parameters--training.evaluation.path",
+      "source": {
+        "node_id": "path.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.evaluation",
+        "port_id": "path"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.training.evaluation.quality--training.curriculum.quality",
+      "source": {
+        "node_id": "training.evaluation",
+        "port_id": "quality"
+      },
+      "target": {
+        "node_id": "training.curriculum",
+        "port_id": "quality"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "curriculum.training.curriculum.predictor--world.learning_gate.permission",
+      "source": {
+        "node_id": "training.curriculum",
+        "port_id": "predictor"
+      },
+      "target": {
+        "node_id": "world.learning_gate",
+        "port_id": "permission"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "curriculum.training.curriculum.planner--path.learner.enabled",
+      "source": {
+        "node_id": "training.curriculum",
+        "port_id": "planner"
+      },
+      "target": {
+        "node_id": "path.learner",
+        "port_id": "enabled"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "curriculum.training.curriculum.levels--arc.api.curriculum",
+      "source": {
+        "node_id": "training.curriculum",
+        "port_id": "levels"
+      },
+      "target": {
+        "node_id": "arc.api",
+        "port_id": "curriculum"
+      },
+      "kind": "context"
+    },
+    {
+      "id": "curriculum.training.curriculum.metrics--training.dashboard.curriculum",
+      "source": {
+        "node_id": "training.curriculum",
+        "port_id": "metrics"
+      },
+      "target": {
+        "node_id": "training.dashboard",
+        "port_id": "curriculum"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "curriculum.history.real_batch--training.representation.real_batch",
+      "source": {
+        "node_id": "history",
+        "port_id": "real_batch"
+      },
+      "target": {
+        "node_id": "training.representation",
+        "port_id": "real_batch"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "curriculum.training.representation.parameters.parameters--training.representation.encoder",
+      "source": {
+        "node_id": "training.representation.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.representation",
+        "port_id": "encoder"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.world.decoder.parameters.parameters--training.representation.decoder",
+      "source": {
+        "node_id": "world.decoder.parameters",
+        "port_id": "parameters"
+      },
+      "target": {
+        "node_id": "training.representation",
+        "port_id": "decoder"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.training.representation.encoder_update--training.representation.parameters.update",
+      "source": {
+        "node_id": "training.representation",
+        "port_id": "encoder_update"
+      },
+      "target": {
+        "node_id": "training.representation.parameters",
+        "port_id": "update"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.training.representation.decoder_update--world.decoder.parameters.update",
+      "source": {
+        "node_id": "training.representation",
+        "port_id": "decoder_update"
+      },
+      "target": {
+        "node_id": "world.decoder.parameters",
+        "port_id": "update"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "curriculum.training.representation.metrics--training.dashboard.representation",
+      "source": {
+        "node_id": "training.representation",
+        "port_id": "metrics"
+      },
+      "target": {
+        "node_id": "training.dashboard",
+        "port_id": "representation"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "curriculum.world.monitor.error--training.dashboard.prediction",
+      "source": {
+        "node_id": "world.monitor",
+        "port_id": "error"
+      },
+      "target": {
+        "node_id": "training.dashboard",
+        "port_id": "prediction"
       },
       "kind": "data"
     }

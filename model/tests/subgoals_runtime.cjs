@@ -142,6 +142,31 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(nodes.get('delta').children.filter(n=>n.height===5).length,0,'invented changes are errors even when the real image did not move');
   assert.match(circles('delta')[0].children[0].textContent,/: 100 ·/);
+  // Same run, growing coverage: aggregate curves must not bridge difficulty changes.
+  report.curriculum={stage:2,unlocked:{a:2},thresholds:{patience:3,representation_open:.01,
+    prediction_open:.1,latent_drift:.05,success:.8},levels:[
+    {game:'a',level:1,unlocked:true,predictor:true,planner:true,promotion_passes:0,
+      measurements:{reconstruction_error:0,latent_drift:.01,prediction_error:.04,rollout_error:.09,success:.5}},
+    {game:'a',level:2,unlocked:true,predictor:false,planner:false,promotion_passes:0,measurements:{}},
+    {game:'a',level:3,unlocked:false,promotion_passes:0,measurements:{}}]};
+  report.progress.representation_updates=123;report.progress.predictor_enabled=true;
+  const first=[{game:'a',level:1}], second=[...first,{game:'a',level:2}];
+  report.evaluations=[evaluation(0,'a',.2,{coverage:first,stage:1}),
+    evaluation(100,'a',.1,{coverage:first,stage:1}),
+    evaluation(200,'a',.1,{coverage:second,stage:2}),
+    evaluation(200,'a',.7,{coverage:second,stage:2,level:2})];
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('curriculum-panel').hidden,false);
+  assert.equal(text('representation-updates'),'123');
+  assert.match(text('gate'),/Activo · cada acción/);
+  const cells=nodes.get('curriculum-rows').children.map(r=>r.children.map(c=>c.textContent));
+  assert.equal(cells[0][1],'Representación + predictor + planner');
+  assert.equal(cells[1][1],'Representación');
+  assert.equal(cells[2][1],'Pendiente');
+  assert.equal(cells[0][2],'0 %');assert.equal(cells[1][2],'—');
+  const qualityLines=nodes.get('fixed-delta').children.filter(n=>n.stroke==='#77dabb'&&typeof n.points==='string');
+  assert.deepEqual(qualityLines.map(n=>n.points.split(' ').length),[2,1]);
+  assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 40 · acción 200/);
   report.curves=[];report.episodes=[];report.evaluations=[];report.progress={phase:'loading',actions:0};
   await vm.runInContext('poll()',context);
   assert.equal(circles('delta').length,0,'no points borrowed from a previous run');

@@ -1,11 +1,11 @@
-"""One long synthetic-subgoal run, online dynamics and terminal path learning.
+"""Cumulative level curriculum and incremental representation/dynamics/path learning.
 
 Fresh counters and path weights, existing world weights. Only actual SDK
 transitions train dynamics; only finished real goal segments train PathValue.
 The environment's teacher stays outside the portable Agent.
 """
 import argparse
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import random
@@ -13,7 +13,6 @@ import time
 
 import numpy as np
 import torch
-from torch.nn import functional as F
 
 from . import agent_checkpoint
 from .agent import Agent, AgentConfig
@@ -21,42 +20,10 @@ from .behavior_experiment import episode_seeds
 from .campaign import write_report
 from .data import Episode, random_action
 from .environment import Factory, SYNTHETIC_LEVELS
-from .learning import optimizer, visual_delta_loss, soft_delta_error
+from .online_learning import OnlinePredictor, OnlineRepresentation
+from .curriculum import Curriculum, CurriculumConfig
 from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
-
-
-class OnlinePredictor:
-    def __init__(self, engine, threshold=.10, learning_rate=3e-5):
-        self.engine, self.threshold = engine, threshold
-        engine.model.encoder.eval().requires_grad_(False)
-        engine.model.decoder.eval().requires_grad_(False)
-        engine.model.dynamics.requires_grad_(True)
-        self.optimizer = optimizer(engine.model.dynamics.parameters(), learning_rate,
-                                   engine.device.type == 'cuda', engine.optimizer_bits)
-        self.updates = 0
-
-    def update(self, state, action, reference, after, target_z, error):
-        if error is None or error <= self.threshold or after.final is None or target_z is None:
-            return None
-        e = self.engine
-        self.optimizer.zero_grad(set_to_none=True)
-        e.model.dynamics.train()
-        with e.autocast():
-            predicted, _, delta = e.predict(state.z[None].detach(), state.h.detach(), e.actions([action]), *state.geometry)
-            logits = e.decode(predicted, *state.geometry, checkpoint_blocks=True)
-        before = torch.tensor(np.array(reference, copy=True), device=e.device, dtype=torch.long)[None]
-        actual = torch.tensor(np.array(after.final, copy=True), device=e.device, dtype=torch.long)[None]
-        latent = F.mse_loss(delta.float(), (target_z - state.z).detach()[None].float())
-        visual = visual_delta_loss(logits, before, actual, e.config.false_change_weight).mean()
-        overlap = soft_delta_error(logits, before, actual).mean()
-        loss = latent + visual + e.config.delta_overlap_weight * overlap
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(e.model.dynamics.parameters(), 1., error_if_nonfinite=True)
-        self.optimizer.step()
-        self.updates += 1
-        return {'total': float(loss.detach()), 'latent': float(latent.detach()), 'visual': float(visual.detach())}
-
 
 def error_counts(before, actual, predicted):
     wrong, union, changed = delta_counts(before, actual, predicted)
@@ -67,13 +34,78 @@ def error_counts(before, actual, predicted):
                 correct=int((real & (actual == predicted)).sum()))
 
 
+class QualityProbe:
+    """Fixed random real trajectories; one-step and fully imagined H-step error."""
+    def __init__(self, engine, horizon, initial):
+        self.engine, self.horizon = engine, horizon
+        self.states = [initial]
+        self.anchor = initial.z.detach().float().cpu().clone()
+        self.counts = {name: dict(wrong=0, union=0, samples=0, changed=0)
+                       for name in ('reconstruction', 'prediction', 'rollout')}
+
+    def add(self, name, counts):
+        if counts is not None:
+            for key in ('wrong', 'union'):
+                self.counts[name][key] += counts[key]
+            self.counts[name]['samples'] += 1
+            self.counts[name]['changed'] += int(counts['changed'] > 0)
+
+    @torch.no_grad()
+    def observe(self, episode, previous, current, counts):
+        self.states.append(current)
+        self.add('prediction', counts)
+        if counts is None or current.z is None:
+            return
+        e, t = self.engine, len(episode.actions)
+        actual, reference = episode.observations[-1].final, episode.observations[-2].final
+        with e.autocast():
+            reconstructed = e.decode(current.z[None], *current.geometry).argmax(-1)[0].cpu().numpy()
+        self.add('reconstruction', error_counts(reference, actual, reconstructed))
+        # Disjoint windows bound evaluation cost, with an observed starting
+        # state/memory and then ONLY predicted states/memories until the endpoint.
+        if t >= self.horizon and t % self.horizon == 0:
+            anchor = self.states[t - self.horizon]
+            z, h = anchor.z[None], anchor.h
+            with e.autocast():
+                for action in episode.actions[t - self.horizon:t]:
+                    z, h, _ = e.predict(z, h, e.actions([action]), *anchor.geometry)
+                image = e.decode(z, *anchor.geometry).argmax(-1)[0].cpu().numpy()
+            self.add('rollout', error_counts(episode.observations[t - self.horizon].final, actual, image))
+
+    def result(self):
+        return dict(counts=self.counts, anchor=self.anchor)
+
+
+def summarize_quality(summaries, previous_anchors=None):
+    """No missing evidence is fabricated as zero. Latent drift uses fixed boards."""
+    values = [s['quality'] for s in summaries if s.get('quality') is not None]
+    result = {'completed_episodes': sum(s.get('reason') in ('success', 'game_over') for s in summaries)}
+    for name in ('reconstruction', 'prediction', 'rollout'):
+        counts = {key: sum(v['counts'][name][key] for v in values)
+                  for key in ('wrong', 'union', 'samples', 'changed')}
+        result[name + '_error'] = counts['wrong'] / max(1, counts['union']) if counts['samples'] else None
+        if name != 'reconstruction':
+            prefix = 'rollout_' if name == 'rollout' else ''
+            result[prefix + 'samples'] = counts['samples']
+            result[prefix + 'changed'] = counts['changed']
+    anchors = [v['anchor'] for v in values]
+    result['latent_drift'] = None
+    if previous_anchors is not None and len(previous_anchors) == len(anchors) and anchors:
+        numerator = sum(float((a - b).square().sum()) for a, b in zip(anchors, previous_anchors))
+        denominator = sum(float(b.square().sum()) for b in previous_anchors)
+        result['latent_drift'] = (numerator / max(denominator, 1e-12)) ** .5
+    return result, anchors
+
+
 def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilon=0.,
-         random_policy=False, progress=None, action_limit=None):
+         random_policy=False, progress=None, action_limit=None, representation=None, quality_horizon=None):
     """A synthetic teacher supplies only one visual goal to the shared agent.
 
-    Evaluation calls omit both learners. Goal predicates/distances are used only
+    Evaluation calls omit all learners. Goal predicates/distances are used only
     by this trainer, never by action selection or hypothetical-state scoring.
     """
+    if quality_horizon is not None and any(x is not None for x in (world, learner, representation)):
+        raise ValueError('Quality evaluation must not update weights')
     env = factory.make(seed, level)
     teacher = factory.teacher(env)
     goals = teacher.training_subgoals()
@@ -88,10 +120,12 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
         raise ValueError('Initial synthetic subgoal must be reachable and unfinished')
     agent.set_goal(goal.frame, goal.mask)
     segments, totals, records = [], dict.fromkeys(('wrong', 'union', 'changed', 'invented', 'missed', 'color', 'correct'), 0), []
+    quality = QualityProbe(agent.engine, quality_horizon, agent.state) if quality_horizon else None
     decision_ms = 0.
     end_reason = 'budget'
     count = min(steps, action_limit if action_limit is not None else steps)
     for position in range(count):
+        active_goal_index = goal_index
         before, state = env.observation, agent.state
         begin = time.monotonic()
         if random_policy or rng.random() < epsilon:
@@ -111,17 +145,33 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             error = counts['wrong'] / max(1, counts['union'])
             for key in totals:
                 totals[key] += counts[key]
-            if world is not None:
-                losses = world.update(state, action, before.final, after, agent.state.z, error)
-                if losses is not None:
-                    # No cached imagined state survives a dynamics update. The
-                    # real recurrent memory is refreshed from this episode only.
-                    agent.state = real_states(agent.engine, episode)[-1]
-                    agent.planner.last_plan, agent.planner.last_states = [], []
+        if quality is not None:
+            quality.observe(episode, state, agent.state, counts)
+        representation_loss = None
+        if not boundary and representation is not None:
+            representation_loss = representation.update(episode.observations[-2:])
+        refreshed = None
+        if representation_loss is not None:
+            # Both endpoints and the current goal must use the UPDATED encoder.
+            refreshed = real_states(agent.engine, episode)
+            agent.state = refreshed[-1]
+            agent.set_goal(goal.frame, goal.mask)
+        if not boundary and world is not None and error is not None:
+            refreshed = refreshed or real_states(agent.engine, episode)
+            rollout = None
+            if len(episode.actions) >= world.horizon:
+                anchor = len(episode.actions) - world.horizon
+                rollout = (refreshed[anchor], episode.actions[anchor:], episode.observations[anchor].final)
+            losses = world.update(refreshed[-2], action, before.final, after, refreshed[-1].z, error,
+                                  rollout=rollout)
+            if losses is not None:
+                agent.state = real_states(agent.engine, episode)[-1]
+                agent.planner.last_plan, agent.planner.last_states, agent.planner.last_endpoint = [], [], None
         level_success = after.state == 'WIN' or boundary
         success = not boundary and teacher.training_goal_reached(goal)
         failure = after.state == 'GAME_OVER' or (position + 1 == steps and not success)
         path_loss = None
+        finished_segment = None
         if success or failure:
             length = len(episode.actions) - start
             if learner is not None and not boundary:
@@ -130,12 +180,24 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
                 excess_actions=length - minimum, reward=-(length - minimum) - (0 if success else steps),
                 loss=path_loss)
             segments.append(segment)
+            finished_segment = segment
             if success:
                 goal_index += 1
-        row = dict(action=position + 1, goal_index=goal_index + 1 - int(success), goals=len(goals),
+                # A real action can satisfy several ordered goals at once (or
+                # satisfy a later one first). Do not require a fictitious action
+                # or lose the remaining completions when native WIN arrives.
+                while goal_index < len(goals) and teacher.training_goal_reached(goals[goal_index]):
+                    reached = goals[goal_index]
+                    agent.set_goal(reached.frame, reached.mask)
+                    extra_loss = learner.update(episode, len(episode.actions), True, steps) if learner else None
+                    segments.append(dict(goal=reached.id, success=True, actions=0, minimum_actions=0,
+                        excess_actions=0, reward=0, loss=extra_loss))
+                    goal_index += 1
+        row = dict(action=position + 1, goal_index=active_goal_index + 1, goals=len(goals),
             goal=goal.label, minimum_actions=minimum, goal_actions=len(episode.actions) - start,
             delta_error=error, counts=counts, predictor_loss=losses, path_loss=path_loss,
-            predictor_updated=losses is not None, segment=segments[-1] if success or failure else None,
+            representation_loss=representation_loss,
+            predictor_updated=losses is not None, segment=finished_segment,
             epsilon=epsilon, decision_ms=decision_ms / (position + 1),
             observation=after.final.tolist() if after.final is not None else None,
             goal_frame=goal.frame.tolist(), goal_mask=goal.mask.astype(int).tolist())
@@ -156,7 +218,8 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
         if count < steps:
             end_reason = 'interrupted'
     return dict(success=end_reason == 'success', reason=end_reason, actions=len(episode.actions),
-                segments=segments, counts=totals, decision_ms=decision_ms / max(1, len(episode.actions)), records=records)
+                segments=segments, counts=totals, decision_ms=decision_ms / max(1, len(episode.actions)), records=records,
+                quality=None if quality is None else quality.result())
 
 
 def main(argv=None):
@@ -164,19 +227,31 @@ def main(argv=None):
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--device', choices=('cpu', 'cuda'), default='cuda')
-    parser.add_argument('--actions', type=int, default=65536)
+    parser.add_argument('--actions', type=int, default=262144)
     parser.add_argument('--steps', type=int, default=128)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--evaluate-every', type=int, default=4096)
-    parser.add_argument('--evaluation-episodes', type=int, default=2)
+    parser.add_argument('--evaluate-every', type=int, default=1024)
+    parser.add_argument('--evaluation-episodes', type=int, default=8)
     parser.add_argument('--checkpoint-every', type=int, default=2048)
+    parser.add_argument('--representation-error', type=float, default=.01)
     parser.add_argument('--predictor-error', type=float, default=.10)
+    parser.add_argument('--latent-drift', type=float, default=.05)
+    parser.add_argument('--success', type=float, default=.80)
+    parser.add_argument('--patience', type=int, default=3)
     parser.add_argument('--learning-rate', type=float, default=3e-5)
+    parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
     args = parser.parse_args(argv)
     if (min(args.actions, args.steps, args.evaluate_every, args.evaluation_episodes, args.checkpoint_every) < 1
-            or args.steps > 128 or not 0 <= args.predictor_error <= 1 or not 0 <= args.seed < 100
-            or not 0 < args.learning_rate < 1):
-        parser.error('Invalid budgets, error threshold or seed')
+            or args.steps > 128 or not 0 <= args.seed < 100
+            or not 0 < args.learning_rate < 1 or not 0 < args.representation_learning_rate < 1):
+        parser.error('Invalid budgets, learning rates or seed')
+    try:
+        gates = CurriculumConfig(representation_open=args.representation_error,
+            prediction_open=args.predictor_error, latent_drift=args.latent_drift,
+            success=args.success, patience=args.patience)
+    except ValueError as error:
+        parser.error(str(error))
+    curriculum = Curriculum(SYNTHETIC_LEVELS, gates)
     args.output.mkdir(parents=True, exist_ok=True)
     path = args.output / 'report.json'
     if path.exists():
@@ -184,11 +259,13 @@ def main(argv=None):
     torch.set_num_threads(4)
     torch.set_float32_matmul_precision('high')
     torch.manual_seed(args.seed)
-    pairs = [(game, level) for game, n in SYNTHETIC_LEVELS.items() for level in range(1, n + 1)]
+    all_pairs = list(curriculum.readiness)
     report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
-    report_config['evaluation_pairs'] = [dict(game=game, level=level) for game, level in pairs]
+    report_config['curriculum'] = asdict(gates)
+    report_config['horizon'] = PathConfig().horizon
     report = dict(kind='synthetic_subgoals', status='running', config=report_config,
-                  progress={'phase': 'loading', 'actions': 0, 'total_actions': args.actions}, curves=[], episodes=[], evaluations=[])
+                  progress={'phase': 'loading', 'actions': 0, 'total_actions': args.actions},
+                  curriculum=curriculum.snapshot(), curves=[], episodes=[], evaluations=[])
     last_write, started = 0., time.monotonic()
 
     def publish(force=False, **values):
@@ -199,92 +276,135 @@ def main(argv=None):
             return
         last_write = now
         report['updated_at'] = time.time()
+        report['curriculum'] = curriculum.snapshot()
         write_report(path, report)
         print(json.dumps({'event': 'subgoal_progress', **{k: v for k, v in report['progress'].items()
             if k not in ('observation', 'goal_frame', 'goal_mask')}}, allow_nan=False), flush=True)
 
-    agent = None
     try:
         publish(force=True)
         source = agent_checkpoint.load(args.source, device=args.device)
         engine = source.engine
-        engine.config = replace(engine.config, freeze_representation=True, cache_frozen_latents=True,
-            learning_rate=args.learning_rate, train_every=1, loss_steps=1, rollout_weight=0., rollout_visual_weight=0.,
+        engine.optimizer_bits = 8 if args.device == 'cuda' else 32
+        engine.config = replace(engine.config, freeze_representation=False, cache_frozen_latents=True,
+            learning_rate=args.learning_rate, train_every=1, loss_steps=1,
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
         evaluator = PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device)
         agent = Agent(engine, source.heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
         del source
-        world = OnlinePredictor(engine, args.predictor_error, args.learning_rate)
+        representation = OnlineRepresentation(engine, args.representation_learning_rate)
+        world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
         factories = {g: Factory(g, Path(__file__).resolve().parents[1] / 'games') for g in SYNTHETIC_LEVELS}
-        counts, actions, episode_index = dict.fromkeys(pairs, 0), 0, 0
+        actions, episode_index, planner_actions = 0, 0, dict.fromkeys(all_pairs, 0)
+        anchors = {}
         next_eval, next_checkpoint = args.evaluate_every, args.checkpoint_every
         began_learning = None
 
         def evaluate(split):
-            for mode in ('random', 'path_mpc'):
-                for pair_index, (game, level) in enumerate(pairs):
-                    seeds = episode_seeds(split, args.evaluation_episodes, offset=700000 + pair_index * 100)
+            # Freeze the coverage of this sweep; promotion happens AFTER it.
+            pairs = curriculum.pairs
+            coverage = [dict(game=g, level=n) for g, n in pairs]
+            for game, level in pairs:
+                pair = game, level
+                readiness = curriculum.readiness[pair]
+                seeds = episode_seeds(split, args.evaluation_episodes,
+                                      offset=700000 + all_pairs.index(pair) * 100)
+                quality, success = None, None
+                for mode in ('random', 'path_mpc'):
+                    if mode == 'path_mpc' and not readiness.planner:
+                        continue
                     summaries = []
                     for i, seed in enumerate(seeds):
                         def progress(row):
                             publish(phase='evaluation', policy=mode, evaluation_game=game, evaluation_level=level,
                                 evaluation_episode=i + 1, evaluation_episodes=len(seeds), evaluation_action=row['action'],
+                                predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                                 **{k: row[k] for k in ('goal', 'observation', 'goal_frame', 'goal_mask')})
                         summaries.append(play(agent, factories[game], level, seed, args.steps,
-                                              random_policy=mode == 'random', progress=progress))
-                    report['evaluations'].append(dict(actions=actions, split=split, policy=mode, game=game, level=level,
+                            random_policy=mode == 'random', progress=progress,
+                            quality_horizon=agent.config.path.horizon if mode == 'random' else None))
+                    if mode == 'random':
+                        quality, current_anchors = summarize_quality(
+                            summaries, anchors.get(pair) if split == 'dev' else None)
+                        if split == 'dev':
+                            anchors[pair] = current_anchors
+                    else:
+                        success = sum(r['success'] for r in summaries) / len(summaries)
+                    report['evaluations'].append(dict(actions=actions, stage=curriculum.stage,
+                        coverage=coverage, split=split, policy=mode, game=game, level=level,
                         episodes=len(summaries), successes=sum(r['success'] for r in summaries),
                         subgoals=sum(s['success'] for r in summaries for s in r['segments']),
                         attempted_subgoals=sum(len(r['segments']) for r in summaries),
                         real_actions=sum(r['actions'] for r in summaries),
                         delta_error=sum(r['counts']['wrong'] for r in summaries) / max(1, sum(r['counts']['union'] for r in summaries)),
+                        quality=quality if mode == 'random' else None,
                         decision_ms=sum(r['decision_ms'] for r in summaries) / len(summaries)))
                     publish(force=True)
+                if split == 'dev':
+                    readiness.observe(quality, success, gates)
+                    publish(force=True)
+            if split == 'dev':
+                promotions = curriculum.advance()
+                if promotions:
+                    report.setdefault('promotions', []).append(dict(actions=actions, levels=promotions))
+                publish(force=True)
 
-        publish(force=True, phase='checkpoint', predictor_updates=0, path_updates=0)
-        agent_checkpoint.save(args.output / 'latest.pt', agent, training_progress={
-            'actions': 0, 'updates': 0, 'path_updates': 0, 'episodes': 0})
-        report['checkpoint_action'] = 0
-        publish(force=True, phase='warmup')
+        def save():
+            publish(force=True, phase='checkpoint')
+            agent_checkpoint.save(args.output / 'latest.pt', agent, training_progress={
+                'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
+                'path_updates': path_learner.updates, 'episodes': episode_index,
+                'curriculum': curriculum.snapshot()})
+            report['checkpoint_action'] = actions
+
+        publish(force=True, predictor_updates=0, representation_updates=0, path_updates=0)
+        save()
+        evaluate('dev')  # Baseline and drift anchors; never grants readiness by itself.
         while actions < args.actions:
-            pair = min(pairs, key=lambda p: counts[p])
+            pair = curriculum.next_pair()
             game, level = pair
+            readiness = curriculum.readiness[pair]
             seed = episode_seeds('train', 1, offset=args.seed * 10000 + episode_index)[0]
-            epsilon = max(.2, 1. - .8 * actions / 8192)
+            epsilon = max(.2, 1. - .8 * planner_actions[pair] / 8192) if readiness.planner else 1.
             def progress(row):
                 nonlocal actions, began_learning
                 actions += 1
-                counts[pair] += 1
+                if readiness.planner:
+                    planner_actions[pair] += 1
                 if began_learning is None:
                     began_learning = time.monotonic()
                 seconds = time.monotonic() - began_learning
-                point = dict(actions=actions, error=row['delta_error'], path_loss=row['path_loss'],
+                point = dict(actions=actions, game=game, level=level, stage=curriculum.stage,
+                    error=row['delta_error'], path_loss=row['path_loss'],
                     predictor_loss=(row['predictor_loss'] or {}).get('total'),
+                    representation_loss=(row['representation_loss'] or {}).get('total'),
+                    representation_updates=representation.updates,
                     predictor_updates=world.updates, path_updates=path_learner.updates,
                     counts=row['counts'], tps=(actions - 1) / seconds if seconds else None)
                 report['curves'].append(point)
                 report['curves'] = report['curves'][-4096:]
                 publish(phase='training', game=game, level=level, actions=actions, episodes=episode_index + 1,
+                        representation_updates=representation.updates,
                         predictor_updates=world.updates, path_updates=path_learner.updates,
+                        predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                         tps=point['tps'], seconds=seconds, **{k: v for k, v in row.items() if k not in ('counts', 'segment')})
-            result = play(agent, factories[game], level, seed, args.steps, world=world, learner=path_learner,
-                epsilon=epsilon, progress=progress, action_limit=args.actions - actions)
+            result = play(agent, factories[game], level, seed, args.steps,
+                representation=representation, world=world if readiness.predictor else None,
+                learner=path_learner if readiness.planner else None,
+                random_policy=not readiness.planner, epsilon=epsilon, progress=progress,
+                action_limit=args.actions - actions)
             report['episodes'].append(dict(game=game, level=level, end_action=actions,
-                **{k: v for k, v in result.items() if k != 'records'}))
+                **{k: v for k, v in result.items() if k not in ('records', 'quality')}))
             report['episodes'] = report['episodes'][-2000:]
             episode_index += 1
-            if actions >= next_checkpoint or actions == args.actions:
-                publish(force=True, phase='checkpoint')
-                agent_checkpoint.save(args.output / 'latest.pt', agent, training_progress={
-                    'actions': actions, 'updates': world.updates, 'path_updates': path_learner.updates,
-                    'episodes': episode_index})
-                report['checkpoint_action'] = actions
-                next_checkpoint = (actions // args.checkpoint_every + 1) * args.checkpoint_every
             if actions >= next_eval:
                 evaluate('dev')
                 next_eval = (actions // args.evaluate_every + 1) * args.evaluate_every
+            if actions >= next_checkpoint or actions == args.actions:
+                save()
+                next_checkpoint = (actions // args.checkpoint_every + 1) * args.checkpoint_every
             publish(force=True, phase='training')
         evaluate('final')
         report['status'] = 'complete'

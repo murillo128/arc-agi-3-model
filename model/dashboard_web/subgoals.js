@@ -88,9 +88,13 @@ function fixedEvaluations(report) {
   }
   const points=[];let pending=null;
   for(const [actions,byPair] of [...grouped].sort((a,b)=>a[0]-b[0])) {
-    const rows=[...expected].map(k=>byPair.get(k));
-    if(!rows.length||rows.some(r=>!r||!finite(r.delta_error))) {pending={actions,pairs:rows.filter(r=>r&&finite(r.delta_error)).length};continue;}
-    points.push({actions,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
+    const coverage=[...byPair.values()][0]?.coverage;
+    const required=coverage?new Set(coverage.map(pair)):expected;
+    const rows=[...required].map(k=>byPair.get(k));
+    if(!rows.length||rows.some(r=>!r||!finite(r.delta_error))) {pending={actions,expected:required.size,pairs:rows.filter(r=>r&&finite(r.delta_error)).length};continue;}
+    const mean=key=>rows.every(r=>finite(r.quality?.[key]))?100*rows.reduce((s,r)=>s+r.quality[key],0)/rows.length:null;
+    points.push({actions,stage:rows[0].stage,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
+      reconstruction:mean('reconstruction_error'),rollout:mean('rollout_error'),
       pairs:rows.length,episodes:rows.reduce((s,r)=>s+r.episodes,0)});
   }
   return {points,expected:expected.size,pending};
@@ -101,19 +105,34 @@ function render(report) {
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
   $('connection').className=report.status==='failed'||report.age_seconds>60?'warn':'';
   $('freshness').textContent=`Última escritura hace ${fmt(report.age_seconds)} s · consulta cada 2 s`;
-  $('run-info').textContent=`Una configuración · semilla ${fmt(c.seed)} · predictor online · objetivos sintéticos`;
+  $('run-info').textContent=`Una configuración · semilla ${fmt(c.seed)} · currículo acumulativo · objetivos sintéticos`;
+  const curriculum=report.curriculum, limits=curriculum?.thresholds||{};
+  const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
+  $('curriculum-panel').hidden=!curriculum;
+  $('curriculum-summary').textContent=curriculum?`Etapa ${fmt(curriculum.stage)} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: niveles 1–${n}`).join(' · '):'';
+  $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. Avance: además éxito ≥ ${pct(limits.success)} en TODOS los niveles desbloqueados del juego. Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
+  $('curriculum-rows').replaceChildren(...(curriculum?.levels||[]).map(row=>{
+    const m=row.measurements||{}, tr=document.createElement('tr');
+    const next=!row.unlocked?'Nivel bloqueado':row.planner?'Todos activos':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${limits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${limits.patience}`;
+    const active=!row.unlocked?'Pendiente':row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
+    for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;
+  }));
+  $('representation-updates').textContent=fmt(p.representation_updates);
   $('notice').hidden=!report.error;$('notice').textContent=report.error||'';
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
-  $('gate').textContent=`Actualizar si error > ${fmt(c.predictor_error*100)} %`;
+  $('gate').textContent=p.predictor_enabled?'Activo · cada acción junto a representación':'Pendiente de representación estable';
   $('tps').textContent=fmt(p.tps,2);
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
     : `${p.game||'Preparando juegos'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
-  plot('fixed-delta',[{name:'Evaluación fija · media por juego/nivel',points:fixed.points.map(r=>[r.actions,r.error,`${r.pairs} pares · ${r.episodes} partidas`])}],{percent:true,empty:'Pendiente de una evaluación fija completa'});
+  const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
+  plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
+    {name:'Reconstrucción',points:qualityPoints('reconstruction')},
+    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')}],{percent:true,empty:'Pendiente de una evaluación fija completa'});
   $('fixed-summary').textContent=(last?`Última completa: ${fmt(last.error,2)} % · acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
-    (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
+    (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
   const measured=rows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
   $('interaction-summary').textContent=rows.length?`Ventana reciente: acciones ${fmt(rows[0].actions)}–${fmt(rows.at(-1).actions)}. ${fmt(unchanged)} de ${fmt(measured.length)} acciones medidas sin cambios reales ni predichos.`:'Esperando acciones reales de esta ejecución.';
@@ -128,6 +147,7 @@ function render(report) {
   ]);
   plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.loss])},
     {...series('Actualización individual','predictor_loss'),muted:true}]);
+  plot('representation-loss',[series('Representación','representation_loss')]);
   plot('speed',[series('Acciones/s','tps')]);plot('path-loss',[series('Coste restante','path_loss')]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
   $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;

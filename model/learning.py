@@ -137,6 +137,15 @@ class Engine:
         """Cache z only. Recurrent h is always recomputed with current dynamics."""
         if not self.config.freeze_representation:
             raise ValueError('Learned latent caches require a frozen encoder')
+        return self.encode_detached_episode(episode)
+
+    @torch.no_grad()
+    def encode_detached_episode(self, episode):
+        """Inference cache, invalidated by ANY encoder parameter update.
+
+        Online training may update the encoder between calls. Cached tensors
+        are detached and must never be used as a differentiable encoder pass.
+        """
         if not self.config.cache_frozen_latents or self.config.burn_in_steps:
             return self.encode(episode.observations, prepared=episode.prepared)
         cache = episode.latent_cache
