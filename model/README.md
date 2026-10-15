@@ -18,7 +18,10 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    SIGReg (peso 0,002) se usa sólo antes de la primera activación del predictor.
    Desde esa activación se apaga para todo el encoder compartido, incluso al
    abrir niveles nuevos o reanudar. La reconstrucción continúa sin congelarse.
-   AdamW LR 3e-6, menor que el predictor para limitar el desplazamiento del latente.
+   En este arranque desde cero, AdamW LR 3e-5 mediante
+   `--representation-learning-rate 3e-5`; se evalúan calidad y deriva antes de
+   admitir el predictor. La tasa es una hipótesis de la campaña, no una garantía
+   de convergencia.
 2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
    del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
@@ -140,6 +143,7 @@ portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador
 .venv/bin/python -u -m model.subgoal_training \
   --game sc01-v1 \
   --init-config model/subgoal_config.json \
+  --representation-learning-rate 3e-5 \
   --output model/runs/curriculum/current
 .venv/bin/python -m model.dashboard \
   --subgoal-report model/runs/curriculum/current/report.json
@@ -160,7 +164,10 @@ se indica como no disponible, sin conservar un valor antiguo ni inventar un cero
 Curvas fijas de reconstrucción
 y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
 al cambiar la cobertura del currículo. Cada leyenda muestra el último valor
-medido, con su acción en la ayuda. La gráfica de calidad marca los umbrales
+medido, con su acción en la ayuda. Al pasar el cursor, tocar o enfocar una leyenda,
+se destaca su curva y aparece una guía horizontal punteada en el último valor
+medido, con un círculo en su posición. La selección persiste entre consultas;
+no se inventa una referencia para series sin datos. La gráfica de calidad marca los umbrales
 configurados con líneas finas punteadas; los límites coincidentes comparten línea.
 Son referencias: el avance requiere cumplir todos los criterios por nivel, no
 solo que una media cruce una línea. Las curvas de interacción conservan las

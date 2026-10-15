@@ -45,7 +45,11 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .chart-card p, .details p { color: #9aadaa; font-size: 12px; line-height: 1.6; margin-bottom: 16px; }
 .chart-card p { min-height: 38px; }
 .legend { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px; min-height: 28px; font-variant-numeric: tabular-nums; }
-.legend span::before { content: '━'; font-weight: bold; margin-right: 6px; }
+.legend span::before, .subgoal-dashboard .legend button::before { content: '━'; font-weight: bold; margin-right: 6px; }
+.subgoal-dashboard .legend button { appearance: none; background: transparent; border: 0; border-radius: 4px; padding: 3px 4px; margin: -3px -4px; font: inherit; text-align: left; cursor: pointer; }
+.subgoal-dashboard .legend button[data-highlighted="true"] { background: #293b37; }
+.subgoal-dashboard .legend button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
+.subgoal-dashboard .legend button:disabled { cursor: default; }
 .legend .threshold-label::before { content: ''; display: inline-block; width: 14px; border-top: 1px dashed; vertical-align: middle; }
 .series-0 { color: #77dabb; } .series-1 { color: #f4b979; } .series-2 { color: #a9a6ef; } .series-3 { color: #94a7aa; }
 .subgoal-dashboard svg { display: block; width: 100%; height: auto; }

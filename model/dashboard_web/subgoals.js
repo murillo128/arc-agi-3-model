@@ -7,6 +7,7 @@ const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
 const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
 const namespace = 'http://www.w3.org/2000/svg';
+const chartStates = new Map();
 function gpuStatus(sample) {
   const devices=sample?.devices||[], status=$('gpu-status');
   status.textContent=devices.length ? devices.map(gpu=>
@@ -22,17 +23,20 @@ function element(tag, attributes={}, text='') {
   node.textContent=text; return node;
 }
 function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, digits=2, minimumRange=1, empty='Pendiente de datos de esta ejecución'}={}) {
-  const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
+  const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren();
+  if(!chartStates.has(id))chartStates.set(id,{hovered:null,focused:null});
+  const state=chartStates.get(id), lastPoints=series.map(s=>s.points.findLast(p=>finite(p[0])&&finite(p[1])));
+  state.update=()=>{};
   const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
   svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
   const suffix=unit?` ${unit}`:percent?' %':'';
+  const labels=[];
   series.forEach((s,i)=>{
     if(s.legend===false)return;
-    const last=s.points.findLast(p=>finite(p[0])&&finite(p[1]));
-    const span=document.createElement('span');
-    span.textContent=`${s.name}: ${last?fmt(last[1],digits)+suffix:'—'}`;
-    span.title=last?`Último dato medido · acción ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'Sin mediciones';
-    span.className=s.muted?'series-muted':`series-${s.colorIndex??i%4}`;legend.append(span);
+    const last=lastPoints[i];
+    labels.push({key:`series:${s.name}`,index:i,text:`${s.name}: ${last?fmt(last[1],digits)+suffix:'—'}`,
+      title:last?`Último dato medido · acción ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'Sin mediciones',
+      className:s.muted?'series-muted':`series-${s.colorIndex??i%4}`});
   });
   // Coincident limits share one line and label, rather than hiding each other.
   const byValue=new Map();
@@ -43,9 +47,34 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   }
   const references=[...byValue.values()];
   for(const ref of references) {
-    const span=document.createElement('span');span.textContent=`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`;
-    span.className=`threshold-label series-${ref.colorIndex??3}`;legend.append(span);
+    labels.push({key:`threshold:${ref.name}`,text:`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`,
+      className:`threshold-label series-${ref.colorIndex??3}`});
   }
+  if(markers.length)labels.push({key:'no-change',text:'Banda inferior: sin cambios reales ni predichos',className:'series-muted'});
+  // Keep the actual buttons across polling redraws, preserving hover and focus.
+  const signature=JSON.stringify(labels.map(l=>l.key));
+  if(state.signature!==signature) {
+    state.signature=signature;state.hovered=state.focused=null;
+    legend.replaceChildren(...labels.map(label=>{
+      const button=label.index!==undefined, node=document.createElement(button?'button':'span');
+      if(button) {
+        node.type='button';node.setAttribute('aria-controls',id);
+        node.addEventListener('pointerenter',event=>{if(event.pointerType!=='touch'){state.hovered=label.index;state.update();}});
+        node.addEventListener('pointerleave',()=>{state.hovered=null;state.update();});
+        node.addEventListener('focus',()=>{state.focused=label.index;state.update();});
+        node.addEventListener('blur',()=>{state.focused=null;state.update();});
+        node.addEventListener('click',()=>node.focus()); // Also expose the guide on touch screens.
+      }
+      return node;
+    }));
+  }
+  labels.forEach((label,i)=>{
+    const node=legend.children[i];node.textContent=label.text;node.title=label.title||'';node.className=label.className;
+    if(label.index!==undefined)node.disabled=!lastPoints[label.index];
+    node.setAttribute('data-highlighted','false');
+  });
+  if(!lastPoints[state.hovered])state.hovered=null;
+  if(!lastPoints[state.focused])state.focused=null;
   const points=series.flatMap(s=>s.points).filter(p=>finite(p[0])&&finite(p[1]));
   if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
@@ -62,25 +91,41 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
       stroke:colors[ref.colorIndex??3],'stroke-width':1,'stroke-dasharray':'2 4',opacity:.75});
     line.append(element('title',{},`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`));svg.append(line);
   }
+  const layers=series.map(()=>[]);
   series.forEach((s,i)=>{
     const colorIndex=s.colorIndex??i%4;
     const color=s.muted?'#94a7aa':colors[colorIndex], opacity=s.faint ? .2 : s.muted ? .45 : 1;
+    const append=node=>{layers[i].push({node,opacity});svg.append(node);};
     let segment=[];
-    const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
+    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
     for(const p of s.points) {
       // Leave a gap when there was no measurement; never join across it.
       if(!finite(p[0])||!finite(p[1])) {flush();continue;}
       segment.push(p);
       const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2,fill:color,opacity});
-      circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));svg.append(circle);
+      circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
     }
     flush();
   });
   if(markers.length) {
-    const span=document.createElement('span');span.textContent='Banda inferior: sin cambios reales ni predichos';span.className='series-muted';legend.append(span);
     for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`Sin cambios reales ni predichos · acciones ${m.start}–${m.end}`));svg.append(mark);}
     if(!points.length)svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},'Sin cambios: no hay porcentaje de error que medir'));
   }
+  const guide=element('g',{'class':'series-guide','pointer-events':'none','aria-hidden':'true'});svg.append(guide);
+  state.update=()=>{
+    const selected=state.hovered??state.focused, last=lastPoints[selected];
+    layers.forEach((layer,i)=>layer.forEach(({node,opacity})=>node.setAttribute('opacity',
+      !last?opacity:i===selected?1:opacity*.2)));
+    labels.forEach((label,i)=>legend.children[i].setAttribute('data-highlighted',String(!!last&&label.index===selected)));
+    guide.replaceChildren();
+    if(!last)return;
+    const s=series[selected], color=s.muted?'#94a7aa':colors[s.colorIndex??selected%4], position=y(last[1]);
+    guide.append(element('line',{x1:58,y1:position,x2:width-22,y2:position,stroke:color,'stroke-width':1.2,'stroke-dasharray':'3 4'}),
+      element('circle',{cx:x(last[0]),cy:position,r:4,fill:'#172122',stroke:color,'stroke-width':2}),
+      element('text',{x:width-22,y:Math.max(16,position-7),fill:color,stroke:'#172122','stroke-width':3,'paint-order':'stroke',
+        'font-size':11,'text-anchor':'end'},`${fmt(last[1],digits)}${suffix}`));
+  };
+  state.update();
 }
 function picture(id, frame, mask, pixelColors=palette) {
   const canvas=$(id), ctx=canvas.getContext('2d');
