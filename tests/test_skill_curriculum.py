@@ -295,6 +295,30 @@ class LifecycleTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def test_late_levels_add_structure_in_saturated_contexts(self):
+        # More attributes/values, rod range, sigil strokes or program slots;
+        # this does not assert increasing shortest paths or learning difficulty.
+        for game, fields in (('sy06', ('n','mod')), ('sy25', ('n','limit')),
+                             ('sy49', ('n','weight')), ('sy54', ('n',))):
+            signatures = []
+            for level in range(1,7):
+                p = make_puzzle(game,42,level)
+                signatures.append(tuple(p.patterns[0].bit_count() if f=='weight'
+                                        else getattr(p,f) for f in fields))
+            with self.subTest(game=game):
+                self.assertEqual(len(set(signatures)),6,(game,signatures))
+
+    def test_large_spatial_boards_stay_above_controls(self):
+        for game in ('sy11','sy19'):
+            p = make_puzzle(game,42,6,appearance_seed=5)
+            p.offset = (2,2); p.size = 5
+            p.state = (p.m-1,p.m-1,0,0,0) if game == 'sy11' else (p.m,p.m,0,0)
+            p.target = ((p.m,p.m),) if game == 'sy11' else p.target
+            c = Canvas(p.palette,p.size)
+            p.draw(c)
+            with self.subTest(game=game):
+                self.assertTrue(np.all(c.pixels[51:] == 5),game)
+
     def test_catalog_and_sdk_entrypoints(self):
         self.assertEqual(len(SPECS),60); self.assertEqual(len(CONTEXTS),22)
         self.assertEqual(len(CATALOG),len(BY_ID))
@@ -336,6 +360,33 @@ class GenerationTests(unittest.TestCase):
                 sizes.add(p.size); palettes.add(p.palette); images.add(p.render().tobytes())
             self.assertGreater(len(sizes),1); self.assertGreater(len(palettes),1)
             self.assertGreater(len(images),1)
+
+    def test_small_and_large_hitboxes_preserve_complete_witnesses(self):
+        for spec in SPECS:
+            for level in range(1,7):
+                reference = make_puzzle(spec.skill,123,level)
+                commands = plan(reference)
+                for size in (3,5):
+                    cosmetic = next(i for i in range(64)
+                                    if make_puzzle(spec.skill,123,level,appearance_seed=i).size==size)
+                    p = make_puzzle(spec.skill,123,level,appearance_seed=cosmetic)
+                    q = make_puzzle(spec.skill,123,level)
+                    rectangles = p.button_rects()
+                    occupied = set()
+                    for x,y,w,h in rectangles:
+                        cells = {(u,v) for u in range(x,x+w) for v in range(y,y+h)}
+                        self.assertTrue(all(0<=u<64 and 4<=v<62 for u,v in cells))
+                        self.assertFalse(occupied & cells,(spec.game_id,level,size))
+                        occupied.update(cells)
+                    for command in commands:
+                        x,y,w,h = rectangles[command]
+                        # Opposite inclusive corners detect clipped or oversized
+                        # addressing; midpoint-only witnesses miss such bugs.
+                        p.click(x if size==3 else x+w-1,y if size==3 else y+h-1)
+                        q.act(command)
+                        self.assertEqual(p.state,q.state,(spec.game_id,level,size))
+                        self.assertEqual(p.get_subgoals(),q.get_subgoals())
+                    self.assertTrue(p.won,(spec.game_id,level,size))
 
     def test_seed_replays_and_global_rng_isolation(self):
         random.seed(123); expected=random.getstate()

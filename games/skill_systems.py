@@ -48,7 +48,7 @@ class Dials(Puzzle):
 class Keys(Puzzle):
     def setup(self):
         self.n = min(3,self.level)
-        self.mod = 2 if self.level < 3 else 4
+        self.mod = 2 if self.level < 3 else self.level+1
         self.gated = self.spec.skill == 'precondiciones'
         self.commands = tuple(f'Change attribute {i+1}' for i in range(self.n))
         if self.spec.skill == 'composicion_de_transformaciones' and self.level >= 3:

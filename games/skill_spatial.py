@@ -49,7 +49,7 @@ class Transform(Puzzle):
         return [condition(f'mark-{i}',p in occupied,True) for i,p in enumerate(self.target)]
 
     def draw(self,c):
-        unit=6; ox,oy=8+self.offset[0],12+self.offset[1]
+        unit=5; ox,oy=8+self.offset[0],12+self.offset[1]
         c.rect(ox-3,oy-3,(self.m+1)*unit,(self.m+1)*unit,2,True)
         if self.mirror or self.moving_axis:
             x=ox+self.state[4]*unit; c.line((x,oy-2),(x,oy+self.m*unit),c.color(3))
@@ -83,7 +83,7 @@ class Twins(Puzzle):
     def projection(self,state): return (state[:2]==state[2:],)
 
     def draw(self,c):
-        unit=5; ox,oy=9+self.offset[0],9+self.offset[1]
+        unit=4 if self.m>=7 else 5; ox,oy=9+self.offset[0],9+self.offset[1]
         c.rect(ox-3,oy-3,(self.m+1)*unit+1,(self.m+1)*unit+1,2,True)
         for x,y in self.walls: c.rect(ox+x*unit-2,oy+y*unit-2,5,5,2)
         for k in (0,2): c.token(ox+self.state[k]*unit,oy+self.state[k+1]*unit,k//2)
@@ -122,7 +122,7 @@ class Centroid(Puzzle):
 class Linkage(Puzzle):
     def setup(self):
         self.n=min(4,1+self.level//2)
-        self.limit=min(4,1+self.level)
+        self.limit=1+self.level
         self.staging=self.spec.skill=='subobjetivos_no_monotonos'
         self.commands=tuple(f'{"Retract" if i%2==0 else "Extend"} rod {i//2+1}' for i in range(2*self.n))
         self.state=(1,)*self.n
@@ -140,9 +140,10 @@ class Linkage(Puzzle):
 
     def points(self,state):
         x,y=6,9; points=[]
+        unit=2 if self.limit>4 else 3
         for i,v in enumerate(state):
-            if i%2: y+=3*(v+1)
-            else: x+=3*(v+1)
+            if i%2: y+=unit*(v+1)
+            else: x+=unit*(v+1)
             points.append((x,y))
         return points
 

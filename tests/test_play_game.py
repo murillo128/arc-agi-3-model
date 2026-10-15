@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from flask import Flask
+from games.skill_core import SPECS
 
 from scripts.play_game import ROOT, PlaySession, main, web_routes
 from arc3.envs.sdk import open_arcade
@@ -56,7 +57,8 @@ arcade = Arcade(operation_mode=OperationMode.OFFLINE, environments_dir=GAME_DIR)
 try:
     ids = [info.game_id for info in arcade.get_environments()]
     assert len(ids) == len(set(ids)), ids
-    assert sorted(ids) == ['sc01-v1', 'si01-v1'], ids
+    from games.skill_core import SPECS
+    assert set(ids) == {'sc01-v1', 'si01-v1'} | {s.game_id+'-v1' for s in SPECS}, ids
     for game, total in (('sc01-v1', 5), ('si01-v1', 5)):
         env = arcade.make(game, seed=42)
         assert env is not None, game
@@ -167,7 +169,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(catalog, {'groups': [
             {'source': 'synthetic', 'label': 'Synthetic', 'games': [
                 {'source': 'synthetic', 'id': 'sc01-v1', 'title': 'Square Cross'},
-                {'source': 'synthetic', 'id': 'si01-v1', 'title': 'Square Cross Interactions'}]},
+                {'source': 'synthetic', 'id': 'si01-v1', 'title': 'Square Cross Interactions'},
+                *[{'source':'synthetic','id':s.game_id+'-v1','title':'Skills: '+s.title} for s in SPECS]]},
             {'source': 'original', 'label': 'Original ARC-AGI-3', 'games': [
                 {'source': 'original', 'id': 'tp01-v1', 'title': 'Input test fixture (not official)'}]}]})
         with self.client.get('/') as response:
@@ -191,6 +194,40 @@ class ProtocolTests(unittest.TestCase):
         returned = self.select('sc01-v1', 'synthetic').get_json()
         self.assertEqual(returned['frame'], initial['frame'])
         self.assertEqual(returned['available_actions'], [1, 2, 3, 4])
+
+    def test_context_help_and_opt_in_teacher_isolation(self):
+        def help_info():
+            return self.client.get('/play/help',query_string={'epoch':self.state()['epoch']}).get_json()
+        def debug():
+            return self.client.get('/play/debug/subgoals',query_string={'epoch':self.state()['epoch']})
+        self.assertIsNone(help_info()['help'])  # Honest legacy support.
+        self.assertEqual(debug().status_code,403)
+        self.select('sy26-v1','synthetic')
+        normal = self.state()
+        self.assertNotIn('subgoals',normal)
+        self.assertEqual(debug().status_code,403)
+        self.assertEqual(help_info()['help']['controls'],['A: Retract rod 1','B: Extend rod 1'])
+        self.session.debug_subgoals = True
+        self.assertTrue(help_info()['debug_available'])
+        labels = debug().get_json()
+        self.assertEqual(set(labels),{'epoch','game','level','steps','budget','subgoals'})
+        self.assertEqual(labels['subgoals'][0]['current'],1)
+        self.assertEqual(self.state(),normal)
+        self.action('ACTION6',data={'x':63,'y':63})
+        self.assertEqual(debug().get_json()['steps'],1)
+        self.action('RESET')
+        self.assertEqual(debug().get_json()['steps'],0)
+        self.assertEqual(self.client.get('/play/debug/subgoals',query_string={'epoch':normal['epoch']}).status_code,409)
+        self.select('sy55-v1','synthetic')
+        self.assertNotIn('deck',str(debug().get_json()))
+        self.assertNotIn('solution',str(debug().get_json()))
+        self.assertNotIn('subgoals',str(self.state()))
+        self.select()
+        self.assertFalse(help_info()['debug_available'])
+        self.assertEqual(debug().status_code,403)
+        self.assertNotIn('subgoals',str(self.state()))
+        self.select('sc01-v1','synthetic')
+        self.assertEqual(debug().status_code,403)
 
     def test_action_validation_and_real_animation(self):
         initial = self.state()

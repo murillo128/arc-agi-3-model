@@ -18,6 +18,10 @@ from flask import Flask, jsonify, request, send_file
 from arc3.envs.sdk import open_arcade
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.play_help import human_help, skill_game
+
 TERMINAL = {GameState.WIN, GameState.GAME_OVER}
 
 
@@ -49,10 +53,11 @@ def run_sdk(env, seed, max_actions):
 class PlaySession:
     """Separate SDK providers and one shared, epoch-guarded active environment."""
 
-    def __init__(self, sources, game, seed, render_mode=None):
+    def __init__(self, sources, game, seed, render_mode=None, *, debug_subgoals=False):
         self.sources = sources  # source -> (Arcade, scorecard ID)
         self.seed = seed
         self.render_mode = render_mode
+        self.debug_subgoals = debug_subgoals
         self.lock = Lock()
         self.games = [{"source": source, "id": info.game_id, "title": info.title}
                       for source, (arcade, _) in sources.items()
@@ -107,6 +112,29 @@ def web_routes(session):
         def state():
             with session.lock:
                 return jsonify(session.payload())
+
+        @app.get("/play/help")
+        def help_info():
+            with session.lock:
+                if request.args.get('epoch') != session.epoch:
+                    return jsonify(error='Session changed; refresh the play state'), 409
+                return jsonify(epoch=session.epoch, help=human_help(session),
+                               debug_available=session.debug_subgoals and skill_game(session) is not None)
+
+        @app.get("/play/debug/subgoals")
+        def subgoals():
+            # Separate, explicitly enabled human-only channel. Neither the
+            # default payload nor original providers call teacher interfaces.
+            with session.lock:
+                game = skill_game(session)
+                if not session.debug_subgoals or game is None:
+                    return jsonify(error='Subgoal inspector is disabled or unsupported for this game'), 403
+                if request.args.get('epoch') != session.epoch:
+                    return jsonify(error='Session changed; refresh the play state'), 409
+                info = game.get_training_info()
+                return jsonify(epoch=session.epoch, game=session.selected['id'],
+                               level=info['level'], steps=info['steps'], budget=info['budget'],
+                               subgoals=info['subgoals'])
 
         @app.post("/play/select")
         def select():
@@ -179,6 +207,8 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--render", action="store_true", help="Render SDK smoke frames in the terminal")
+    parser.add_argument("--debug-subgoals", action="store_true",
+                        help="Enable the opt-in local human subgoal inspector for supported synthetic games")
     args = parser.parse_args(argv)
     if args.max_actions < 0:
         parser.error("--max-actions must be nonnegative")
@@ -194,7 +224,8 @@ def main(argv=None):
                 cleanup.callback(arcade.close_scorecard, card)
                 sources[source] = (arcade, card)
             session = PlaySession(sources, args.game, args.seed,
-                                  "terminal" if args.render and args.mode == "sdk" else None)
+                                  "terminal" if args.render and args.mode == "sdk" else None,
+                                  debug_subgoals=args.debug_subgoals)
             if args.mode == "sdk":
                 run_sdk(session.env, args.seed, args.max_actions)
             else:

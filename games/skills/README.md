@@ -5,7 +5,7 @@ with six levels in one stable mechanical context. They cover the sixty principle
 in the project analysis through **22 shared mechanics**, not sixty unrelated
 engines or statistically disentangled abilities. Related profiles deliberately
 share rules. Existing Square Cross games, model inputs, train/evaluation splits,
-SDK pins, launcher protocol and CI are unchanged.
+SDK pins, default play payload and CI are unchanged.
 
 ## Run and inspect
 
@@ -29,8 +29,8 @@ state. SDK random play remains a plumbing check, not a solver.
 The public factory is `games/skill_core.py`; `skill_common.py` owns state, rendering
 and teacher-label contracts. Spatial, system and symbolic rules live in three
 focused sibling modules. `skill_curriculum.py` is the thin ARCEngine adapter. This
-preserves the installed root `games` package boundary and adds no server or
-frontend. Test-only solution witnesses never enter production observations.
+preserves the installed root `games` package boundary and uses the existing local
+play server/frontend. Test-only solution witnesses never enter production observations.
 
 ## Progression and randomization
 
@@ -134,7 +134,11 @@ new_goals = info["subgoals"]
 advancement; top-level `level`/`subgoals` describe the new level. It is None after
 initialization/RESET. The helper refuses anything except these synthetic
 SkillGame instances or their local SDK wrappers. No privileged fields are added
-to FrameData, local-play JSON, original games, evaluation adapters or traces.
+to FrameData, default local-play JSON, original games, evaluation adapters or traces.
+For local human inspection, start the existing play server with `--debug-subgoals`
+and check **Show synthetic subgoals** below the console. This uses a separate
+local endpoint, stays off by default, and refuses original/unsupported legacy
+games. HELP lists the current level’s actual commands, including Space/Undo.
 Keep labels out of an evaluated policy. Training/export consumers are **not**
 automatically wired to this new interface by this change.
 
@@ -165,3 +169,8 @@ Only original source, focused tests and documentation are committed. No official
 game implementations, cached environments, solution trajectories, rendered
 datasets, model weights or fabricated action baselines are included. These are
 training primitives, not exact reproductions of the 25 public games.
+
+Issue #60 adds required real SDK/browser acceptance and fixes late-level structural
+plateaus in Keys, Linkage, Sigils and recursive programs, plus large-board control
+overlap. See [the validation report](../../docs/synthetic-validation.md) for exact
+coverage, reproduction, environment and the separate persistent-deployment status.
