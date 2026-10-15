@@ -1,0 +1,12 @@
+{
+  "game_id": "bf08-v1",
+  "title": "Foundations: Remember a pair",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_pair",
+    "remember_pair"
+  ],
+  "default_fps": 10
+}

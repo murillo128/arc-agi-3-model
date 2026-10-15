@@ -10,12 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0,str(ROOT))
 
-from games.skill_core import SPECS, make_puzzle
+from games.skill_core import SPECS, LATER_PRACTICE, make_puzzle
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--game',help='sy01-v1..sy60-v1, short ID, or skill slug')
+    parser.add_argument('--game',help='bf01-v1..bf08-v1, sy01-v1..sy60-v1, short ID, or skill slug')
     parser.add_argument('--seed',type=int,default=42)
     parser.add_argument('--level',type=int,choices=range(1,7),default=1)
     parser.add_argument('--appearance-seed',type=int)
@@ -32,7 +32,7 @@ def main(argv=None):
                 'controls':dict(enumerate(puzzle.commands)),
             }
         else:
-            result=[{**asdict(spec),'game_id':spec.game_id+'-v1','levels':6} for spec in SPECS]
+            result=[{**asdict(spec),'game_id':spec.game_id+'-v1','levels':6, 'later_practice':LATER_PRACTICE.get(spec.game_id, ())} for spec in SPECS]
         print(json.dumps(result,indent=2))
     except ValueError as error:
         parser.error(str(error))

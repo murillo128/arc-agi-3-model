@@ -1,4 +1,4 @@
-"""On-demand issue-60 acceptance: real SDK + both real Chromium suites.
+"""On-demand synthetic acceptance: real SDK + all three real Chromium suites.
 
 Fails on missing dependencies, wrong Python/SDK, test failures or mandatory
 skips. This is intentionally not an always-on CI job. Large logs/screenshots
@@ -33,14 +33,14 @@ def main():
               'originals_dir':str(args.originals_dir) if args.originals_dir else None}
     (output/'environment.json').write_text(json.dumps(metadata,indent=2)+'\n')
     suite=unittest.TestSuite()
-    for pattern in ('test_skill_curriculum.py','test_skill_sdk.py','test_square_cross*.py','test_play_game.py'):
+    for pattern in ('test_foundations.py','test_foundation_sdk.py','test_skill_curriculum.py','test_skill_sdk.py','test_square_cross*.py','test_play_game.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(ROOT/'tests'),pattern=pattern))
     with (output/'rules-sdk-protocol.log').open('w') as log:
         result=unittest.TextTestRunner(stream=log,verbosity=2).run(suite)
     print(f'Rules/SDK/protocol: {result.testsRun} tests, {len(result.skipped)} skips',flush=True)
     if not result.wasSuccessful() or result.skipped:
         raise SystemExit(f'Required validation failed; see {output}/rules-sdk-protocol.log')
-    for name in ('play_game_browser','skill_browser'):
+    for name in ('play_game_browser','skill_browser','foundation_browser'):
         command=[sys.executable,'-u',str(ROOT/'tests'/f'{name}.py')]
         if args.originals_dir: command+=['--originals-dir',str(args.originals_dir.resolve())]
         env=dict(os.environ,PYTHONPATH=str(ROOT))

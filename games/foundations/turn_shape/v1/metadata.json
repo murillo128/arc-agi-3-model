@@ -1,0 +1,12 @@
+{
+  "game_id": "bf04-v1",
+  "title": "Foundations: Turn a shape",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_rotate",
+    "turn_shape"
+  ],
+  "default_fps": 10
+}

@@ -1,7 +1,17 @@
 """Human control documentation. Never imported by an agent or SDK adapter."""
 from games.skill_curriculum import SkillGame
+from games.skill_core import LATER_PRACTICE
 
 CONTEXT_HELP = {
+    'basic_color': 'Tap each filled tile to toggle between two colours. Match its nearby hollow target. Tiles are independent.',
+    'basic_unlock': 'Tap an enabled switch to open it permanently. Follow the visible connections: a later switch opens only after every incoming switch is open. Open all switches and their connected goals. Undo can close a switch again.',
+    'basic_move': 'Use arrows to move the solid object onto its matching hollow target. Each arrow moves one grid step; the object is already selected.',
+    'basic_rotate': 'Tap a piece to turn it clockwise around its fixed white centre. Fit the filled cells into the hollow outline. Each piece turns independently.',
+    'basic_reflect': 'Move the solid object with arrows. Its outlined reflection moves across the fixed vertical mirror. Bring the reflection onto the hollow target on the other side. Horizontal reflection reverses left and right.',
+    'basic_loop': 'Match the left loop to the hollow reference on the right. The curved arrows turn all tokens one position clockwise or counterclockwise.',
+    'basic_transfer': 'Match the liquid in each tank to the small hollow target slots beside it. Direction arrows transfer one unit between adjacent tanks. Empty sources and full destinations block a transfer; liquid is conserved.',
+    'basic_pair': 'Tap two cards to reveal their colours. Equal colours stay revealed with a matched underline. A mismatch shows both faces briefly, then hides them. Find every pair. Cards never move during a level.',
+
     'dials': 'Cycle the lower dials to satisfy the upper targets. In relational games the first dial matches its anchor and = / ≠ links constrain neighbours. Coupled controls also advance the next dial. The small bottom swatches show cycle order.',
     'keys': 'Match each lower attribute to its hollow upper target. In gated games an attribute changes only when its predecessor is at the final cycle value. A swap, when offered, exchanges first and last attributes.',
     'transform': 'Cover every target cross with the shape. Move, rotate or reflect using the labeled controls. Mirror profiles also show a reflected copy; moving-reference profiles let you move the mirror axis.',
@@ -38,11 +48,13 @@ def human_help(session):
         return None
     p = game.puzzle
     board = getattr(p, 'board_controls', False)
+    direct = getattr(p, 'direct_controls', False)
     return {
         'title': p.spec.title,
         'text': CONTEXT_HELP[p.spec.context],
-        'controls': [f'{i+1 if board else chr(65+i)}: {command}' for i, command in enumerate(p.commands)],
-        'addressing': 'Tap the board directly; numbers below follow row order.' if board else 'A, B, … label the on-screen buttons, left to right then top to bottom.',
+        'controls': list(dict.fromkeys(p.commands)) if direct else [f'{i+1 if board else chr(65+i)}: {command}' for i, command in enumerate(p.commands)],
+        'later_practice': list(LATER_PRACTICE.get(p.spec.game_id, ())),
+        'addressing': 'Tap pieces or pictorial arrows directly; no numbered or lettered buttons are required.' if direct else 'Tap the board directly; numbers below follow row order.' if board else 'A, B, … label the on-screen buttons, left to right then top to bottom.',
         'keyboard': ('Arrows: ' + ', '.join(p.commands[i] for i in p.arrow_commands) + '. ' if p.arrow_commands else 'Arrows are unavailable. ') +
                     ('Space: ' + p.commands[p.run_command] + '. ' if p.run_command is not None else 'Space is unavailable. ') +
                     'Z / Undo restores the previous command state without refunding budget.',

@@ -1,0 +1,12 @@
+{
+  "game_id": "bf01-v1",
+  "title": "Foundations: Match a color",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_color",
+    "match_color"
+  ],
+  "default_fps": 10
+}

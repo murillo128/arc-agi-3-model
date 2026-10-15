@@ -14,7 +14,7 @@ from playwright.sync_api import expect, sync_playwright
 from werkzeug.serving import make_server
 
 from arc3.envs.sdk import open_arcade
-from games.skill_core import SPECS
+from games.skill_core import SPECS, SKILL_SPECS
 from scripts.play_game import PlaySession, web_routes
 from play_game_browser import assert_native_pixels, assert_display_pixels, selected, capture
 from skill_reference import plan
@@ -66,7 +66,7 @@ def click_command(page,session,command,touch=False):
 def check_catalog(page,url,session,mobile):
     page.goto(url); settled(page)
     catalog = page.request.get(url+'/play/games').json()
-    games = catalog['groups'][0]['games']
+    games = [g for group in catalog['groups'] if group['source']=='synthetic' for g in group['games']]
     expected = {'sc01-v1','si01-v1'} | {s.game_id+'-v1' for s in SPECS}
     assert {g['id'] for g in games} == expected and len(games)==len(expected)
     debug_requests=[]
@@ -76,10 +76,11 @@ def check_catalog(page,url,session,mobile):
         initial=session.payload()
         assert_native_pixels(page,initial)
         assert not page.locator('#debug-enabled').is_checked()
-        if item['id'].startswith('sy'):
+        if item['id'].startswith(('sy','bf')):
             help_text=page.locator('#game-help').inner_text()
             assert 'Explore the game' not in help_text and len(help_text)>50
-            assert page.locator('#control-legend li').count()==len(session.env._game.puzzle.commands)
+            p=session.env._game.puzzle
+            assert page.locator('#control-legend li').count()==(len(set(p.commands)) if getattr(p,'direct_controls',False) else len(p.commands))
             click_command(page,session,0,touch=mobile)
         elif item['id']=='sc01-v1':
             page.keyboard.press('ArrowRight'); settled(page)
@@ -96,7 +97,7 @@ def check_catalog(page,url,session,mobile):
 
 def check_contexts(page,url,session,mobile):
     representatives={}
-    for spec in SPECS: representatives.setdefault(spec.context,spec.game_id+'-v1')
+    for spec in SKILL_SPECS: representatives.setdefault(spec.context,spec.game_id+'-v1')
     representatives['linkage']='sy26-v1'
     representatives['flow']='sy43-v1'
     representatives['program']='sy54-v1'

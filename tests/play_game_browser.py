@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from arcengine import GameAction
-from games.skill_core import SPECS
+from games.skill_core import SKILL_SPECS as SPECS, FOUNDATION_SPECS
 from flask import Flask
 from werkzeug.serving import make_server
 
@@ -318,9 +318,10 @@ def check_switching(page, url, name):
     picker = page.get_by_role('combobox', name='Choose game')
     expect(picker).to_be_enabled()
     assert picker.bounding_box()['height'] >= 44
-    assert sorted(page.locator('optgroup[label="Synthetic"] option').all_text_contents()) == [
+    assert sorted(page.locator('optgroup[label^="Synthetic"] option').all_text_contents()) == sorted([
         'sc01-v1 · Square Cross', 'si01-v1 · Square Cross Interactions',
-        *[s.game_id+'-v1 · Skills: '+s.title for s in SPECS]]
+        *[s.game_id+'-v1 · Skills: '+s.title for s in SPECS],
+        *[s.game_id+'-v1 · Foundations: '+s.title for s in FOUNDATION_SPECS]])
     expect(page.locator('optgroup[label="Original ARC-AGI-3"] option')).to_have_text('tp01-v1 · Input test fixture (not official)')
     # Native popup, opened by touch on mobile and keyboard on desktop.
     if name == 'mobile':
@@ -530,7 +531,7 @@ def check_original(page, url, name):
     page.goto(url)
     page.evaluate('() => queue')
     catalog = page.request.get(url + '/play/games').json()
-    originals = catalog['groups'][1]['games']
+    originals = next(g['games'] for g in catalog['groups'] if g['source']=='original')
     ls20 = next((game for game in originals if game['id'].split('-')[0] == 'ls20'), None)
     assert ls20, 'Requested official smoke cache does not discover ls20'
     page.locator('#game-id').select_option(selected('original', ls20['id']))

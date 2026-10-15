@@ -159,6 +159,7 @@
     <ul id="control-legend"></ul>
     <p id="keyboard-help">Enabled controls follow the current game: arrows / D-pad, Space, canvas click or tap, and Z for ACTION7. CLICK indicates that the screen accepts a coordinate; it is not a toggle.</p>
     <p id="cost-help"></p>
+    <p id="later-practice"></p>
     <p>RESET follows the game's SDK restart rules. Switching games starts a fresh session with the same seed and discards previous progress. Tabs share one session.</p>
     <button id="close-help">Close help</button>
   </section>
@@ -238,6 +239,7 @@ async function details(data) {
   document.querySelector('#control-addressing').textContent = h ? h.addressing : '';
   document.querySelector('#keyboard-help').textContent = h ? h.keyboard : 'Use enabled controls; their meaning follows this game. CLICK sends a coordinate, not a toggle.';
   document.querySelector('#cost-help').textContent = h ? h.cost : '';
+  document.querySelector('#later-practice').textContent = h && h.later_practice && h.later_practice.length ? 'Suitable later practice: ' + h.later_practice.join(', ') + '. Optional suggestions, not a required route or measured transfer.' : '';
   const legend = document.querySelector('#control-legend');
   legend.replaceChildren();
   for (const text of h ? h.controls : []) {

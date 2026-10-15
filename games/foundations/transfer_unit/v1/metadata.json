@@ -1,0 +1,12 @@
+{
+  "game_id": "bf07-v1",
+  "title": "Foundations: Transfer one unit",
+  "tags": [
+    "synthetic",
+    "training",
+    "foundation",
+    "basic_transfer",
+    "transfer_unit"
+  ],
+  "default_fps": 10
+}

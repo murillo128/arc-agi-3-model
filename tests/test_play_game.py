@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from flask import Flask
-from games.skill_core import SPECS
+from games.skill_core import SKILL_SPECS as SPECS, FOUNDATION_SPECS
 
 from scripts.play_game import ROOT, PlaySession, main, web_routes
 from arc3.envs.sdk import open_arcade
@@ -57,8 +57,8 @@ arcade = Arcade(operation_mode=OperationMode.OFFLINE, environments_dir=GAME_DIR)
 try:
     ids = [info.game_id for info in arcade.get_environments()]
     assert len(ids) == len(set(ids)), ids
-    from games.skill_core import SPECS
-    assert set(ids) == {'sc01-v1', 'si01-v1'} | {s.game_id+'-v1' for s in SPECS}, ids
+    from games.skill_core import SKILL_SPECS as SPECS, FOUNDATION_SPECS
+    assert set(ids) == {'sc01-v1', 'si01-v1'} | {s.game_id+'-v1' for s in (*SPECS,*FOUNDATION_SPECS)}, ids
     for game, total in (('sc01-v1', 5), ('si01-v1', 5)):
         env = arcade.make(game, seed=42)
         assert env is not None, game
@@ -165,9 +165,11 @@ class ProtocolTests(unittest.TestCase):
         self.assertIsNot(self.synthetic, self.original)
         self.assertNotEqual(self.synthetic.environments_dir, self.original.environments_dir)
         catalog = self.client.get('/play/games').get_json()
-        catalog['groups'][0]['games'].sort(key=lambda game: game['id'])
+        for group in catalog['groups']: group['games'].sort(key=lambda game: game['id'])
         self.assertEqual(catalog, {'groups': [
-            {'source': 'synthetic', 'label': 'Synthetic', 'games': [
+            {'source': 'synthetic', 'label': 'Synthetic · Foundations / Basics', 'games': [
+                {'source':'synthetic','id':s.game_id+'-v1','title':'Foundations: '+s.title} for s in FOUNDATION_SPECS]},
+            {'source': 'synthetic', 'label': 'Synthetic · Skills and legacy', 'games': [
                 {'source': 'synthetic', 'id': 'sc01-v1', 'title': 'Square Cross'},
                 {'source': 'synthetic', 'id': 'si01-v1', 'title': 'Square Cross Interactions'},
                 *[{'source':'synthetic','id':s.game_id+'-v1','title':'Skills: '+s.title} for s in SPECS]]},
@@ -443,7 +445,8 @@ class ProtocolTests(unittest.TestCase):
             session = PlaySession(sources, 'sc01-v1', 42)
             app = Flask('empty')
             web_routes(session)(self.synthetic, app)
-            self.assertEqual(app.test_client().get('/play/games').get_json()['groups'][1]['games'], [])
+            groups = app.test_client().get('/play/games').get_json()['groups']
+            self.assertEqual(next(g['games'] for g in groups if g['source']=='original'), [])
         # Independent providers can expose the same ID; startup must not guess a source.
         duplicate = open_arcade('offline', str(ROOT / 'games'))
         self.addCleanup(duplicate.close_scorecard)
