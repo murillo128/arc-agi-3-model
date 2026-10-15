@@ -7,6 +7,15 @@ const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
 const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
 const namespace = 'http://www.w3.org/2000/svg';
+function gpuStatus(sample) {
+  const devices=sample?.devices||[], status=$('gpu-status');
+  status.textContent=devices.length ? devices.map(gpu=>
+    `GPU${devices.length>1?' '+gpu.index:''} · ${fmt(gpu.utilization_percent)} % de uso · ${fmt(gpu.temperature_c)} °C`).join('\n')
+    : 'GPU · datos no disponibles';
+  status.title=devices.length
+    ? `${devices.map(gpu=>gpu.name).join(', ')}. Lectura actual del servidor; incluye otros procesos. Se consulta cada 2 s.`
+    : 'No se ha podido consultar la GPU del servidor.';
+}
 function element(tag, attributes={}, text='') {
   const node = document.createElementNS(namespace, tag);
   for (const [k,v] of Object.entries(attributes)) node.setAttribute(k, v);
@@ -195,5 +204,5 @@ for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
   if(name==='world'&&displayedReport)render(displayedReport);
 });
-async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);}catch(error){$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);}catch(error){gpuStatus(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 poll();

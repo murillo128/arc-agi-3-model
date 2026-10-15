@@ -12,6 +12,7 @@ h2 { font-size: 18px; margin-bottom: 4px; }
 .connection span { display: block; color: #79deba; font-size: 13px; margin-bottom: 6px; }
 .connection span::before { content: '●'; font-size: 10px; margin-right: 8px; }
 .connection span.warn { color: #f5bd79; }
+.gpu-status { margin: 12px 0 0; color: #c7d8d2; font-size: 13px; font-variant-numeric: tabular-nums; white-space: pre-line; }
 .notice { padding: 12px 16px; border: 1px solid #6a5130; background: #2c251c; color: #eed7ac; font-size: 13px; border-radius: 8px; }
 .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
 .summary-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }

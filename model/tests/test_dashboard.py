@@ -8,10 +8,50 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from model.dashboard import LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LINE, MAX_READ, make_server
+from model.dashboard import GpuMonitor, LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LINE, MAX_READ, make_server
+
+
+class GpuMonitorTests(unittest.TestCase):
+    def test_live_readings_keep_zero_missing_values_and_share_two_second_cache(self):
+        monitor = GpuMonitor()
+        result = subprocess.CompletedProcess([], 0, '0, Test GPU, 0, 64\n1, Second GPU, [N/A], nan\n')
+        with patch('model.dashboard.subprocess.run', return_value=result) as query, \
+             patch('model.dashboard.time.monotonic', return_value=10.) as clock:
+            expected = [dict(index=0,name='Test GPU',utilization_percent=0.,temperature_c=64.),
+                        dict(index=1,name='Second GPU',utilization_percent=None,temperature_c=None)]
+            self.assertEqual(monitor.snapshot()['devices'],expected)
+            clock.return_value = 11.9
+            self.assertEqual(monitor.snapshot()['devices'],expected)
+            self.assertEqual(query.call_count,1)
+            result.stdout = '0, Test GPU, 87, 71\n1, Second GPU, 101, [N/A]\n'
+            clock.return_value = 12.
+            self.assertEqual(monitor.snapshot()['devices'],[
+                dict(index=0,name='Test GPU',utilization_percent=87.,temperature_c=71.),
+                dict(index=1,name='Second GPU',utilization_percent=None,temperature_c=None)])
+            self.assertEqual(query.call_count,2)
+            self.assertEqual(query.call_args.kwargs['timeout'],1)
+
+    def test_unavailable_queries_clear_old_readings_and_can_recover(self):
+        for failure in (FileNotFoundError(), subprocess.TimeoutExpired('nvidia-smi',1),
+                        subprocess.CalledProcessError(1,'nvidia-smi')):
+            with self.subTest(failure=type(failure).__name__):
+                monitor = GpuMonitor()
+                result = subprocess.CompletedProcess([],0,'0, Test GPU, 72, 70\n')
+                with patch('model.dashboard.subprocess.run',return_value=result) as query, \
+                     patch('model.dashboard.time.monotonic',return_value=10.) as clock:
+                    self.assertEqual(monitor.snapshot()['devices'][0]['temperature_c'],70.)
+                    clock.return_value = 12.
+                    query.side_effect = failure
+                    self.assertEqual(monitor.snapshot()['devices'],[])
+                    self.assertEqual(monitor.snapshot()['devices'],[])
+                    self.assertEqual(query.call_count,2,'failures are cached across clients too')
+                    query.side_effect = None
+                    clock.return_value = 14.
+                    self.assertEqual(monitor.snapshot()['devices'][0]['utilization_percent'],72.)
 
 
 class DashboardTests(unittest.TestCase):
@@ -190,6 +230,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.monitor.snapshot()['progress']['actions'], 10)
 
     def test_actual_http_assets_metrics_and_fixed_read_only_routes(self):
+        self.enterContext(patch('model.dashboard.subprocess.run',return_value=
+            subprocess.CompletedProcess([],0,'0, Test GPU, 73, 69\n')))
         self.append({'event': 'progress', 'actions': 256, 'updates': 28})
         behavior_path = self.path.with_name('behavior.log')
         behavior_path.write_text('{"event":"behavior_collection","actions":7,"episodes":2}\n')
@@ -216,6 +258,8 @@ class DashboardTests(unittest.TestCase):
                     self.assertEqual(data['behavior']['progress']['collection']['actions'], 7)
                     self.assertEqual(data['campaign']['progress']['actions'], 9)
                     self.assertEqual(data['campaign']['progress']['seed'], 2)
+                    self.assertEqual(data['gpu']['devices'],[
+                        dict(index=0,name='Test GPU',utilization_percent=73.,temperature_c=69.)])
         self.append({'event': 'progress', 'actions': 288})
         with urlopen(base + '/api/state') as response:
             self.assertEqual(json.load(response)['progress']['actions'], 288)

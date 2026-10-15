@@ -112,7 +112,12 @@ El profesor sintético está fuera del agente y se rechaza para juegos SDK ajeno
 al repositorio. Los resultados no prueban descubrimiento autónomo de reglas/objetivos.
 
 **Dashboard:** una ejecución de un solo juego, una tabla de niveles, componentes habilitados,
-mediciones y evaluaciones consecutivas para avanzar. Curvas fijas de reconstrucción
+mediciones y evaluaciones consecutivas para avanzar. La cabecera muestra el uso
+de GPU (%) y su temperatura (°C), consultados cada dos segundos con `nvidia-smi`
+desde el servidor HTTP. Son lecturas actuales de toda la GPU, incluidos otros
+procesos; no se guardan históricos ni se modifica el entrenador. Si no hay lectura,
+se indica como no disponible, sin conservar un valor antiguo ni inventar un cero.
+Curvas fijas de reconstrucción
 y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
 al cambiar la cobertura del currículo. Las curvas de interacción conservan las
 últimas 4.096 acciones: bloques de 32 y tendencia de 512. El error suma errores y

@@ -23,10 +23,11 @@ const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:
   episodes:[{game:'a',level:1,end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
   evaluations:[]};
 let offline=false;
+let gpu={devices:[{index:0,name:'Test GPU',utilization_percent:73,temperature_c:71}]};
 const context=vm.createContext({console,AbortSignal,setTimeout(){},
   fixture:report,
   document:{getElementById:id=>nodes.get(id),createElement:element,createElementNS:element},
-  fetch:async()=>{if(offline)throw Error('offline');return {ok:true,json:async()=>({subgoals:report})};}});
+  fetch:async()=>{if(offline)throw Error('offline');return {ok:true,json:async()=>({subgoals:report,gpu})};}});
 const text=id=>nodes.get(id).textContent;
 (async()=>{
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),context);
@@ -35,6 +36,18 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('world-updates'),'1');
   assert.equal(text('path-updates'),'0');
   assert.equal(text('tps'),'2');
+  assert.equal(text('gpu-status'),'GPU · 73 % de uso · 71 °C');
+  assert.match(nodes.get('gpu-status').title,/Test GPU/);
+  gpu={devices:[{index:0,name:'Test GPU',utilization_percent:0,temperature_c:null},
+    {index:1,name:'Second GPU',utilization_percent:null,temperature_c:65}]};
+  await vm.runInContext('poll()',context);
+  assert.equal(text('gpu-status'),'GPU 0 · 0 % de uso · — °C\nGPU 1 · — % de uso · 65 °C');
+  gpu=undefined;
+  await vm.runInContext('poll()',context);
+  assert.equal(text('gpu-status'),'GPU · datos no disponibles','old backend data does not preserve stale readings');
+  gpu={devices:[{index:0,name:'Test GPU',utilization_percent:88,temperature_c:72}]};
+  await vm.runInContext('poll()',context);
+  assert.equal(text('gpu-status'),'GPU · 88 % de uso · 72 °C');
   assert.equal(nodes.get('prediction-sample-images').hidden,true);
   report.prediction_sample={previous:[[9,5,5],[5,15,5]],real_delta:[[5,9,16],[16,16,16]],
     predicted_delta:[[5,16,14],[16,16,16]],wrong:2,union:3,captured_at:Date.now()/1000,
@@ -237,5 +250,6 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('evaluation-rows').children.length,0);
   offline=true;await vm.runInContext('poll()',context);
   assert.match(text('connection'),/Sin conexión.*offline/);
+  assert.equal(text('gpu-status'),'GPU · datos no disponibles','connection failure clears stale GPU readings');
   console.log('Subgoal dashboard contracts passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

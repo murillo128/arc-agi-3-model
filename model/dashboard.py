@@ -5,11 +5,13 @@ No torch imports, training-process hooks, or persistent dashboard storage.
 """
 import argparse
 from collections import deque
+import csv
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import threading
 import time
 from urllib.parse import urlsplit
@@ -59,6 +61,52 @@ def compact_values(value, depth=0):
     if isinstance(value, dict):
         return {str(k)[:80]: compact_values(v, depth + 1) for k, v in list(value.items())[:100]}
     return None
+
+
+class GpuMonitor:
+    """Current server telemetry, shared across clients without touching the trainer."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.next_sample = 0.
+        self.sample = {'devices': [], 'sampled_at': None}
+
+    def snapshot(self):
+        with self.lock:
+            if time.monotonic() < self.next_sample:
+                return self.sample
+            devices = []
+            try:
+                result = subprocess.run(
+                    ['nvidia-smi', '--query-gpu=index,name,utilization.gpu,temperature.gpu',
+                     '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, check=True, timeout=1)
+                for row in csv.reader(result.stdout.splitlines()):
+                    if len(row) != 4:
+                        continue
+                    try:
+                        index = int(row[0])
+                    except ValueError:
+                        continue
+                    if index < 0:
+                        continue
+                    values = []
+                    for raw in row[2:]:
+                        try:
+                            value = number(float(raw))
+                        except ValueError:
+                            value = None
+                        values.append(value if value is not None and value >= 0 else None)
+                    usage, temperature = values
+                    devices.append(dict(index=index, name=row[1].strip()[:100],
+                        utilization_percent=usage if usage is None or usage <= 100 else None,
+                        temperature_c=temperature))
+            except (OSError, subprocess.SubprocessError, UnicodeError, csv.Error):
+                devices = []
+            # Failed queries replace old readings too: missing telemetry is not 0%.
+            self.sample = {'devices': devices, 'sampled_at': time.time()}
+            self.next_sample = time.monotonic() + 2
+            return self.sample
 
 
 class LogMonitor:
@@ -581,6 +629,8 @@ def subgoal_snapshot(path):
 
 
 def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None):
+    gpu = GpuMonitor()
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             route = urlsplit(self.path).path
@@ -590,6 +640,7 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                     state['behavior'] = behavior.snapshot()
                 if campaign is not None and subgoal_report is None:
                     state['campaign'] = campaign.snapshot()
+                state['gpu'] = gpu.snapshot()
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
             elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js'):
