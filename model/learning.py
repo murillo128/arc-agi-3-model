@@ -218,10 +218,13 @@ class Engine:
 
 def optimizer(parameters, learning_rate, cuda, bits=32):
     parameters = list(parameters)
-    groups = [
-        {'params': [p for p in parameters if p.ndim >= 2], 'weight_decay': .01},
-        {'params': [p for p in parameters if p.ndim < 2], 'weight_decay': 0.},
-    ]
+    sources = parameters if parameters and isinstance(parameters[0], dict) else [{'params': parameters}]
+    groups = []
+    for source in sources:
+        params = list(source['params'])
+        for decay in (True, False):
+            groups.append(dict(source, params=[p for p in params if (p.ndim >= 2) == decay],
+                               weight_decay=.01 if decay else 0.))
     if bits == 8:
         if not cuda:
             raise ValueError('8-bit AdamW requires CUDA; use --optimizer-bits 32 on CPU')

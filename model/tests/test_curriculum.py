@@ -35,6 +35,65 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_encoder_rate_resume_override_inherits_checkpoint_without_losing_weights(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root / 'source.pt', path_agent())
+            args = ['--source', str(root / 'source.pt'), '--output', str(root / 'run'),
+                    '--device', 'cpu', '--steps', '2', '--evaluate-every', '4',
+                    '--checkpoint-every', '2', '--evaluation-episodes', '1',
+                    '--representation-learning-rate', '3e-5']
+            main([*args, '--actions', '4'])
+            filename = root / 'run/latest.pt'
+            saved = checkpoint.load(filename)
+            saved['training_progress'].pop('encoder_learning_rate_after_predictor')
+            checkpoint.write(filename, saved)
+            report = json.loads((root / 'run/report.json').read_text())
+            report['config'].pop('encoder_learning_rate_after_predictor')
+            (root / 'run/report.json').write_text(json.dumps(report))
+            main([*args, '--actions', '6', '--resume'])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertEqual(report['progress']['representation_learning_rates'], dict(encoder=3e-5, decoder=3e-5))
+            saved = checkpoint.load(filename)
+            saved['training_progress']['curriculum']['levels'][0].update(
+                predictor=True, representation_passes=3, prediction_passes=2, promotion_passes=1)
+            checkpoint.write(filename, saved)
+            old = agent_checkpoint.load(filename)
+            expected = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
+            snapshots = []
+            save = agent_checkpoint.save
+            def capture(path, agent, **kwargs):
+                p = kwargs['training_progress']
+                if p['actions'] == 6:
+                    self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), expected)
+                    self.assertEqual((p['representation_updates'], p['updates']), (6, 0))
+                    self.assertEqual(p['encoder_learning_rate_after_predictor'], 3e-6)
+                    self.assertTrue(p['curriculum']['levels'][0]['predictor'])
+                    self.assertEqual(p['curriculum']['levels'][0]['prediction_passes'], 0)
+                    snapshots.append(p)
+                return save(path, agent, **kwargs)
+            with patch('model.subgoal_training.agent_checkpoint.save', side_effect=capture):
+                main([*args, '--actions', '8', '--resume', '--encoder-learning-rate-after-predictor', '3e-6'])
+            self.assertEqual(len(snapshots), 1)
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertEqual(report['progress']['representation_learning_rates'], dict(encoder=3e-6, decoder=3e-5))
+            self.assertEqual(report['resumed_from']['encoder_learning_rate_after_predictor'], dict(old=None, new=3e-6))
+            report['config']['encoder_learning_rate_after_predictor'] = None
+            (root / 'run/report.json').write_text(json.dumps(report))
+            main([*args, '--actions', '10', '--resume'])
+            report = json.loads((root / 'run/report.json').read_text())
+            self.assertEqual(report['config']['encoder_learning_rate_after_predictor'], 3e-6)
+            self.assertEqual(report['progress']['representation_learning_rates'], dict(encoder=3e-6, decoder=3e-5))
+            self.assertNotIn('encoder_learning_rate_after_predictor', report['resumed_from'])
+            self.assertEqual((report['progress']['representation_updates'], report['progress']['predictor_updates']), (10, 4))
+
+    def test_encoder_rate_rejects_nonpositive_nonfinite_or_increased_values(self):
+        for rate in ('0', '-1', '0.000031', 'nan', 'inf'):
+            with self.subTest(rate=rate), redirect_stdout(io.StringIO()), \
+                 patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+                main(['--init-config', 'unused.json', '--representation-learning-rate', '3e-5',
+                      '--encoder-learning-rate-after-predictor', rate])
+
     def test_resume_freezes_only_encoder_inherits_mode_and_can_unfreeze(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
             root = Path(temp)
@@ -161,12 +220,13 @@ class CurriculumTests(unittest.TestCase):
             config.write_text(json.dumps({'network': asdict(path_agent().engine.model.config),
                                           'training': {'variance_weight': 0.}}))
             args = ['--init-config', str(config), '--output', str(root / 'run'), '--device', 'cpu',
-                    '--steps', '2', '--evaluate-every', '2', '--evaluation-episodes', '1', '--patience', '1']
+                    '--steps', '2', '--evaluate-every', '2', '--evaluation-episodes', '1', '--patience', '1',
+                    '--representation-learning-rate', '3e-5', '--encoder-learning-rate-after-predictor', '3e-6']
             training_phases = []
             def capture(agent, factory, level, *positional, **kwargs):
                 if kwargs.get('representation') is not None:
                     training_phases.append((level, kwargs['representation'].sigreg_enabled,
-                                            kwargs.get('world') is not None))
+                                            kwargs.get('world') is not None, kwargs['representation'].learning_rates))
                 return play(agent, factory, level, *positional, **kwargs)
             # Literal quality inputs isolate the controller from convergence.
             # Initial drift is absent; the first learning episode then qualifies
@@ -178,7 +238,8 @@ class CurriculumTests(unittest.TestCase):
                  patch('model.subgoal_training.summarize_quality',
                        side_effect=[(pending, []), (ready, []), (ready, []), (ready, [])]):
                 main([*args, '--actions', '4'])
-            self.assertEqual(training_phases, [(1, True, False), (1, False, True)])
+            self.assertEqual(training_phases, [(1, True, False, dict(encoder=3e-5, decoder=3e-5)),
+                                               (1, False, True, dict(encoder=3e-6, decoder=3e-5))])
             report = json.loads((root / 'run/report.json').read_text())
             self.assertTrue(all('sigreg' in r['representation_terms'] for r in report['curves'][:2]))
             self.assertTrue(all('sigreg' not in r['representation_terms'] for r in report['curves'][2:]))
@@ -194,7 +255,7 @@ class CurriculumTests(unittest.TestCase):
             with patch('model.subgoal_training.play', side_effect=capture), \
                  patch('games.square_cross.v1.sc01.generate_scene', return_value=fixture()):
                 main([*args, '--resume', '--actions', '6'])
-            self.assertEqual(training_phases, [(2, False, False)])
+            self.assertEqual(training_phases, [(2, False, False, dict(encoder=3e-6, decoder=3e-5))])
             report = json.loads((root / 'run/report.json').read_text())
             self.assertFalse(report['progress']['sigreg_enabled'])
             self.assertNotIn('sigreg', report['curves'][-1]['representation_terms'])

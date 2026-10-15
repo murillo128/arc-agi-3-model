@@ -279,6 +279,8 @@ function render(report) {
     ? 'Encoder congelado: los latentes se mantienen fijos para una misma observación. El decoder sigue aprendiendo.'
     : 'Encoder y decoder aprenden desde el principio.')
     +' El predictor se añade cuando la representación está preparada. Las evaluaciones no actualizan pesos.';
+  const rates=p.representation_learning_rates;
+  if(rates) $('world-training-scope').textContent+=` LR encoder: ${finite(rates.encoder)?rates.encoder.toExponential():'—'} · decoder: ${finite(rates.decoder)?rates.decoder.toExponential():'—'}.`;
   $('notice').hidden=!report.error;$('notice').textContent=report.error||'';
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);

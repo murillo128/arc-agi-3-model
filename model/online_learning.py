@@ -17,19 +17,36 @@ def trainable(engine, *names):
 
 
 class OnlineRepresentation:
-    def __init__(self, engine, learning_rate=3e-6, *, freeze_encoder=False):
+    def __init__(self, engine, learning_rate=3e-6, *, freeze_encoder=False,
+                 encoder_learning_rate_after_predictor=None):
+        if encoder_learning_rate_after_predictor is not None and not 0 < encoder_learning_rate_after_predictor <= learning_rate:
+            raise ValueError('Post-predictor encoder LR must be positive and no greater than representation LR')
         self.engine = engine
         self.freeze_encoder = freeze_encoder
-        self.parameters = list(engine.model.decoder.parameters())
+        self.encoder_learning_rate_after_predictor = encoder_learning_rate_after_predictor
+        groups = [dict(name='decoder', params=list(engine.model.decoder.parameters()))]
         if not freeze_encoder:
-            self.parameters = list(engine.model.encoder.parameters()) + self.parameters
+            groups.insert(0, dict(name='encoder', params=list(engine.model.encoder.parameters())))
         else:
             engine.model.encoder.requires_grad_(False).eval()
             engine.model.encoder.zero_grad(set_to_none=True)
-        self.optimizer = optimizer(self.parameters, learning_rate,
+        self.parameters = [p for group in groups for p in group['params']]
+        self.optimizer = optimizer(groups, learning_rate,
                                    engine.device.type == 'cuda', engine.optimizer_bits)
         self.updates = 0
         self.sigreg_enabled = bool(engine.config.sigreg_weight) and not freeze_encoder
+
+    @property
+    def learning_rates(self):
+        return {'encoder': None, **{g['name']: g['lr'] for g in self.optimizer.param_groups}}
+
+    def activate_predictor(self):
+        """Latch the shared representation phase without rebuilding optimizer state."""
+        self.sigreg_enabled = False
+        if self.encoder_learning_rate_after_predictor is not None:
+            for group in self.optimizer.param_groups:
+                if group['name'] == 'encoder':
+                    group['lr'] = self.encoder_learning_rate_after_predictor
 
     def update(self, observations, *, preview=None):
         """Reconstruct the last two real observations on EVERY learning action.

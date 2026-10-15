@@ -289,6 +289,8 @@ def main(argv=None):
     parser.add_argument('--patience', type=int, default=3)
     parser.add_argument('--learning-rate', type=float, default=3e-5)
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
+    parser.add_argument('--encoder-learning-rate-after-predictor', type=float,
+                        help='Lower encoder LR after first predictor admission; decoder unchanged. Resume inherits checkpoint.')
     parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
@@ -308,6 +310,9 @@ def main(argv=None):
             or args.steps > 128 or not 0 <= args.seed < 100
             or not 0 < args.learning_rate < 1 or not 0 < args.representation_learning_rate < 1):
         parser.error('Invalid budgets, learning rates or seed')
+    if (args.encoder_learning_rate_after_predictor is not None
+            and not 0 < args.encoder_learning_rate_after_predictor <= args.representation_learning_rate):
+        parser.error('Post-predictor encoder LR must be positive and no greater than representation LR')
     try:
         gates = CurriculumConfig(representation_open=args.representation_error,
             prediction_open=args.predictor_error, latent_drift=args.latent_drift,
@@ -353,7 +358,8 @@ def main(argv=None):
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder',
-                           'predictor_replay_episodes', 'predictor_batch_size') and previous != value:
+                           'predictor_replay_episodes', 'predictor_batch_size',
+                           'encoder_learning_rate_after_predictor') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
@@ -389,6 +395,15 @@ def main(argv=None):
             report['resumed_from']['evaluation_interval'] = dict(old=old_interval, new=args.evaluate_every)
         report.pop('error', None)
         report.pop('prediction_sample', None)
+    previous_encoder_rate = (restored or {}).get('encoder_learning_rate_after_predictor')
+    encoder_rate = (previous_encoder_rate if args.encoder_learning_rate_after_predictor is None
+                    else args.encoder_learning_rate_after_predictor)
+    if encoder_rate is not None and not 0 < encoder_rate <= args.representation_learning_rate:
+        parser.error('Post-predictor encoder LR must be positive and no greater than representation LR')
+    changed_encoder_rate = encoder_rate != previous_encoder_rate
+    report['config']['encoder_learning_rate_after_predictor'] = encoder_rate
+    if args.resume and changed_encoder_rate:
+        report['resumed_from']['encoder_learning_rate_after_predictor'] = dict(old=previous_encoder_rate, new=encoder_rate)
     previous_replay = (restored or {}).get('predictor_replay', dict(episodes=0, batch_size=1))
     replay_config = dict(episodes=(previous_replay['episodes'] if args.predictor_replay_episodes is None
                                   else args.predictor_replay_episodes),
@@ -463,7 +478,7 @@ def main(argv=None):
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
         if args.resume and changed_freeze:
             report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
-        if args.resume and (changed_loss or changed_freeze or changed_replay):
+        if args.resume and (changed_loss or changed_freeze or changed_replay or changed_encoder_rate):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
@@ -472,12 +487,13 @@ def main(argv=None):
             evaluator = PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device)
         agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
-        representation = OnlineRepresentation(engine, args.representation_learning_rate, freeze_encoder=freeze_encoder)
+        representation = OnlineRepresentation(engine, args.representation_learning_rate, freeze_encoder=freeze_encoder,
+            encoder_learning_rate_after_predictor=encoder_rate)
         # A shared encoder must not resume distribution shaping when a later
         # level is still in representation-only warmup. Restored permissions
         # also restore this global phase without adding a checkpoint counter.
         if any(state.predictor for state in curriculum.readiness.values()):
-            representation.sigreg_enabled = False
+            representation.activate_predictor()
         world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
         predictor_replay = (PredictorReplay(engine, **replay_config, horizon=world.horizon, seed=args.seed)
                             if replay_config['episodes'] else None)
@@ -548,8 +564,9 @@ def main(argv=None):
                 if split == 'dev':
                     readiness.observe(quality, success, gates)
                     if readiness.predictor:
-                        representation.sigreg_enabled = False
-                    publish(force=True, sigreg_enabled=representation.sigreg_enabled)
+                        representation.activate_predictor()
+                    publish(force=True, sigreg_enabled=representation.sigreg_enabled,
+                            representation_learning_rates=representation.learning_rates)
             if split == 'dev':
                 promotions = curriculum.advance()
                 if promotions:
@@ -568,6 +585,7 @@ def main(argv=None):
                 'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
                 'path_updates': path_learner.updates, 'episodes': episode_index,
                 'freeze_encoder': freeze_encoder,
+                'encoder_learning_rate_after_predictor': encoder_rate,
                 'predictor_replay': replay_config,
                 'curriculum': curriculum.snapshot(),
                 'planner_actions': [dict(game=g, level=n, actions=count)
@@ -585,10 +603,12 @@ def main(argv=None):
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled,
+                representation_learning_rates=representation.learning_rates,
                 encoder_frozen=freeze_encoder,
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
-                            or args.update_evaluation_interval or changed_loss or changed_freeze or changed_replay):
+                            or args.update_evaluation_interval or changed_loss or changed_freeze or changed_replay
+                            or changed_encoder_rate):
             save('resume')
         if not args.resume:
             save('initial')

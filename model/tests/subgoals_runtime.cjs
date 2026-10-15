@@ -262,6 +262,15 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('representation-update-scope'),'Decoder · encoder congelado');
   delete report.config.freeze_encoder;
   delete report.progress.sigreg_enabled;
+  report.progress.representation_learning_rates={encoder:3e-6,decoder:3e-5};
+  await vm.runInContext('poll()',context);
+  assert.match(text('world-training-scope'),/LR encoder: 3e-6 · decoder: 3e-5/);
+  report.progress.representation_learning_rates.encoder=null;
+  await vm.runInContext('poll()',context);
+  assert.match(text('world-training-scope'),/LR encoder: — · decoder: 3e-5/);
+  delete report.progress.representation_learning_rates;
+  await vm.runInContext('poll()',context);
+  assert.doesNotMatch(text('world-training-scope'),/LR encoder:/);
   report.curves=[];
   await vm.runInContext('poll()',context);
   for(const id of ['representation-loss-terms','loss-terms']) {

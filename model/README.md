@@ -22,8 +22,11 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    abrir niveles nuevos o reanudar. La reconstrucción continúa sin congelarse.
    En este arranque desde cero, AdamW LR 3e-5 mediante
    `--representation-learning-rate 3e-5`; se evalúan calidad y deriva antes de
-   admitir el predictor. La tasa es una hipótesis de la campaña, no una garantía
-   de convergencia.
+   admitir el predictor. La campaña añade `--encoder-learning-rate-after-predictor 3e-6`:
+   desde la primera admisión, sólo el encoder baja a 3e-6; el decoder conserva 3e-5.
+   Son grupos separados del mismo optimizador, sin reiniciar sus momentos al
+   cambiar la tasa. La reducción se mantiene en niveles nuevos y al reanudar.
+   Las tasas son hipótesis de la campaña, no una garantía de convergencia.
 2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
    del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
@@ -154,6 +157,14 @@ Los modos anteriores `balanced` y `union` siguen disponibles sin cambiar sus fó
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
+`--encoder-learning-rate-after-predictor 3e-6` también admite un cambio explícito
+al reanudar. El valor debe ser positivo y no mayor que el LR de representación.
+Se guarda en el checkpoint y se hereda al omitir la opción; checkpoints antiguos
+sin ella conservan el LR anterior. El cambio preserva pesos, contadores y permisos,
+reinicia las rachas de cualificación y se guarda antes de entrenar. El dashboard
+muestra las tasas efectivas; un encoder congelado sigue excluido del optimizador.
+Los momentos de Adam y el replay en RAM se reinician al reabrir el proceso, como
+en las demás reanudaciones; reducir la tasa dentro del proceso no los reinicia.
 `--freeze-encoder` fija sólo el encoder: el decoder y el predictor siguen
 aprendiendo con las mismas pérdidas. No se optimizan ni regularizan los pesos
 del encoder. El modo queda en el checkpoint y se hereda con `--resume`; los

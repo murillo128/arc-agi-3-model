@@ -36,6 +36,45 @@ def union_example():
 
 
 class OnlineLearningTests(unittest.TestCase):
+    def test_encoder_rate_drop_preserves_decoder_rate_decay_and_optimizer_moments(self):
+        model = nn.Module()
+        for name in ('encoder', 'decoder'):
+            setattr(model, name, nn.ParameterList([
+                nn.Parameter(torch.tensor(1., dtype=torch.float64)),
+                nn.Parameter(torch.ones(1, 1, dtype=torch.float64))]))
+        engine = SimpleNamespace(model=model, device=torch.device('cpu'), optimizer_bits=32,
+                                 config=TrainConfig())
+        online = OnlineRepresentation(engine, 3e-5, encoder_learning_rate_after_predictor=3e-6)
+        self.assertEqual(online.learning_rates, dict(encoder=3e-5, decoder=3e-5))
+        for p in online.parameters:
+            p.grad = torch.ones_like(p)
+        online.optimizer.step()
+        before = {p: p.detach().clone() for p in online.parameters}
+        states = {p: {k: v.clone() for k, v in s.items()} for p, s in online.optimizer.state.items()}
+        original_optimizer = online.optimizer
+        online.activate_predictor()
+        online.activate_predictor()  # Absolute rate, not repeated multiplication.
+        self.assertIs(online.optimizer, original_optimizer)
+        self.assertEqual(online.learning_rates, dict(encoder=3e-6, decoder=3e-5))
+        for p, saved in states.items():
+            for name, value in saved.items():
+                self.assertTrue(torch.equal(online.optimizer.state[p][name], value))
+        online.optimizer.step()  # Same unit gradients and retained Adam moments.
+        for module, rate in ((model.encoder, 3e-6), (model.decoder, 3e-5)):
+            for p in module:
+                expected = torch.full_like(p, rate / (1 + 1e-8)) + (rate * .01 * before[p] if p.ndim == 2 else 0)
+                torch.testing.assert_close(before[p] - p.detach(), expected, rtol=0, atol=1e-12)
+                self.assertEqual(float(online.optimizer.state[p]['step']), 2.)
+                torch.testing.assert_close(online.optimizer.state[p]['exp_avg'], torch.full_like(p, .19))
+        legacy = OnlineRepresentation(engine, 3e-5)
+        legacy.activate_predictor()
+        self.assertEqual(legacy.learning_rates, dict(encoder=3e-5, decoder=3e-5))
+        frozen = OnlineRepresentation(engine, 3e-5, freeze_encoder=True,
+                                      encoder_learning_rate_after_predictor=3e-6)
+        frozen.activate_predictor()
+        self.assertEqual(frozen.learning_rates, dict(encoder=None, decoder=3e-5))
+        self.assertFalse({id(p) for p in model.encoder.parameters()} & {id(p) for p in frozen.parameters})
+
     def test_focal_delta_loss_has_literal_values_and_gradients_per_image(self):
         # Image 0: one real change. Image 1: two. Image 2: no real change.
         before = torch.zeros(3, 1, 3, dtype=torch.long)
