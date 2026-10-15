@@ -11,7 +11,8 @@ function element() {
     replaceChildren(...items) {this.children=items;},
     setAttribute(k,v) {this[k]=v;},
     addEventListener(k,v) {this.listeners[k]=v;},
-    getContext() {return {clearRect(){}, fillRect(){}};}};
+    getContext() {return this.context??=( {pixels:[],clearRect(){this.pixels=[];},
+      fillRect(x,y,w,h){this.pixels.push({x,y,color:this.fillStyle});}} );}};
 }
 const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],element()]));
 const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:.1,
@@ -34,6 +35,30 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('world-updates'),'1');
   assert.equal(text('path-updates'),'0');
   assert.equal(text('tps'),'2');
+  assert.equal(nodes.get('prediction-sample-images').hidden,true);
+  report.prediction_sample={previous:[[9,5,5],[5,15,5]],real_delta:[[5,9,16],[16,16,16]],
+    predicted_delta:[[5,16,14],[16,16,16]],wrong:2,union:3,captured_at:Date.now()/1000,
+    game:'sc01-v1',level:1,episode_seed:123,episode_action:8,training_action:32,
+    phase:'training',action:{id:4,data:{}}};
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('prediction-sample-images').hidden,false);
+  assert.equal(nodes.get('prediction-real').width,3);
+  assert.equal(nodes.get('prediction-real').height,2);
+  assert.deepEqual(nodes.get('prediction-real').context.pixels.map(p=>p.color),
+    ['#000000','#1e93ff','#eee','#aaa','#eee','#aaa']);
+  assert.deepEqual(nodes.get('prediction-guessed').context.pixels.map(p=>p.color),
+    ['#000000','#aaa','#4fcc30','#aaa','#eee','#aaa']);
+  assert.match(text('prediction-sample-info'),/sc01-v1 · nivel 1 · partida 123 · paso 8 · ACTION4/);
+  assert.match(text('prediction-sample-error'),/66,67 % · 2 \/ 3/);
+  report.prediction_sample={...report.prediction_sample,wrong:0,union:0,
+    action:{id:6,data:{x:4,y:19}},phase:'evaluation'};
+  await vm.runInContext('poll()',context);
+  assert.match(text('prediction-sample-info'),/ACTION6 \(4, 19\) · Evaluación/);
+  assert.match(text('prediction-sample-error'),/Sin cambios reales ni predichos/);
+  delete report.prediction_sample;
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('prediction-sample-images').hidden,true);
+  assert.equal(nodes.get('prediction-real').context.pixels.length,0,'missing sample clears the old image');
   // Aggregate pixel counts, not mean of the two error percentages (50%, 16.7%).
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].error',context),20);
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].count.invented',context),12);

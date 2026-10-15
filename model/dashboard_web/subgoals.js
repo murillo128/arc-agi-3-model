@@ -47,9 +47,28 @@ function plot(id, series, {markers=[], percent=false, empty='Pendiente de datos 
   }
 }
 function picture(id, frame, mask) {
-  const canvas=$(id), ctx=canvas.getContext('2d');ctx.clearRect(0,0,64,64);
+  const canvas=$(id), ctx=canvas.getContext('2d');
+  canvas.height=Array.isArray(frame)&&frame.length?frame.length:64;
+  canvas.width=Array.isArray(frame?.[0])&&frame[0].length?frame[0].length:64;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!Array.isArray(frame))return;
-  frame.forEach((row,y)=>row.forEach((value,x)=>{ctx.fillStyle=mask&&!mask[y]?.[x] ? ((x+y)%2?'#aaa':'#eee') : palette[value]||'#000';ctx.fillRect(x,y,1,1);}));
+  frame.forEach((row,y)=>row.forEach((value,x)=>{ctx.fillStyle=value===16||(mask&&!mask[y]?.[x]) ? ((x+y)%2?'#aaa':'#eee') : palette[value]||'#000';ctx.fillRect(x,y,1,1);}));
+}
+function predictionSample(sample) {
+  $('prediction-sample-images').hidden=!sample;
+  picture('prediction-before',sample?.previous);
+  picture('prediction-real',sample?.real_delta);
+  picture('prediction-guessed',sample?.predicted_delta);
+  if(!sample) {
+    $('prediction-sample-info').textContent='Esperando una predicción y su resultado real…';
+    $('prediction-sample-error').textContent='';return;
+  }
+  const command=sample.action, coordinates=command.id===6?` (${command.data.x}, ${command.data.y})`:'';
+  const age=Math.max(0,(Date.now()/1000)-sample.captured_at);
+  $('prediction-sample-info').textContent=`${sample.game} · nivel ${fmt(sample.level)} · partida ${sample.episode_seed} · paso ${fmt(sample.episode_action)} · ACTION${command.id}${coordinates} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · acción de entrenamiento ${fmt(sample.training_action)} · hace ${fmt(age)} s`;
+  $('prediction-sample-error').textContent=sample.union>0
+    ? `Error de esta muestra: ${fmt(100*sample.wrong/sample.union,2)} % · ${fmt(sample.wrong)} / ${fmt(sample.union)} píxeles cambiados en cualquiera de los dos deltas.`
+    : 'Sin cambios reales ni predichos en esta acción.';
 }
 function deltaRates(rows) {
   return Object.fromEntries(deltaKinds.map(([,key])=>{
@@ -122,6 +141,7 @@ function render(report) {
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
   $('gate').textContent=p.predictor_enabled?'Activo · cada acción junto a representación':'Pendiente de representación estable';
+  predictionSample(report.prediction_sample);
   $('tps').textContent=fmt(p.tps,2);
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`

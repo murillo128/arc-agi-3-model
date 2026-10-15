@@ -78,7 +78,12 @@ predictor; CPU usa float32 y AdamW normal. Se conserva el límite de GPU a 250 W
 La partida actual es el único buffer; no se guardan grabaciones/replay en disco.
 Checkpoint portátil inicial y cada 2.048 acciones, al terminar la partida. Incluye
 pesos y configuración de módulos activos y resumen del currículo. Este comando
-inicia una campaña nueva, no restaura momentos de optimizador ni continúa contadores.
+inicia una campaña nueva. Con `--resume` continúa desde `latest.pt` del directorio
+de salida: recupera todos los pesos (incluido PathValue), permisos, niveles y
+contadores, y descarta mediciones posteriores al checkpoint. Los momentos de los
+optimizadores se reinician: no es una continuación numéricamente idéntica. También
+se renuevan los anclajes de deriva en la siguiente evaluación. No cambia los
+hiperparámetros al reanudar; solo permite ampliar el presupuesto de acciones.
 
 ```sh
 .venv/bin/python -u -m model.subgoal_training \
@@ -102,6 +107,16 @@ al cambiar la cobertura del currículo. Las curvas de interacción conservan las
 uniones de deltas; el desglose usa píxeles por acción medida. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
+
+El panel del predictor muestra cada dos segundos una muestra aleatoria de las
+últimas 64 transiciones medidas: tablero previo, delta real y delta predicho. Se
+reutiliza la predicción causal obtenida antes de observar el resultado y actualizar
+pesos; no se vuelve a inferir para dibujarla. Ambos deltas comparan el resultado
+final de la acción con el mismo tablero previo, con código 16/cuadrícula para
+«sin cambios». La muestra identifica juego, nivel, partida, acción y fase; no
+confunde evaluación con entrenamiento ni convierte ausencia de cambios en error
+cero. Este pequeño buffer visual es efímero, usa un RNG independiente y no es replay
+de aprendizaje. El informe conserva únicamente la muestra que se está mostrando.
 
 Quedan fuera: Goal Planner aprendido, actor por imitación, Double-DQN, barrido de
 arquitecturas y etiquetas de distancia privilegiadas para PathValue. Se observa

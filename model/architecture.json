@@ -106830,7 +106830,7 @@
       "id": "training.dashboard",
       "label": "Training Dashboard",
       "kind": "output",
-      "description": "One current run. Show all admitted learners, locked/unlocked levels, thresholds, evidence and promotion streaks. Fixed-evaluation curves break when coverage changes; per-level quality drives promotion, aggregate live trends are diagnostic. No old campaign results.",
+      "description": "One current run. Show all admitted learners, locked/unlocked levels, thresholds, evidence and promotion streaks. Fixed-evaluation curves break when coverage changes; per-level quality drives promotion, aggregate live trends are diagnostic. Every two seconds sample a recent real transition: previous board, real net action delta and causal predicted delta, both relative to that same board. Reuse the prediction made before observing the result/updating weights; no additional inference. An independent display RNG selects from at most 64 disposable samples; this is not learning replay. Show game/level/action/phase and checkerboard for no change. No old campaign results.",
       "ports": [
         {
           "id": "curriculum",

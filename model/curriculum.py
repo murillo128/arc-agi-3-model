@@ -104,5 +104,17 @@ class Curriculum:
 
     def snapshot(self):
         return dict(stage=self.stage, unlocked=dict(self.unlocked), thresholds=asdict(self.config),
-                    levels=[dict(game=g, level=n, unlocked=n <= self.unlocked[g], **asdict(state))
+                    levels=[dict(game=g, level=n, unlocked=n <= self.unlocked[g],
+                                 episodes=self.episode_counts[g, n], **asdict(state))
                             for (g, n), state in self.readiness.items()])
+
+    def restore(self, snapshot):
+        rows = {(r['game'], r['level']): r for r in snapshot['levels']}
+        if (snapshot['thresholds'] != asdict(self.config) or set(rows) != set(self.readiness)
+                or set(snapshot['unlocked']) != set(self.levels)
+                or any(not 1 <= n <= self.levels[g] for g, n in snapshot['unlocked'].items())):
+            raise ValueError('Checkpoint curriculum does not match this run')
+        self.stage, self.unlocked = snapshot['stage'], dict(snapshot['unlocked'])
+        for pair, row in rows.items():
+            self.readiness[pair] = LevelReadiness(**{k: row[k] for k in LevelReadiness.__dataclass_fields__})
+            self.episode_counts[pair] = row.get('episodes', 0)

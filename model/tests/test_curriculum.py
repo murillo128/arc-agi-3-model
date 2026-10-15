@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from model.curriculum import Curriculum, CurriculumConfig, LevelReadiness
-from model import agent_checkpoint
+from model import agent_checkpoint, checkpoint
 from model.data import Action, Episode
 from model.environment import Environment, Factory
 from model.learning import State
@@ -117,9 +117,21 @@ class CurriculumTests(unittest.TestCase):
         factory = Factory('sc01-v1',Path('games'))
         original = {n:fingerprint(getattr(e.model,n)) for n in ('encoder','decoder','dynamics')}
         value = fingerprint(agent.path_evaluator)
+        samples = []
+        def sample(before, actual, predicted, **meta):
+            # The first preview must still use the original weights, even when
+            # all three learners are updating in this same episode.
+            if not samples:
+                for name in original:
+                    self.assertEqual(fingerprint(getattr(e.model, name)), original[name])
+            samples.append((before.copy(), actual.copy(), predicted.copy(), meta))
         # All three receive data in the SAME episode; no mutually-exclusive phase.
         result = play(agent,factory,1,123,2,representation=representation,
-                      world=predictor,learner=planner,random_policy=True)
+                      world=predictor,learner=planner,random_policy=True,sample=sample)
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(samples[0][3]['episode_action'], 1)
+        self.assertEqual(samples[0][3]['game'], 'sc01-v1')
+        np.testing.assert_array_equal(samples[0][1], samples[1][0])
         self.assertEqual((representation.updates,predictor.updates),(2,2))
         self.assertGreater(planner.updates,0)
         for name in original:
@@ -204,6 +216,41 @@ class CurriculumTests(unittest.TestCase):
                                 for r in report['evaluations'] if r['split']=='final'))
             loaded = agent_checkpoint.load(root/'run/latest.pt')
             self.assertEqual(loaded.config.mode,'path_mpc')
+
+    def test_resume_uses_saved_weights_gates_counters_and_discards_unsaved_measurements(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root/'source.pt',path_agent())
+            args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                    '--device','cpu','--steps','2','--evaluate-every','4','--evaluation-episodes','1']
+            main([*args,'--actions','4'])
+            saved = checkpoint.load(root/'run/latest.pt')
+            row = saved['training_progress']['curriculum']['levels'][0]
+            row.update(predictor=True, planner=True, representation_passes=3, prediction_passes=3)
+            checkpoint.write(root/'run/latest.pt',saved)
+            old = agent_checkpoint.load(root/'run/latest.pt')
+            expected = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
+            report_path = root/'run/report.json'
+            report = json.loads(report_path.read_text())
+            report['curves'].append({'actions':999,'predictor_loss':999})
+            report['progress']['actions'] = 999
+            report_path.write_text(json.dumps(report))
+            starts = []
+            def observe_start(agent, *positional, **kwargs):
+                starts.append((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)))
+                return play(agent,*positional,**kwargs)
+            with patch('model.subgoal_training.play',side_effect=observe_start):
+                main([*args,'--actions','6','--resume'])
+            self.assertEqual(starts[0],expected)
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['progress']['actions'],6)
+            self.assertEqual(report['progress']['representation_updates'],6)
+            self.assertEqual(report['progress']['predictor_updates'],2)
+            self.assertGreater(report['progress']['path_updates'],0)
+            self.assertTrue(all(r['actions']<=6 for r in report['curves']))
+            self.assertEqual(report['resumed_from']['actions'],4)
+            self.assertTrue(report['curriculum']['levels'][0]['planner'])
+            self.assertIsNotNone(report['prediction_sample'])
 
 
 if __name__ == '__main__':
