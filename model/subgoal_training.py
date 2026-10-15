@@ -28,6 +28,7 @@ from .environment import Factory, SYNTHETIC_LEVELS
 from .learning import Engine
 from .networks import WorldModel
 from .online_learning import OnlinePredictor, OnlineRepresentation
+from .online_replay import PredictorReplay
 from .curriculum import Curriculum, CurriculumConfig
 from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
@@ -114,13 +115,13 @@ def summarize_quality(summaries, previous_anchors=None):
 
 def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilon=0.,
          random_policy=False, progress=None, action_limit=None, representation=None, quality_horizon=None,
-         sample=None):
+         sample=None, predictor_replay=None):
     """A synthetic teacher supplies only one visual goal to the shared agent.
 
     Evaluation calls omit all learners. Goal predicates/distances are used only
     by this trainer, never by action selection or hypothetical-state scoring.
     """
-    if quality_horizon is not None and any(x is not None for x in (world, learner, representation)):
+    if quality_horizon is not None and any(x is not None for x in (world, learner, representation, predictor_replay)):
         raise ValueError('Quality evaluation must not update weights')
     env = factory.make(seed, level)
     teacher = factory.teacher(env)
@@ -191,8 +192,11 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             if len(episode.actions) >= world.horizon:
                 anchor = len(episode.actions) - world.horizon
                 rollout = (refreshed[anchor], episode.actions[anchor:], episode.observations[anchor].final)
-            losses = world.update(refreshed[-2], action, before.final, after, refreshed[-1].z, error,
-                                  rollout=rollout)
+            if predictor_replay is not None and predictor_replay.record(episode):
+                losses = world.update_batch(predictor_replay.examples(predictor_replay.sample()))
+            else:
+                losses = world.update(refreshed[-2], action, before.final, after, refreshed[-1].z, error,
+                                      rollout=rollout)
             if losses is not None:
                 agent.state = real_states(agent.engine, episode)[-1]
                 agent.planner.last_plan, agent.planner.last_states, agent.planner.last_endpoint = [], [], None
@@ -231,6 +235,9 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             observation=after.final.tolist() if after.final is not None else None,
             goal_frame=goal.frame.tolist(), goal_mask=goal.mask.astype(int).tolist())
         records.append({k: v for k, v in row.items() if k not in ('observation', 'goal_frame', 'goal_mask')})
+        if predictor_replay is not None:
+            row['predictor_replay'] = dict(predictor_replay.status(),
+                                          actual_batch_size=(losses or {}).get('batch_size', 0))
         if progress:
             progress(row)
         if failure or after.terminal or boundary or goal_index == len(goals):
@@ -286,6 +293,10 @@ def main(argv=None):
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
                         help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')
+    parser.add_argument('--predictor-replay-episodes', type=int,
+                        help='RAM-only real episode capacity; default 0 (disabled), or inherit checkpoint on resume')
+    parser.add_argument('--predictor-batch-size', type=int,
+                        help='Distinct real episodes per predictor update; default 1, or inherit checkpoint on resume')
     args = parser.parse_args(argv)
     if args.update_representation_threshold and not args.resume:
         parser.error('--update-representation-threshold requires --resume')
@@ -341,7 +352,8 @@ def main(argv=None):
                     previous = dict(previous, latent_drift=gates.latent_drift)
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
-            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder') and previous != value:
+            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder',
+                           'predictor_replay_episodes', 'predictor_batch_size') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
@@ -377,6 +389,20 @@ def main(argv=None):
             report['resumed_from']['evaluation_interval'] = dict(old=old_interval, new=args.evaluate_every)
         report.pop('error', None)
         report.pop('prediction_sample', None)
+    previous_replay = (restored or {}).get('predictor_replay', dict(episodes=0, batch_size=1))
+    replay_config = dict(episodes=(previous_replay['episodes'] if args.predictor_replay_episodes is None
+                                  else args.predictor_replay_episodes),
+                         batch_size=(previous_replay['batch_size'] if args.predictor_batch_size is None
+                                     else args.predictor_batch_size))
+    if replay_config['episodes'] < 0 or not 1 <= replay_config['batch_size'] <= max(1, replay_config['episodes']):
+        parser.error('Replay requires a nonnegative capacity and batch size between 1 and capacity (1 when disabled)')
+    changed_replay = replay_config != previous_replay
+    report['config'].update(predictor_replay_episodes=replay_config['episodes'],
+                            predictor_batch_size=replay_config['batch_size'])
+    if args.resume:
+        report['resumed_from']['predictor_replay_buffer'] = 'empty'
+        if changed_replay:
+            report['resumed_from']['predictor_replay'] = dict(old=previous_replay, new=replay_config)
     previews = PredictionSamples()
     last_write, started = 0., time.monotonic()
     checkpoint_requests = saved_requests = 0
@@ -437,7 +463,7 @@ def main(argv=None):
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
         if args.resume and changed_freeze:
             report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
-        if args.resume and (changed_loss or changed_freeze):
+        if args.resume and (changed_loss or changed_freeze or changed_replay):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
@@ -453,6 +479,8 @@ def main(argv=None):
         if any(state.predictor for state in curriculum.readiness.values()):
             representation.sigreg_enabled = False
         world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
+        predictor_replay = (PredictorReplay(engine, **replay_config, horizon=world.horizon, seed=args.seed)
+                            if replay_config['episodes'] else None)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
         factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
         actions, episode_index, planner_actions = 0, 0, dict.fromkeys(curriculum.readiness, 0)
@@ -540,6 +568,7 @@ def main(argv=None):
                 'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
                 'path_updates': path_learner.updates, 'episodes': episode_index,
                 'freeze_encoder': freeze_encoder,
+                'predictor_replay': replay_config,
                 'curriculum': curriculum.snapshot(),
                 'planner_actions': [dict(game=g, level=n, actions=count)
                                    for (g, n), count in planner_actions.items()]})
@@ -556,9 +585,10 @@ def main(argv=None):
 
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled,
-                encoder_frozen=freeze_encoder)
+                encoder_frozen=freeze_encoder,
+                predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
-                            or args.update_evaluation_interval or changed_loss or changed_freeze):
+                            or args.update_evaluation_interval or changed_loss or changed_freeze or changed_replay):
             save('resume')
         if not args.resume:
             save('initial')
@@ -598,6 +628,7 @@ def main(argv=None):
                     predictor_enabled=readiness.predictor, planner_enabled=readiness.planner)
             result = play(agent, factory, level, seed, args.steps,
                 representation=representation, world=world if readiness.predictor else None,
+                predictor_replay=predictor_replay if readiness.predictor else None,
                 learner=path_learner if readiness.planner else None,
                 random_policy=not readiness.planner, epsilon=epsilon, progress=progress,
                 sample=lambda before, actual, predicted, **meta: previews.add(

@@ -283,6 +283,11 @@ function render(report) {
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
   $('gate').textContent=p.predictor_enabled?'Activo · cada acción junto a representación':'Pendiente de representación estable';
+  const replay=p.predictor_replay;
+  $('predictor-replay').textContent=replay
+    ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} partidas · ${fmt(replay.transitions)} transiciones · lote ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
+    : c.predictor_replay_episodes>0 ? `Replay: hasta ${fmt(c.predictor_replay_episodes)} partidas · lote objetivo ${fmt(c.predictor_batch_size)}`
+    : 'Sin replay · una transición por actualización';
   predictionSample(report.prediction_sample);
   $('tps').textContent=fmt(p.tps,2);
   $('progress').textContent=p.phase==='evaluation'

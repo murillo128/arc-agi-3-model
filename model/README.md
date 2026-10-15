@@ -111,7 +111,23 @@ actualizamos pesos dentro de una búsqueda ni mezclamos predicciones con datos r
 
 CUDA usa `torch.compile`, BF16 y momentos AdamW de 8 bits para representación y
 predictor; CPU usa float32 y AdamW normal. Se conserva el límite de GPU a 250 W.
-La partida actual es el único buffer; no se guardan grabaciones/replay en disco.
+Por defecto, la partida actual es el único buffer. El experimento opcional
+`--predictor-replay-episodes 16 --predictor-batch-size 4` mantiene hasta 16 partidas
+reales de entrenamiento en RAM, con el límite de bytes de replay del modelo.
+Cada actualización mezcla la transición recién observada con un extremo aleatorio
+de hasta tres partidas anteriores distintas; al arrancar usa las disponibles.
+Conserva el historial real de cada muestra y reconstruye su memoria recurrente con
+los pesos actuales. Los latentes cacheados se invalidan si cambia el encoder.
+Se promedia la misma pérdida por transición, incluido el rollout de tres pasos
+cuando existe historial suficiente. Se acumulan gradientes por muestra y se hace
+un solo paso del optimizador por acción real, con clipping después de promediar.
+El término de rollout ausente aporta cero a esa media; si falta en todo el lote,
+no se registra. Las evaluaciones nunca entran en el buffer. No se guardan
+grabaciones/replay en disco: al reanudar el buffer vuelve a estar vacío.
+Los dos parámetros se heredan del checkpoint, o pueden cambiarse explícitamente
+con `--resume`; el cambio conserva pesos, contadores y permisos, reinicia las
+rachas y se guarda antes de entrenar. Para desactivarlo se usan capacidad 0 y
+lote 1. El dashboard muestra la ocupación y el tamaño real del último minibatch.
 Checkpoint portátil inicial y cada 2.048 acciones, al terminar la partida. Incluye
 pesos y configuración de módulos activos y resumen del currículo. Este comando
 inicia una campaña nueva. Con `--resume` continúa desde `latest.pt` del directorio

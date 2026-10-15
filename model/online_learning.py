@@ -77,7 +77,8 @@ class OnlineRepresentation:
         torch.nn.utils.clip_grad_norm_(self.parameters, 1., error_if_nonfinite=True)
         self.optimizer.step()
         self.updates += 1
-        e.invalidate_latent_cache()
+        if not self.freeze_encoder:
+            e.invalidate_latent_cache()
         trainable(e)  # Detached acting between optimizer steps.
         return dict(total=float(loss.detach()), reconstruction=float(ce.detach()),
                     terms={name: float(value.detach()) for name, value in terms.items()})
@@ -96,9 +97,36 @@ class OnlinePredictor:
         if (error is None or (self.threshold is not None and error <= self.threshold)
                 or after.final is None or target_z is None):
             return None
+        return self.update_batch([dict(state=state, action=action, reference=reference,
+                                       after=after, target_z=target_z, rollout=rollout)])
+
+    def update_batch(self, samples):
+        """Mean per-transition objective, one clipped optimizer step per batch.
+
+        Backward each example separately to bound activation memory. All examples
+        see the same parameters; missing rollout supervision contributes zero to
+        the batch mean, and is omitted from logging when absent for the whole batch.
+        """
+        if not samples:
+            return None
         e = self.engine
         trainable(e, 'dynamics')
         self.optimizer.zero_grad(set_to_none=True)
+        means = {}
+        for sample in samples:
+            terms = self._loss(**sample)
+            (sum(terms.values()) / len(samples)).backward()
+            for name, value in terms.items():
+                means[name] = means.get(name, 0.) + float(value.detach()) / len(samples)
+        torch.nn.utils.clip_grad_norm_(e.model.dynamics.parameters(), 1., error_if_nonfinite=True)
+        self.optimizer.step()
+        self.updates += 1
+        trainable(e)
+        return dict(total=sum(means.values()), latent=means['latent'], visual=means['delta_nll'],
+                    rollout=means.get('rollout'), terms=means, batch_size=len(samples))
+
+    def _loss(self, state, action, reference, after, target_z, *, rollout=None):
+        e = self.engine
         before = torch.tensor(np.array(reference, copy=True), device=e.device, dtype=torch.long)[None]
         actual = torch.tensor(np.array(after.final, copy=True), device=e.device, dtype=torch.long)[None]
         with e.autocast():
@@ -108,7 +136,7 @@ class OnlinePredictor:
         visual = visual_delta_loss(logits, before, actual, e.config.false_change_weight,
                                    mode=e.config.prediction_delta_loss).mean()
         overlap = soft_delta_error(logits, before, actual).mean()
-        loss = latent + visual + e.config.delta_overlap_weight * overlap
+        terms = dict(latent=latent, delta_nll=visual, delta_overlap=e.config.delta_overlap_weight * overlap)
         rollout_loss = None
         if rollout is not None:
             anchor, actions, reference = rollout
@@ -122,15 +150,5 @@ class OnlinePredictor:
                 + visual_delta_loss(logits, before, actual, e.config.false_change_weight,
                                     mode=e.config.prediction_delta_loss).mean()
                 + e.config.delta_overlap_weight * soft_delta_error(logits, before, actual).mean())
-            loss = loss + rollout_loss
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(e.model.dynamics.parameters(), 1., error_if_nonfinite=True)
-        self.optimizer.step()
-        self.updates += 1
-        trainable(e)
-        terms = dict(latent=latent, delta_nll=visual, delta_overlap=e.config.delta_overlap_weight * overlap)
-        if rollout_loss is not None:
             terms['rollout'] = rollout_loss
-        return dict(total=float(loss.detach()), latent=float(latent.detach()), visual=float(visual.detach()),
-                    rollout=None if rollout_loss is None else float(rollout_loss.detach()),
-                    terms={name: float(value.detach()) for name, value in terms.items()})
+        return terms
