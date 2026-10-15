@@ -145,7 +145,10 @@ contadores, nunca suman acciones de aprendizaje.
 
 El panel del predictor muestra cada dos segundos una muestra aleatoria de las
 últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,
-delta real y delta predicho. La reconstrucción decodifica el latente de esa misma
+delta real, delta predicho y una máscara de su unión. La máscara clasifica cada
+píxel cambiado como inventado, omitido, color incorrecto o acertado, con los mismos
+colores del desglose y un recuento por categoría; los píxeles sin cambios en ambos
+deltas conservan la cuadrícula. La reconstrucción decodifica el latente de esa misma
 observación, con los pesos anteriores a la actualización: durante el aprendizaje
 reutiliza la salida del decoder ya calculada; en evaluación se decodifica sin
 gradientes. No es una visualización directa de los valores del vector latente. Se

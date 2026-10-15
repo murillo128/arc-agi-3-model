@@ -82,13 +82,13 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     if(!points.length)svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},'Sin cambios: no hay porcentaje de error que medir'));
   }
 }
-function picture(id, frame, mask) {
+function picture(id, frame, mask, pixelColors=palette) {
   const canvas=$(id), ctx=canvas.getContext('2d');
   canvas.height=Array.isArray(frame)&&frame.length?frame.length:64;
   canvas.width=Array.isArray(frame?.[0])&&frame[0].length?frame[0].length:64;
   ctx.clearRect(0,0,canvas.width,canvas.height);
   if(!Array.isArray(frame))return;
-  frame.forEach((row,y)=>row.forEach((value,x)=>{ctx.fillStyle=value===16||(mask&&!mask[y]?.[x]) ? ((x+y)%2?'#aaa':'#eee') : palette[value]||'#000';ctx.fillRect(x,y,1,1);}));
+  frame.forEach((row,y)=>row.forEach((value,x)=>{ctx.fillStyle=value===16||(mask&&!mask[y]?.[x]) ? ((x+y)%2?'#aaa':'#eee') : pixelColors[value]||'#000';ctx.fillRect(x,y,1,1);}));
 }
 function predictionSample(sample) {
   $('prediction-sample-images').hidden=!sample;
@@ -99,10 +99,24 @@ function predictionSample(sample) {
   $('prediction-reconstruction-empty').hidden=reconstructed;
   picture('prediction-real',sample?.real_delta);
   picture('prediction-guessed',sample?.predicted_delta);
+  const counts=deltaKinds.map(()=>0);
+  const difference=sample?.real_delta.map((row,y)=>row.map((real,x)=>{
+    const predicted=sample.predicted_delta[y][x];
+    if(real===16&&predicted===16)return 16;
+    // Categories partition the union; matching unchanged pixels are excluded.
+    const kind=real===16?0:predicted===16?1:real!==predicted?2:3;
+    counts[kind]++;return kind;
+  }));
+  picture('prediction-difference',difference,null,colors);
+  const legend=$('prediction-difference-legend');legend.replaceChildren();
   if(!sample) {
     $('prediction-sample-info').textContent='Esperando una predicción y su resultado real…';
     $('prediction-sample-error').textContent='';return;
   }
+  deltaKinds.forEach(([name],i)=>{
+    const span=document.createElement('span');span.className=`series-${i}`;
+    span.textContent=`${name}: ${fmt(counts[i])} px`;legend.append(span);
+  });
   const command=sample.action, coordinates=command.id===6?` (${command.data.x}, ${command.data.y})`:'';
   const age=Math.max(0,(Date.now()/1000)-sample.captured_at);
   $('prediction-sample-info').textContent=`${sample.game} · nivel ${fmt(sample.level)} · partida ${sample.episode_seed} · paso ${fmt(sample.episode_action)} · ACTION${command.id}${coordinates} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · acción de entrenamiento ${fmt(sample.training_action)} · hace ${fmt(age)} s`;

@@ -53,8 +53,10 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(text('gpu-status'),'GPU · 88 % de uso · 72 °C');
   assert.equal(nodes.get('prediction-sample-images').hidden,true);
-  report.prediction_sample={previous:[[9,5,5],[5,15,5]],real_delta:[[5,9,16],[16,16,16]],
-    predicted_delta:[[5,16,14],[16,16,16]],wrong:2,union:3,captured_at:Date.now()/1000,
+  // One of each union category, plus unchanged pixels. Black (5) and white (0)
+  // are replacement colors; only 16 means no change.
+  report.prediction_sample={previous:[[9,5,5],[5,15,5]],real_delta:[[5,9,16],[0,16,16]],
+    predicted_delta:[[5,16,14],[11,16,16]],wrong:3,union:4,captured_at:Date.now()/1000,
     game:'sc01-v1',level:1,episode_seed:123,episode_action:8,training_action:32,
     phase:'training',action:{id:4,data:{}}};
   await vm.runInContext('poll()',context);
@@ -70,21 +72,36 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('prediction-real').width,3);
   assert.equal(nodes.get('prediction-real').height,2);
   assert.deepEqual(nodes.get('prediction-real').context.pixels.map(p=>p.color),
-    ['#000000','#1e93ff','#eee','#aaa','#eee','#aaa']);
+    ['#000000','#1e93ff','#eee','#ffffff','#eee','#aaa']);
   assert.deepEqual(nodes.get('prediction-guessed').context.pixels.map(p=>p.color),
-    ['#000000','#aaa','#4fcc30','#aaa','#eee','#aaa']);
+    ['#000000','#aaa','#4fcc30','#ffdc00','#eee','#aaa']);
+  assert.equal(nodes.get('prediction-difference').width,3);
+  assert.equal(nodes.get('prediction-difference').height,2);
+  assert.deepEqual(nodes.get('prediction-difference').context.pixels,[
+    {x:0,y:0,color:'#94a7aa'},{x:1,y:0,color:'#f4b979'},{x:2,y:0,color:'#77dabb'},
+    {x:0,y:1,color:'#a9a6ef'},{x:1,y:1,color:'#eee'},{x:2,y:1,color:'#aaa'}]);
+  assert.deepEqual(nodes.get('prediction-difference-legend').children.map(n=>[n.className,n.textContent]),[
+    ['series-0','Inventados: 1 px'],['series-1','Omitidos: 1 px'],
+    ['series-2','Color incorrecto: 1 px'],['series-3','Acertados: 1 px']]);
   assert.match(text('prediction-sample-info'),/sc01-v1 · nivel 1 · partida 123 · paso 8 · ACTION4/);
-  assert.match(text('prediction-sample-error'),/66,67 % · 2 \/ 3/);
+  assert.match(text('prediction-sample-error'),/75 % · 3 \/ 4/);
   report.prediction_sample={...report.prediction_sample,wrong:0,union:0,
+    real_delta:[[16,16,16],[16,16,16]],predicted_delta:[[16,16,16],[16,16,16]],
     action:{id:6,data:{x:4,y:19}},phase:'evaluation'};
   await vm.runInContext('poll()',context);
   assert.match(text('prediction-sample-info'),/ACTION6 \(4, 19\) · Evaluación/);
   assert.match(text('prediction-sample-error'),/Sin cambios reales ni predichos/);
+  assert.deepEqual(nodes.get('prediction-difference').context.pixels.map(p=>p.color),
+    ['#eee','#aaa','#eee','#aaa','#eee','#aaa'],'no changes leaves the entire mask transparent');
+  assert.ok(nodes.get('prediction-difference-legend').children.every(n=>n.textContent.endsWith(': 0 px')),
+    'matching unchanged pixels do not count as correct changes');
   delete report.prediction_sample;
   await vm.runInContext('poll()',context);
   assert.equal(nodes.get('prediction-sample-images').hidden,true);
   assert.equal(nodes.get('prediction-real').context.pixels.length,0,'missing sample clears the old image');
   assert.equal(nodes.get('prediction-reconstruction').context.pixels.length,0,'missing sample clears the old reconstruction');
+  assert.equal(nodes.get('prediction-difference').context.pixels.length,0,'missing sample clears the category mask');
+  assert.equal(nodes.get('prediction-difference-legend').children.length,0,'missing sample clears category counts');
   // Aggregate pixel counts, not mean of the two error percentages (50%, 16.7%).
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].error',context),20);
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].count.invented',context),12);
