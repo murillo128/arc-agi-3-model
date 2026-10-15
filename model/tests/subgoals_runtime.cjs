@@ -53,6 +53,7 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(text('gpu-status'),'GPU · 88 % de uso · 72 °C');
   assert.equal(nodes.get('prediction-sample-images').hidden,true);
+  assert.equal(nodes.get('latent-diversity-legend').children[0].textContent,'Entre observaciones: —');
   // One of each union category, plus unchanged pixels. Black (5) and white (0)
   // are replacement colors; only 16 means no change.
   report.prediction_sample={previous:[[9,5,5],[5,15,5]],real_delta:[[5,9,16],[0,16,16]],
@@ -333,6 +334,37 @@ const text=id=>nodes.get(id).textContent;
   report.curriculum.thresholds.representation_open=.02;
   await vm.runInContext('poll()',context);
   assert.equal(limits().length,3,'distinct limits are not hidden behind a hard-coded 10% line');
+  // Diagnostics aggregate levels equally, even with unequal sample counts.
+  // Older evaluations without this instrumentation are absent, not zero.
+  const oldEvaluations=report.evaluations;
+  const diagnosticCoverage=[{game:'a',level:1},{game:'b',level:1}];
+  report.evaluations=[evaluation(0,'a',.1,{coverage:diagnosticCoverage}),
+    evaluation(0,'b',.1,{coverage:diagnosticCoverage}),
+    evaluation(100,'a',.1,{coverage:diagnosticCoverage,quality:{latent:{
+      std_mean:2,within_episode_std:.2,inactive_fraction:0,effective_rank:2,max_rank:3,
+      changed_rms:.004,unchanged_rms:0,sample_count:4,episode_count:1}}}),
+    evaluation(100,'b',.1,{coverage:diagnosticCoverage,quality:{latent:{
+      std_mean:4,within_episode_std:.4,inactive_fraction:.5,effective_rank:6,max_rank:7,
+      changed_rms:.006,unchanged_rms:.002,sample_count:12,episode_count:2}}})];
+  await vm.runInContext('poll()',context);
+  assert.deepEqual(nodes.get('latent-diversity-legend').children.map(n=>n.textContent),
+    ['Entre observaciones: 3','Dentro de cada partida: 0,3']);
+  assert.deepEqual(nodes.get('latent-rank-legend').children.map(n=>n.textContent),
+    ['Rango efectivo: 4','Máximo observable: 5']);
+  assert.equal(nodes.get('latent-inactive-legend').children[0].textContent,'Casi constantes: 25 %');
+  assert.deepEqual(nodes.get('latent-sensitivity-legend').children.map(n=>n.textContent),
+    ['Bloques con cambios: 0,005','Bloques sin cambios: 0,001']);
+  assert.equal(circles('latent-diversity').length,2,'only the instrumented evaluation contributes points');
+  assert.ok(circles('latent-diversity').every(n=>n.cx===58),'unmeasured history is not a fake zero baseline');
+  assert.match(text('latent-summary'),/16 observaciones de 3 partidas/);
+  report.evaluations[3].quality.latent.changed_rms=null;
+  report.evaluations[2].quality.latent.unchanged_rms=0;
+  report.evaluations[3].quality.latent.unchanged_rms=0;
+  await vm.runInContext('poll()',context);
+  assert.deepEqual(nodes.get('latent-sensitivity-legend').children.map(n=>n.textContent),
+    ['Bloques con cambios: —','Bloques sin cambios: 0']);
+  assert.equal(circles('latent-sensitivity').length,1,'a missing class is not zero response');
+  report.evaluations=oldEvaluations;
   report.config.game='sc01-v1';report.config.initialization='random';
   await vm.runInContext('poll()',context);
   assert.match(text('run-info'),/^sc01-v1 · semilla 0/);
@@ -345,6 +377,8 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(circles('delta').length,0,'no points borrowed from a previous run');
   assert.equal(circles('fixed-delta').length,0,'fixed evaluations reset with the selected run');
   assert.equal(labels()[0],'Predicción · 1 paso: —','empty series has no stale last value');
+  assert.equal(circles('latent-diversity').length,0);
+  assert.equal(nodes.get('latent-rank-legend').children[0].textContent,'Rango efectivo: —');
   assert.equal(nodes.get('evaluation-rows').children.length,0);
   offline=true;await vm.runInContext('poll()',context);
   assert.match(text('connection'),/Sin conexión.*offline/);

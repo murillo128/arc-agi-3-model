@@ -105,7 +105,7 @@ class CurriculumTests(unittest.TestCase):
     def test_quality_uses_three_predicted_successors_and_keeps_weights_read_only(self):
         # z' = z+h+1, h'=h+1: starting (1,0) gives z=2,4,7.
         # Real intermediate latents are deliberately different (3 and 5).
-        engine = SimpleNamespace(autocast=nullcontext,
+        engine = SimpleNamespace(autocast=nullcontext, model=SimpleNamespace(config=SimpleNamespace(patch=1)),
             actions=lambda actions: torch.tensor([[a.id] for a in actions]),
             predict=lambda z,h,a,*shape: (z+h[:,:,None]+1,h+1,torch.zeros_like(z)),
             decode=lambda z,*shape: torch.nn.functional.one_hot(z.long().reshape(-1,1,1),16).float())
@@ -120,6 +120,11 @@ class CurriculumTests(unittest.TestCase):
         quality, anchors = summarize_quality([{'quality':probe.result()}])
         self.assertIsNone(quality['latent_drift'])
         self.assertEqual(summarize_quality([{'quality':probe.result()}],anchors)[0]['latent_drift'],0.)
+        self.assertEqual(quality['latent']['sample_count'],4)
+        self.assertAlmostEqual(quality['latent']['std_mean'],5 ** .5)
+        self.assertAlmostEqual(quality['latent']['effective_rank'],1.)
+        self.assertEqual(quality['latent']['changed_rms'],2.)
+        self.assertIsNone(quality['latent']['unchanged_rms'])
 
     def test_all_admitted_learners_continue_and_refresh_episode_and_goal(self):
         agent = path_agent()
@@ -243,6 +248,14 @@ class CurriculumTests(unittest.TestCase):
                 self.assertEqual(sum(r['real_actions'] for r in report['evaluations']),6)
                 self.assertTrue(all(r['quality']['latent_drift'] is None
                                     for r in report['evaluations'] if r['split']=='final'))
+                for row in report['evaluations']:
+                    diagnostics = row['quality']['latent']
+                    self.assertEqual(diagnostics['sample_count'], 3)
+                    self.assertEqual(diagnostics['transitions'], 2)
+                    self.assertEqual(diagnostics['skipped_transitions'], 0)
+                    self.assertIsNotNone(diagnostics['std_mean'])
+                    self.assertGreaterEqual(diagnostics['effective_rank'], 0.)
+                    self.assertLessEqual(diagnostics['effective_rank'], diagnostics['max_rank'])
                 loaded = agent_checkpoint.load(root/'run/latest.pt')
                 self.assertEqual(loaded.config.mode,'path_mpc')
 

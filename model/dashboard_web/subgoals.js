@@ -21,7 +21,7 @@ function element(tag, attributes={}, text='') {
   for (const [k,v] of Object.entries(attributes)) node.setAttribute(k, v);
   node.textContent=text; return node;
 }
-function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, empty='Pendiente de datos de esta ejecución'}={}) {
+function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, digits=2, minimumRange=1, empty='Pendiente de datos de esta ejecución'}={}) {
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
   const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
   svg.setAttribute('viewBox',`0 0 ${width} ${height}`);
@@ -30,7 +30,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     if(s.legend===false)return;
     const last=s.points.findLast(p=>finite(p[0])&&finite(p[1]));
     const span=document.createElement('span');
-    span.textContent=`${s.name}: ${last?fmt(last[1],2)+suffix:'—'}`;
+    span.textContent=`${s.name}: ${last?fmt(last[1],digits)+suffix:'—'}`;
     span.title=last?`Último dato medido · acción ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'Sin mediciones';
     span.className=s.muted?'series-muted':`series-${s.colorIndex??i%4}`;legend.append(span);
   });
@@ -50,11 +50,11 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
   const minX=Math.min(...times), maxX=Math.max(minX+1,...times);
-  const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+1,...points.map(p=>p[1]),...references.map(r=>r.value));
+  const minY=Math.min(0,...points.map(p=>p[1])), maxY=percent?100:Math.max(minY+minimumRange,...points.map(p=>p[1]),...references.map(r=>r.value));
   const x=v=>58+(v-minX)/(maxX-minX)*(width-80), y=v=>height-40-(v-minY)/(maxY-minY)*(height-64);
   for(let i=0;i<=4;i++) {const v=minY+(maxY-minY)*i/4;
     svg.append(element('line',{x1:58,y1:y(v),x2:width-22,y2:y(v),stroke:'#2a3835'}));
-    svg.append(element('text',{x:50,y:y(v)+4,fill:'#94a7aa','font-size':11,'text-anchor':'end'},fmt(v,2)));
+    svg.append(element('text',{x:50,y:y(v)+4,fill:'#94a7aa','font-size':11,'text-anchor':'end'},fmt(v,digits)));
     const a=minX+(maxX-minX)*i/4;svg.append(element('text',{x:x(a),y:height-14,fill:'#94a7aa','font-size':11,'text-anchor':'middle'},fmt(a)));
   }
   for(const ref of references) {
@@ -177,8 +177,14 @@ function fixedEvaluations(report) {
     const rows=[...required].map(k=>byPair.get(k));
     if(!rows.length||rows.some(r=>!r||!finite(r.delta_error))) {pending={actions,expected:required.size,pairs:rows.filter(r=>r&&finite(r.delta_error)).length};continue;}
     const mean=key=>rows.every(r=>finite(r.quality?.[key]))?100*rows.reduce((s,r)=>s+r.quality[key],0)/rows.length:null;
+    const latentMean=(key,scale=1)=>rows.every(r=>finite(r.quality?.latent?.[key]))
+      ?scale*rows.reduce((s,r)=>s+r.quality.latent[key],0)/rows.length:null;
     points.push({actions,stage:rows[0].stage,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
       reconstruction:mean('reconstruction_error'),rollout:mean('rollout_error'),drift:mean('latent_drift'),
+      latentStd:latentMean('std_mean'),latentWithin:latentMean('within_episode_std'),
+      latentInactive:latentMean('inactive_fraction',100),latentRank:latentMean('effective_rank'),
+      latentMaxRank:latentMean('max_rank'),latentChanged:latentMean('changed_rms'),latentUnchanged:latentMean('unchanged_rms'),
+      latentSamples:latentMean('sample_count',rows.length),latentEpisodes:latentMean('episode_count',rows.length),
       pairs:rows.length,episodes:rows.reduce((s,r)=>s+r.episodes,0)});
   }
   return {points,expected:expected.size,pending};
@@ -228,6 +234,21 @@ function render(report) {
     ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`:'';
   $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
     (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
+  const latentPoints=key=>{
+    const points=qualityPoints(key), first=points.findIndex(p=>finite(p[1]));
+    return first<0?[]:points.slice(first); // Older reports have no latent diagnostics.
+  };
+  const latentLast=fixed.points.findLast(r=>r.latentSamples>0);
+  $('latent-summary').textContent=latentLast
+    ?`Última medición: acción ${fmt(latentLast.actions)} · ${fmt(latentLast.latentSamples)} observaciones de ${fmt(latentLast.latentEpisodes)} partidas. Curvas agregadas con igual peso por nivel; una buena reconstrucción o diversidad alta no garantizan buena predicción.`
+    :'Las medidas aparecerán tras una evaluación fija con los nuevos diagnósticos. Los datos anteriores no se rellenan con ceros.';
+  plot('latent-diversity',[{name:'Entre observaciones',points:latentPoints('latentStd')},
+    {name:'Dentro de cada partida',points:latentPoints('latentWithin')}],{digits:4,minimumRange:.0001});
+  plot('latent-rank',[{name:'Rango efectivo',points:latentPoints('latentRank')},
+    {name:'Máximo observable',muted:true,points:latentPoints('latentMaxRank')}]);
+  plot('latent-inactive',[{name:'Casi constantes',points:latentPoints('latentInactive')}],{percent:true});
+  plot('latent-sensitivity',[{name:'Bloques con cambios',points:latentPoints('latentChanged')},
+    {name:'Bloques sin cambios',points:latentPoints('latentUnchanged')}],{digits:4,minimumRange:.0001});
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
   const measured=rows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
   $('interaction-summary').textContent=rows.length?`Ventana reciente: acciones ${fmt(rows[0].actions)}–${fmt(rows.at(-1).actions)}. ${fmt(unchanged)} de ${fmt(measured.length)} acciones medidas sin cambios reales ni predichos.`:'Esperando acciones reales de esta ejecución.';

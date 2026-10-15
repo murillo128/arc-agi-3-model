@@ -160,6 +160,42 @@ confunde evaluación con entrenamiento ni convierte ausencia de cambios en error
 cero. Este pequeño buffer visual es efímero, usa un RNG independiente y no es replay
 de aprendizaje. El informe conserva únicamente la muestra que se está mostrando.
 
+El diagnóstico del latente se registra en `quality.latent` durante la misma
+evaluación aleatoria fija, sin optimizar ni hacer nuevas pasadas por el encoder.
+Reutiliza los estados reales con pesos congelados; no consume RNG de entrenamiento
+ni incorpora trayectorias imaginadas. No cambia las activaciones del currículo.
+
+- **Diversidad** (`std_mean`): desviación típica poblacional entre observaciones,
+  promediada sobre las coordenadas del latente. Compara las mismas posiciones;
+  nunca mezcla geometrías para aparentar variación. `within_episode_std` mide
+  lo mismo dentro de cada partida antes de agregar, para distinguir cambios
+  temporales de diferencias de fondo/color entre escenarios.
+- **Coordenadas casi constantes** (`inactive_fraction`): fracción con desviación
+  menor que 0,01. Es un umbral diagnóstico en unidades del latente, no una puerta
+  de entrenamiento ni una garantía universal de colapso.
+- **Rango efectivo** (`effective_rank`): `exp(-sum(p * log(p)))`, con `p` igual a
+  los autovalores normalizados de la covarianza de los vectores centrados. Se
+  calcula mediante la matriz de Gram, sin normalizar/reescalar los latentes.
+  El máximo `max_rank` es `min(observaciones - 1, coordenadas)`. Un latente
+  exactamente constante tiene rango cero por convenio; menos de dos observaciones
+  deja el diagnóstico sin datos. Un rango bajo también puede reflejar una tarea
+  simple o pocas observaciones; no es el porcentaje de capacidad usado.
+- **Respuesta a cambios reales** (`changed_rms`, `unchanged_rms`): RMS de
+  `z_después - z_antes`, separando bloques que contienen algún píxel realmente
+  cambiado y bloques estáticos. Usa todas las transiciones evaluables de la partida,
+  con los mismos pesos para ambos estados. Respeta el tamaño de patch del encoder
+  y los bordes parciales. El contexto puede cambiar un bloque estático: esta medida
+  no es un error de predicción. Sin bloques de una clase, su valor es `null`.
+
+Para acotar el coste, diversidad/rango usan las primeras ocho observaciones reales
+por partida, incluida la inicial, guardadas temporalmente en CPU; el rango usa
+como máximo 64 por geometría, seleccionadas a intervalos deterministas. Las medias
+por geometría ponderan observaciones, y el dashboard agrega niveles con igual peso.
+Los recuentos de observaciones, partidas, geometrías, transiciones y bloques se
+registran junto a los valores. Los tensores de diagnóstico no se guardan en pesos
+ni informes. Las curvas empiezan cuando existe medición y se cortan al cambiar la
+cobertura del currículo; los informes anteriores mantienen sus datos ausentes.
+
 Quedan fuera: Goal Planner aprendido, actor por imitación, Double-DQN, barrido de
 arquitecturas y etiquetas de distancia privilegiadas para PathValue. Se observa
 primero si las activaciones progresivas y el repaso de niveles estabilizan el

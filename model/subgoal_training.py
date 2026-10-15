@@ -30,6 +30,7 @@ from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
 from .planning import GoalValue
 from .prediction_samples import PredictionSamples
+from .latent_diagnostics import LatentProbe, summarize_latents
 
 def error_counts(before, actual, predicted):
     wrong, union, changed = delta_counts(before, actual, predicted)
@@ -46,6 +47,8 @@ class QualityProbe:
         self.engine, self.horizon = engine, horizon
         self.states = [initial]
         self.anchor = initial.z.detach().float().cpu().clone()
+        self.latent = LatentProbe(engine.model.config.patch)
+        self.latent.sample(initial)
         self.counts = {name: dict(wrong=0, union=0, samples=0, changed=0)
                        for name in ('reconstruction', 'prediction', 'rollout')}
 
@@ -64,6 +67,8 @@ class QualityProbe:
             return
         e, t = self.engine, len(episode.actions)
         actual, reference = episode.observations[-1].final, episode.observations[-2].final
+        self.latent.sample(current)
+        self.latent.transition(previous, current, reference, actual)
         with e.autocast():
             reconstructed = e.decode(current.z[None], *current.geometry).argmax(-1)[0].cpu().numpy()
         self.add('reconstruction', error_counts(reference, actual, reconstructed))
@@ -79,7 +84,7 @@ class QualityProbe:
             self.add('rollout', error_counts(episode.observations[t - self.horizon].final, actual, image))
 
     def result(self):
-        return dict(counts=self.counts, anchor=self.anchor)
+        return dict(counts=self.counts, anchor=self.anchor, latent=self.latent)
 
 
 def summarize_quality(summaries, previous_anchors=None):
@@ -96,6 +101,7 @@ def summarize_quality(summaries, previous_anchors=None):
             result[prefix + 'changed'] = counts['changed']
     anchors = [v['anchor'] for v in values]
     result['latent_drift'] = None
+    result['latent'] = summarize_latents([v['latent'] for v in values if v.get('latent') is not None])
     if previous_anchors is not None and len(previous_anchors) == len(anchors) and anchors:
         numerator = sum(float((a - b).square().sum()) for a, b in zip(anchors, previous_anchors))
         denominator = sum(float(b.square().sum()) for b in previous_anchors)
