@@ -135,6 +135,27 @@ class OfflineSDKTests(unittest.TestCase):
         np.testing.assert_array_equal(reset.frame[-1],initial)
         np.testing.assert_array_equal(env.reset().frame[-1],initial)
 
+    def test_reflection_axis_changes_after_real_sdk_rotation(self):
+        env=self.arcade.make('sy11-v1',seed=0,scorecard_id=self.card)
+        for _ in range(2):
+            for command in plan(env._game.puzzle): self.click(env,command)
+        p=env._game.puzzle
+        self.assertEqual(p.level,3)
+        self.assertEqual(p.cells(p.state),((1,1),(1,2),(2,1)))
+        before=env.observation_space.frame[-1]
+        self.assertEqual(int(before[54,44]),2)  # vertical reflection axis
+        self.assertEqual(int(before[56,42]),p.palette[1])
+        rotated=env.step(GameAction.ACTION6,data={'x':36,'y':56})
+        self.assertEqual(p.cells(p.state),((0,1),(1,1),(1,2)))
+        np.testing.assert_array_equal(rotated.frame[-1],p.render())
+        self.assertEqual(int(rotated.frame[-1][56,42]),2)  # horizontal axis
+        self.assertEqual(int(rotated.frame[-1][54,44]),p.palette[1])
+        reflected=env.step(GameAction.ACTION6,data={'x':44,'y':56})
+        self.assertEqual(p.cells(p.state),((0,1),(1,0),(1,1)))
+        np.testing.assert_array_equal(reflected.frame[-1],p.render())
+        np.testing.assert_array_equal(reflected.frame[-1][53:60,41:48],
+                                      rotated.frame[-1][53:60,41:48])
+
     def test_nonmonotonic_labels_simultaneous_conditions_and_undo(self):
         env = self.arcade.make('sy26-v1',seed=42,scorecard_id=self.card)
         for command in plan(env._game.puzzle): self.click(env,command)
@@ -179,7 +200,7 @@ class OfflineSDKTests(unittest.TestCase):
                 steps += 3
                 result = env.step(GameAction.ACTION5)
                 counts = [np.count_nonzero(f[18:22,2:54] == p.palette[0]) for f in result.frame[:3]]
-                self.assertEqual(counts,[4,8,12] if p.size<5 else [9,18,27])
+                self.assertEqual(counts,[4,8,12])  # separated 2×2 emitted units in symbols-v2
             else:
                 # Turn every branch on. Each source reaches the next lane in
                 # sequence. Inspect native outlet pixels, not helper output.

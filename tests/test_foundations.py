@@ -238,7 +238,12 @@ class FoundationInstances(unittest.TestCase):
             output=Path(directory)/'current.json'
             subprocess.run([sys.executable,str(ROOT/'tests/legacy_fingerprint.py'),str(ROOT),str(output)],check=True)
             expected=json.loads((ROOT/'tests/fixtures/legacy-game-fingerprints.json').read_text())
-            self.assertEqual(json.loads(output.read_text()),expected)
+            # Issue #64 intentionally replaces 54 old presentations. Retain
+            # the historical file unchanged and the exact unaffected checks;
+            # presentation_replay owns all-ID baseline logical equivalence.
+            unchanged=('sc01-v1','si01-v1','sy10-v1','sy47-v1','sy48-v1','sy55-v1','sy56-v1','sy57-v1')
+            current=json.loads(output.read_text())
+            self.assertEqual({g:current[g] for g in unchanged},{g:expected[g] for g in unchanged})
 
 
 if __name__=='__main__': unittest.main()

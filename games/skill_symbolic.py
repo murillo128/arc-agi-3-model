@@ -74,6 +74,7 @@ def execute_program(codes: tuple[int,...], *, call_depth=1, recursive_arguments=
 
 
 class Program(Puzzle):
+    board_controls=True
     def setup(self):
         self.recursive=self.spec.skill=='recursion'
         self.n=self.level
@@ -103,15 +104,41 @@ class Program(Puzzle):
         return [condition(f'output-{i}',out[i] if i<len(out) else None,v) for i,v in enumerate(self.target)] + [
             condition('output-length',len(out),len(self.target)),condition('executed',ran,True)]
 
+    def button_rects(self):
+        return [(2+9*(i//2)+4*(i%2),29,4,7) for i in range(2*self.n)]+[(56,28,7,10)]
+
     def draw(self,c):
         for row,seq in enumerate((self.target,self.state[1])):
-            for i,v in enumerate(seq[:36]): c.token(4+3*(i%18),9+row*10+(i//18)*4,v,size=max(2,self.size-2))
-        for i,code in enumerate(self.state[0]):
-            x=5+9*i; c.rect(x,30,7,8,2,True)
-            for b in range(2): c.rect(x+2+2*b,32,1,3,0 if code&(1<<b) else 2)
-        demo=execute_program((3,),call_depth=self.depth,recursive_arguments=self.recursive)[0]
-        c.digit(3,41,3)
-        for i,v in enumerate(demo): c.token(12+3*i,43,v,size=2)
+            c.rect(1,6+row*10,56,10,0 if row==0 else 2,True)
+            for i,v in enumerate(seq): c.token(4+3*(i%18),9+row*10+(i//18)*4,v,size=2)
+        for i,(x,y,w,h) in enumerate(self.button_rects()[:-1]):
+            code=self.state[0][i//2]
+            c.rect(x,y,w,h,2,True)
+            c.rect(x+1,y+2,2,1+c.size//2,0 if code&(1<<(i%2)) else 2)
+            if i%2:
+                c.line((x-2,37),(x+4,37),2)
+                if i<2*self.n-1: c.arrow(x+4,37,1,0,2,1)
+        x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True); c.play(x+1,y+5)
+        # Four concrete switch configurations, each with its emitted output.
+        # Nested paired brackets show call/return around the two emissions.
+        # This is the instruction dictionary, never the target-solving program.
+        for code in range(4):
+            x=1+32*(code%2); y=40+11*(code//2)
+            for bit in range(2):
+                c.rect(x+3*bit,y+2,3,5,2,True)
+                c.rect(x+3*bit+1,y+3,1,1+c.size//2,0 if code&(1<<bit) else 2)
+            c.arrow(x+8,y+4,1,0,2,1)
+            out=execute_program((code,),call_depth=self.depth,recursive_arguments=self.recursive)[0]
+            if not out: c.rect(x+11,y+2,5,5,2,True)
+            for i,v in enumerate(out): c.token(x+12+3*i,y+4,v,size=2)
+            depth=code if self.recursive else self.depth if code==3 else 0
+            for d in range(depth):
+                left=x+10+3*d; right=x+14+3*(2*depth-1-d)
+                top=y+d; bottom=y+8-d
+                c.line((left,y+3),(left,top),2); c.line((left,top),(right,top),2)
+                c.line((right,top),(right,y+3),2)
+                c.line((left,y+6),(left,bottom),2); c.line((left,bottom),(right,bottom),2)
+                c.line((right,bottom),(right,y+6),2)
 
 
 
@@ -143,8 +170,14 @@ class Sigils(Puzzle):
         for i,mask in enumerate(self.patterns):
             for b in range(9):
                 if mask&(1<<b): c.rect(5+18*i+(b%3)*2,8+(b//3)*2,1,1,c.color(i))
-            c.digit(13+18*i,8,self.target[i],c.color(i))
-            c.digit(13+18*i,16,self.state[0][i],c.color(i))
+            x=12+18*i
+            c.rect(x,6,9,7,0,True)
+            c.slots(x+2,9,self.target[i],self.mod-1,c.color(i),columns=2,hollow=True)
+            c.rect(x,14,9,7,2,True)
+            c.slots(x+2,17,self.state[0][i],self.mod-1,c.color(i),columns=2)
+            # The count wraps: a return path connects the capacity back to empty.
+            c.line((x+8,21),(x+8,22),2); c.line((x+8,22),(x+1,22),2)
+            c.arrow(x+1,21,0,-1,2,1)
         for i,(x,y,w,h) in enumerate(self.button_rects()):
             c.rect(x,y,w,h,2,True)
             c.rect(x+2,y+2,self.size-2,self.size-2,0 if self.state[1]&(1<<i) else 2)

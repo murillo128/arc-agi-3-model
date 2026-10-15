@@ -208,7 +208,7 @@ class ProtocolTests(unittest.TestCase):
         normal = self.state()
         self.assertNotIn('subgoals',normal)
         self.assertEqual(debug().status_code,403)
-        self.assertEqual(help_info()['help']['controls'],['A: Retract rod 1','B: Extend rod 1'])
+        self.assertEqual(help_info()['help']['controls'],['Retract rod 1 · tap (4, 56)','Extend rod 1 · tap (12, 56)'])
         self.session.debug_subgoals = True
         self.assertTrue(help_info()['debug_available'])
         labels = debug().get_json()
@@ -230,6 +230,10 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn('subgoals',str(self.state()))
         self.select('sc01-v1','synthetic')
         self.assertEqual(debug().status_code,403)
+        self.select('sy11-v1','synthetic')
+        self.assertEqual(help_info()['help']['controls'][5],
+                         'Reflect across shown axis · tap (44, 56)')
+        self.assertIn('axis turns with the piece',help_info()['help']['text'])
 
     def test_action_validation_and_real_animation(self):
         initial = self.state()

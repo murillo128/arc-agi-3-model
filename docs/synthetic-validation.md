@@ -214,3 +214,234 @@ synthetic entries (eight foundations plus the unchanged 62), along with legacy
 controls, HELP and inspector privacy. Keep training, its checkout, dashboard,
 shared App Server, proxy and TLS settings untouched. Never serve this issue's
 ephemeral worktree as a live release. Isolated acceptance is not live deployment.
+
+## Non-linguistic presentation revision (issue #64)
+
+The baseline is `06e7eb3e8c54dee071a8cfbec3d03d2a9f0a25da`. Revision
+`symbols-v2` changes presentation and coordinate addressing, not the logical RNG,
+state machine, semantic command order, budgets, levels or teacher interface.
+Historical pixel recordings and pretrained visual features still describe the
+old appearance; do not rewrite them or refresh the active training campaign.
+
+Test plan before authoring: `test_symbolic_presentation.py` owns literal pixel
+fixtures for separate goals/prerequisites, same/different samples, exact empty /
+missing / excess / maximum quantities, switch examples and clock phases. Literal
+coordinates and independently specified unit counts detect the previous decimal
+and letter presentation. Palette and footprint interventions, direct-hitbox
+clicks and pure reads exercise the native renderer, not a browser overlay.
+Existing rule, reachability, SDK lifecycle and browser suites remain the owners
+of mechanics, action costs, transient order, privacy and frontend concurrency.
+A baseline archive replay supplies independent logical and unaffected-pixel
+fingerprints for every synthetic ID at seeds 0, 1, 42 and 123. The new browser
+lane inspects boards with HELP and the teacher inspector closed. Generated image
+matrices and detailed logs belong only in ignored artifacts.
+
+The executor launch receipt confirms `gpt-6-astra` / `xhigh`; the launcher's
+validated issue override and observed new-thread selection agree. Final audit
+is a separate controller with the same issue override. Live deployment remains
+pending reviewed merge. The inspected deployment record names release
+`06e7eb3e8c54dee071a8cfbec3d03d2a9f0a25da`, port 8001 and
+`https://murillo128.hopto.org:8443/arc3-play/`. The system service reports
+active with MainPID 72465, the same durable release and the port listening.
+The deployment owner must re-identify it again immediately before refresh.
+
+### Complete source-path inventory
+
+Catalog reconciliation: 70 registered synthetic IDs, 418 levels. Native images
+flow through `SkillGame` → `Puzzle.render` → the context renderer (or the two
+Square Cross renderers). All 408 skill/foundation levels were inspected through
+that boundary; the remaining ten are the unchanged Square Cross levels. Every
+row below covers all of its registered levels, including native feedback frames.
+`Canvas.label` and `Canvas.digit` remain unused legacy helpers; no authored game
+render path calls them. Abstract dictionary shapes and sigil patterns remain
+objects to match, with no interpretation as letters or decimal values.
+
+| Context / IDs | Previous intentional labels or controls | symbols-v2 representation |
+| --- | --- | --- |
+| Dials / sy01–sy05 | Letter buttons; conventional equality/inequality signs | Tap each dial; concrete paired same/different samples on neighbour links; outgoing coupled-effect arrows; ordered colour samples with return edge |
+| Keys / sy06–sy08 | Letter buttons and attribute indices; detached prerequisite swatches | Spatially aligned goals and direct attribute controls; predecessor links carry actual enabling state; separate cycle and exchange pictogram |
+| Maze / sy09, sy27–sy30 | Lettered movement/bridge panel | Direction arrows in mover colour and a bridge span; board, keys and doors unchanged |
+| Rules / sy10, sy47–sy48 | No literacy requirement; genuine dictionary glyphs | Unchanged, including rotated glyph identity and direct answer cells |
+| Transform / sy11–sy15 | Lettered movement/rotation/reflection/axis panel | Direction and turn arrows, reflected shapes and axis movement pictograms |
+| Paint / sy16–sy18 | Lettered paint selectors plus disconnected mask key | Each control contains its actual affected mask and paint sample; paired paints per region |
+| Twins / sy19–sy21 | Lettered direction panel | Two mover-coloured arrows per command show shared/mirrored motion |
+| Centroid / sy22–sy23 | Lettered arm selectors | Direction-arrow pairs sit on each arm’s row with a connecting line; the body sharing the first arm’s colour stays spatially distinct |
+| Boxes / sy24, sy35–sy36 | Lettered direction panel | White player-direction arrows; block targets and contact behavior unchanged |
+| Linkage / sy25–sy26 | Lettered rod selectors; detached generic staging icon | Rod-coloured axis arrows; prerequisite links carry the predecessor’s minimum-length/orientation sample, separately from target crosses |
+| Loops / sy31–sy32 | Lettered loop/direction selectors | Turn arrows connect to the whole-loop and overlapping-short-loop rails |
+| Pegs / sy33–sy34 | Decimal one-peg goal | One outlined required peg and discrete remaining units; board selection unchanged |
+| Agents / sy37–sy39 | Lettered movement/wait panel | Controlled-mover direction arrows and wait bars; autonomous mover remains uncommanded |
+| Tanks / sy40–sy41 | Lettered transfer panel | Transfer arrows between adjacent tanks; capacity ticks retain exact fill/target-height distinction |
+| Flow / sy42–sy44 | Lettered valve/run selectors | Direct boxed valves on actual pipes; send triangle; native propagation and outlet marks retained |
+| Gravity / sy45 | Lettered step/reverse panel | Lateral arrows and a gravity-reversal arrow; full settle behavior unchanged |
+| Merge / sy46 | Decimal exact counts, including zero | Every tier has required hollow units above present solid units; capacity includes all twelve starting items, zero, missing and excess; blocks remain directly selectable |
+| Sigils / sy49 | Decimal target/current attribute counters | Separate hollow required and filled current units, empty slots and wrap cue; patterns and drawing cells retained |
+| Program / sy50–sy54 | Lettered bit/run selectors; literal opcode example | Direct paired switch cells, run triangle, all four concrete configuration/output examples, empty no-op tray and nested call/return brackets; all 36 possible output units fit without truncation |
+| Memory / sy55–sy57 | None; hidden card faces | Unchanged; identities remain hidden until native reveal |
+| Ghost / sy58 | Lettered movement/record/wait panel | Mover-coloured arrows, solid/outlined copy with return arrow, wait bars; recording slots and replay unchanged |
+| Timing / sy59–sy60 | Decimal hazard phases; lettered command panel | Aligned hazard/clock phase tracks, current insets, forward order and wrap edge; solid active/hollow inactive hazards; advance/wait/retreat pictograms |
+| Basic colour / bf01 | None | Unchanged direct tiles and targets |
+| Basic unlock / bf02 | None | Unchanged connected switches |
+| Basic movement / bf03 | None | Unchanged pictured arrows |
+| Basic rotation / bf04 | None | Unchanged direct shapes and turn arrows |
+| Basic reflection / bf05 | None | Unchanged mover/reflection and arrows |
+| Basic loop / bf06 | None | Unchanged two turn arrows |
+| Basic transfer / bf07 | None | Unchanged arrows and discrete target slots |
+| Basic memory / bf08 | None | Unchanged hidden faces and native reveal |
+| Square Cross / sc01 | None | Unchanged native sprites and HUD |
+| Square Cross Interactions / si01 | None | Unchanged native sprites, selection and HUD |
+
+Thus 54 skill IDs change appearance, while six skill IDs, eight foundations and
+two Square Cross IDs remain pixel-identical on the captured trajectories. No
+original SDK game source is edited. Native payload fields and the adapter are
+unchanged. Human HELP and `skill_catalog.py --game …` derive command effects and
+coordinates from the renderer’s existing commands/hitboxes; JavaScript contains
+no duplicated per-game map. Text and numeric coordinates are outside the canvas.
+
+### Coordinate migration and retained semantics
+
+Semantic command index/order is stable. The old generic grid used
+`(2 + 6*(i%10), 51 + 6*(i//10), 5, 5)`; generic pictorial controls now use
+`(1 + 8*i, 53, 7, 7)`. Rectangles are `(x,y,width,height)` in native pixels.
+Context overrides, also returned by the human catalog, are:
+
+| Controls | New rectangle mapping |
+| --- | --- |
+| Dial i | `(4+10*i,27,8,8)` |
+| Attribute i; optional exchange | `(6+20*i,25,9,9)`; `(54,42,9,17)` |
+| Paint command i | `(2+12*(i//2),44+8*(i%2),10,7)` |
+| Centroid arm command i | `(47+8*(i%2),7+10*(i//2),7,7)` |
+| Twin direction i | `(2+15*i,52,13,9)` |
+| Loop command i | `(3+11*(i%2)+31*(i//2),48,9,11)` |
+| Tank transfer i | `(11+14*(i//2),47+8*(i%2),11,7)` |
+| Valve i; send | `(9+7*i,10+5*i,5,5)`; `(51,45,10,14)` |
+| Merge block i | `(5+9*(i%6),42+10*(i//6),8,9)` (previous y: 23/36) |
+| Program bit i; run | `(2+9*(i//2)+4*(i%2),29,4,7)`; `(56,28,7,10)` |
+| Ghost movement; record; wait | First four generic rectangles; `(34,51,17,10)`; `(54,53,7,7)` |
+
+All other direct board hitboxes remain unchanged. Replays must address semantic
+commands using the appropriate revision’s rectangles; old raw click coordinates
+are not an equivalence oracle after a documented layout change. Keyboard actions,
+miss/blocked/Undo costs, resets and action availability remain unchanged.
+
+### Reproduction and evidence limits
+
+`tests/presentation_replay.py` runs the same test-only witnesses against a chosen
+root. `tests/fixtures/symbols-v1-behavior.json` was captured against the isolated
+baseline archive, using the candidate test harness and the same pinned SDK.
+It hashes logical states, targets, every command alternative at each witnessed
+state, costs/history, SDK action availability, old-level transition labels,
+sequential progression and resets. Pixel hashes are checked only for the 16
+unaffected IDs. The historical 62-game fingerprint file is retained verbatim;
+its eight still-applicable legacy checks remain active. The other 54 paths are
+covered by the new logical reference and literal presentation fixtures, not
+silently updated historical screenshots.
+
+```sh
+mkdir -p /tmp/arc3-symbols-base
+git archive 06e7eb3e8c54dee071a8cfbec3d03d2a9f0a25da | tar -x -C /tmp/arc3-symbols-base
+python tests/presentation_replay.py --root /tmp/arc3-symbols-base \
+  --output artifacts/symbols-v2/baseline --images \
+  --capture-baseline /tmp/symbols-v1-reproduced.json
+python tests/presentation_replay.py --output artifacts/symbols-v2/current --images
+python tests/validate_synthetic.py --originals-dir /path/to/authorized/cache
+```
+
+The `--images` lane saves each ID’s all-level initial/progressed/completed image
+matrix at four logic seeds, plus all-level size/offset/palette interventions and
+compressed real SDK native-frame arrays (including transients and terminal
+observations). It does not edit previous recordings. Literal representation
+fixtures fail on the baseline for the intended missing cues, not setup errors.
+Program feedback now uses separated 2×2 units to fit the maximum sequence; its
+existing native-prefix assertion intentionally changes to 4/8/12 coloured pixels.
+Switch footprints still vary with the appearance size.
+
+Visual inspection covers before/after introductory, middle and advanced images
+for every changed renderer, the mandatory sy08 level 3 predecessor/goal split,
+sy26 staging, empty/excess merge trays, sigil counters, program dictionaries and
+hazard phases. That inspection found and corrected overwritten enabled arrows,
+loop connections, orientation-specific rod samples, tiny direction chevrons and
+explicit exchange/arm connections when object colours coincide. Browser screenshots keep
+HELP/debug closed for introductory and advanced context states, including every
+program variant. These are engineering checks and visual inspections, not a
+usability study, an OCR score, measured comprehension or a benchmark improvement.
+
+### Executed acceptance, 2026-10-15
+
+The complete on-demand command passed against clean implementation commit
+`2f5c64aa41010becfbc7b1a3c6c1f95253f24d51`. This result record is a documentation-only
+follow-up; executable code, fixtures and tests are unchanged from that target.
+
+| Executed boundary | Result |
+| --- | --- |
+| Rules / SDK / protocol / literal presentation | 117 tests passed, zero skips, 66.633 seconds |
+| Baseline semantic replay | All 70 IDs matched; 1,672 sequential SDK level completions across seeds 0, 1, 42, 123; 22,305 native frames observed |
+| Unaffected pixel replay | All 16 unchanged IDs matched baseline hashes; precisely the 54 inventoried skill IDs changed pixels |
+| Regression proof | All ten presentation test families failed on the isolated baseline for assertion-level visual defects; all passed on the implementation |
+| Existing play browser suite | Passed real Chromium acceptance, including native/display pixels, source switching, keyboard/touch, action gating and epoch/atomic switching regressions |
+| Expanded skill browser suite | Passed desktop and mobile: every synthetic entry loaded/actioned/reset; 29 context variants each completed levels 1–6; HELP/inspector, animations, reduced motion and cancellation passed |
+| Foundation browser suite | Passed desktop and mobile: eight six-level WINs per viewport, solution bounds, controls, privacy, Undo/reset and still mismatch reveals under reduced motion |
+| Authorized original-cache smoke | ft09, ls20 and vc33 loaded, took legal actions, reset and switched back to synthetic on both viewports; no code downloaded or edited |
+| Visual evidence | 70 before and 70 after image matrices, all-level appearance extremes, native transient archives and actual browser screenshots with HELP/debug closed; selected images inspected as described above |
+
+The passing browser runners assert no unexpected page, console, request or HTTP
+errors. They do not measure human/agent understanding. Runtime dependencies were
+Python 3.12.14, arc-agi 0.9.9, ARCEngine 0.9.3, NumPy 2.5.4, Playwright 1.63.0 and
+Chromium 153.0.8010.12 on CPU. The pinned project SDK requirement is unchanged.
+
+Detailed logs and the clean tested revision/dependency record are under
+`artifacts/synthetic-validation/`; native before/after matrices, compressed frame
+archives and regression red/green logs are under `artifacts/symbols-v2/`.
+Browser captures are under `artifacts/square-cross/`. These remain ignored.
+No live release was refreshed: independent review/merge and actual durable
+endpoint verification remain separate from this successful isolated acceptance.
+
+### Reflection-axis audit correction
+
+The audit of `79c84f5a8374527067e3274715af8ff08073482f` found that Transform's
+reflection pictogram always showed a vertical axis, although the existing
+flip-before-rotation semantics reflect the visible piece up/down at odd quarter
+turns. The correction preserves those semantics and orients the native cue to
+the visible effect; human guidance refers to the shown axis.
+
+Regression plan: extend the literal presentation tests with independently drawn
+vertical/horizontal 7×7 control fixtures and explicit reflected coordinates for
+an asymmetric three-cell piece at all four rotations, both flip states and
+palette/size extremes. Extend the real SDK tests with the audit's reachable
+`sy11-v1`, seed 0, level 3 sequence, asserting native pixels and coordinates
+before/after Rotate and Reflect. Existing replay owns all-profile logical
+equivalence; the existing real browser suites own display/input/HELP integration.
+Run the new regressions on the pre-fix implementation before the correction,
+then run focused coverage and the complete on-demand acceptance path.
+
+The new literal fixture failed on the pre-fix code for all 16 odd-rotation
+palette/size/flip combinations, while the even-rotation cases passed. The SDK
+reproducer also failed at the horizontal-axis pixel assertion, after successful
+native setup and rotation. Both now pass, along with all 11 presentation tests
+and the focused HELP protocol test. Red/green logs are retained in
+`artifacts/symbols-v2/reflection-*.log`. Browser coverage also exercises a rotated
+and reflected level-three piece through desktop clicks/mobile touches, captures
+both native/display states with HELP closed, and checks the updated control text.
+
+The complete on-demand acceptance command passed again on clean implementation
+`8b92d67f10b2e35368390985078fb7dbb8af72ac`: 119 tests, zero skips, 64.344 seconds
+for the rules/SDK/protocol suite; all 70 logical digests equal the original
+baseline over 1,672 SDK level completions and 22,305 native frames; all 16
+unaffected pixel digests remain equal. All three real Chromium suites passed,
+including desktop/mobile reflection input and display, 29 skill context WINs
+per viewport, eight foundation WINs per viewport, and the authorized original
+cache. No unexpected console/network errors were reported. This result record
+is the only subsequent change; executable code and tests retain the tested
+revision. Current logs and environment metadata are in
+`artifacts/synthetic-validation/`; the aggregate console log is
+`artifacts/symbols-v2/acceptance-reflection.log`.
+
+Visual inspection covered the four orientations before/after reflection in
+`artifacts/symbols-v2/reflection-orientations.png` and the new desktop/mobile
+`symbols-reflection-horizontal-*` / `symbols-reflection-flipped-*` screenshots.
+The cue agrees with the visible axis; this is not measured comprehension.
+Dependencies remain as recorded above. The resumed launcher again confirmed
+`gpt-6-astra` / `xhigh`. The active service and deployment record still identify
+the reviewed `06e7eb3e8c54dee071a8cfbec3d03d2a9f0a25da` release on port 8001;
+live refresh remains pending review/merge. No training or deployment mutation
+was performed.

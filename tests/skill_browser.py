@@ -99,10 +99,17 @@ def check_contexts(page,url,session,mobile):
     representatives={}
     for spec in SKILL_SPECS: representatives.setdefault(spec.context,spec.game_id+'-v1')
     representatives['linkage']='sy26-v1'
+    representatives['keys']='sy08-v1'
     representatives['flow']='sy43-v1'
     representatives['program']='sy54-v1'
+    representatives.update(dials_coupled='sy05-v1',keys_swap='sy07-v1',transform_axis='sy13-v1')
+    for game in ('sy50','sy51','sy52','sy53'): representatives['program_'+game]=game+'-v1'
     for context,game in representatives.items():
         load(page,'synthetic',game)
+        assert not page.locator('#debug-enabled').is_checked()
+        expect(page.locator('#help-panel')).to_be_hidden()
+        assert_display_pixels(page,session.payload())
+        capture(page,f'symbols-{context}-intro-{"mobile" if mobile else "desktop"}')
         page.locator('#debug-enabled').check()
         page.evaluate('() => detailsQueue')
         expect(page.locator('#subgoals')).to_contain_text(f'{game} · Level 1')
@@ -115,11 +122,31 @@ def check_contexts(page,url,session,mobile):
         for level in range(1,7):
             p=session.env._game.puzzle
             assert p.level==level
-            if level==6:
-                if context=='ghost':
+            if level in (3,6):
+                if context=='ghost' and level==6:
                     expect(page.locator('[data-goal=exit]')).to_contain_text('Dependencies: plate-0, plate-1')
+                # Actor-visible readability evidence: no HELP or teacher panel.
+                page.locator('#debug-enabled').uncheck(); page.evaluate('() => detailsQueue')
+                expect(page.locator('#subgoals')).to_be_hidden()
+                expect(page.locator('#help-panel')).to_be_hidden()
                 assert_display_pixels(page,session.payload())
-                capture(page,f'skill-{context}-advanced-{"mobile" if mobile else "desktop"}')
+                capture(page,f'symbols-{context}-L{level}-{"mobile" if mobile else "desktop"}')
+                if context=='transform' and level==3:
+                    # Move away from the seed-42 target so rotation stays in
+                    # this level; exercise the changed cue through real input.
+                    click_command(page,session,3,touch=mobile)
+                    click_command(page,session,4,touch=mobile)
+                    assert p.level==3 and p.state[2]==1
+                    assert_display_pixels(page,session.payload())
+                    capture(page,f'symbols-reflection-horizontal-{"mobile" if mobile else "desktop"}')
+                    click_command(page,session,5,touch=mobile)
+                    assert p.cells(p.state)==((1,1),(2,0),(2,1))
+                    assert_display_pixels(page,session.payload())
+                    capture(page,f'symbols-reflection-flipped-{"mobile" if mobile else "desktop"}')
+                    expect(page.locator('#control-legend')).to_contain_text('Reflect across shown axis')
+                    page.locator('#restart').click(); settled(page)
+                    p=session.env._game.puzzle
+                page.locator('#debug-enabled').check(); page.evaluate('() => detailsQueue')
             commands=plan(p)
             for command in commands:
                 click_command(page,session,command,touch=mobile and level in (1,6))

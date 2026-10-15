@@ -13,7 +13,7 @@ class Transform(Puzzle):
         self.pattern = ((0,0),) if self.level == 1 else tuple((i%2,i//2) for i in range(min(4,self.level)))
         self.mirror = self.spec.skill in ('simetria','razonamiento_inverso')
         self.moving_axis = self.spec.skill == 'marcos_de_referencia'
-        self.commands=('Up','Down','Left','Right','Rotate clockwise','Reflect left/right')
+        self.commands=('Up','Down','Left','Right','Rotate clockwise','Reflect across shown axis')
         if self.moving_axis: self.commands += ('Move mirror left','Move mirror right')
         self.state=(1,1,0,0,self.m//2)
         self.reachable_target(2*self.level-1)
@@ -56,6 +56,24 @@ class Transform(Puzzle):
         for x,y in self.target: c.cross(ox+x*unit,oy+y*unit,0,2)
         for x,y in self.cells(self.state): c.token(ox+x*unit,oy+y*unit,1)
 
+    def draw_control(self,c,command,x,y):
+        if command<4: c.arrow(x,y,*DIRS[command],c.color(1))
+        elif command==4: c.turn(x,y,color=c.color(1))
+        elif command==5:
+            # cells() flips in local coordinates before rotating the piece.
+            # Odd quarter-turns therefore reflect the visible piece up/down.
+            if self.state[2]%2:
+                c.rect(x-2,y,5,1,2)
+                c.line((x-2,y-2),(x,y-2),c.color(1)); c.line((x-2,y+2),(x,y+2),c.color(1))
+                c.rect(x,y-3,1,2,c.color(1)); c.rect(x,y+2,1,2,c.color(1))
+            else:
+                c.rect(x,y-2,1,5,2)
+                c.line((x-2,y-2),(x-2,y),c.color(1)); c.line((x+2,y-2),(x+2,y),c.color(1))
+                c.rect(x-3,y,2,1,c.color(1)); c.rect(x+2,y,2,1,c.color(1))
+        else:
+            c.rect(x,y-2,1,5,c.color(3))
+            c.arrow(x,y,-1 if command==6 else 1,0)
+
 
 
 class Twins(Puzzle):
@@ -89,6 +107,12 @@ class Twins(Puzzle):
         for k in (0,2): c.token(ox+self.state[k]*unit,oy+self.state[k+1]*unit,k//2)
         c.token(57,18,0,True,size=7); c.token(57,18,1,size=3)
 
+    def button_rects(self): return [(2+15*i,52,13,9) for i in range(4)]
+
+    def draw_control(self,c,command,x,y):
+        dx,dy=DIRS[command]
+        c.arrow(x-3,y,dx,dy,c.color(0)); c.arrow(x+3,y,-dx,dy,c.color(1))
+
 
 
 class Centroid(Puzzle):
@@ -111,11 +135,17 @@ class Centroid(Puzzle):
         return [condition('centroid-numerator',sum(s),self.target[0])]
 
     def draw(self,c):
-        unit=5; body=(7+round(sum(self.state)*unit/self.n),33)
-        c.cross(7+round(self.target[0]*unit/self.n),33,0,3)
+        unit=4; body=(7+round(sum(self.state)*unit/self.n),45)
+        c.cross(7+round(self.target[0]*unit/self.n),45,0,3)
         for i,x in enumerate(self.state):
-            p=(7+x*unit,11+i*4); c.line(p,body,2); c.token(*p,1+i)
+            p=(7+x*unit,10+i*10); c.line(p,body,2)
+            c.line((p[0]+3,p[1]),(46,p[1]),c.color(1+i))
+            c.token(*p,1+i)
         c.token(*body,1,size=self.size+2)
+
+    def button_rects(self): return [(47+8*(i%2),7+10*(i//2),7,7) for i in range(2*self.n)]
+
+    def draw_control(self,c,command,x,y): c.arrow(x,y,-1 if command%2==0 else 1,0,c.color(1+command//2))
 
 
 
@@ -153,7 +183,24 @@ class Linkage(Puzzle):
             c.cross(*p,i,2)
         for i,p in enumerate(self.points(self.state)):
             c.line(start,p,c.color(i)); c.token(*p,i); start=p
-        if self.staging: c.rect(48,15,6,6,0,True); c.rect(50,17,2,2,2)
+        if self.staging:
+            for i in range(1,self.n):
+                x=4+16*i
+                # Connection from parent pair to child pair; a minimum-length
+                # sample shows the enabling geometry, not a final target.
+                c.line((x-12,51),(x-12,46),2)
+                c.line((x-12,46),(x+4,46),2)
+                c.rect(x-5,43,7,7,5)
+                unit=2 if self.limit>4 else 3
+                a,b=((x-4,46),(x-4+unit,46)) if (i-1)%2==0 else ((x-2,44),(x-2,44+unit))
+                c.token(*a,i-1,size=2); c.token(*b,i-1,size=2)
+                c.line(a,b,c.color(i-1))
+                c.arrow(x+4,49,0,1,0 if self.state[i-1]==0 else 2,1)
+                if self.state[i-1]!=0: c.rect(x+2,51,5,1,2)
+
+    def draw_control(self,c,command,x,y):
+        i=command//2; d=-1 if command%2==0 else 1
+        c.arrow(x,y,d if i%2==0 else 0,d if i%2 else 0,c.color(i))
 
 
 
@@ -233,6 +280,12 @@ class Maze(Puzzle):
         for p,k in self.keys.items():
             if not self.state[1]&(1<<k): c.cross(*point(p),k+2,2)
         c.cross(*point(self.exit),0,3); c.token(*point(self.state[0]),1)
+
+    def draw_control(self,c,command,x,y):
+        if command<4: c.arrow(x,y,*DIRS[command],c.color(1))
+        else:
+            c.rect(x-2,y-2,1,5,2); c.rect(x+2,y-2,1,5,2)
+            c.rect(x-1,y,3,1,c.color(4))
 
 
 
@@ -316,6 +369,10 @@ class Gravity(Puzzle):
         c.line((53,y+3*self.state[2]),(56,y+6*self.state[2]),0)
         c.line((59,y+3*self.state[2]),(56,y+6*self.state[2]),0)
 
+    def draw_control(self,c,command,x,y):
+        if command<2: c.arrow(x,y,-1 if command==0 else 1,0,c.color(1))
+        else: c.arrow(x,y,0,-self.state[2])
+
 
 
 class Ghost(Puzzle):
@@ -370,6 +427,16 @@ class Ghost(Puzzle):
         c.token(*point(self.state[0]),3)
         for i in range(self.slots): c.rect(51,15+8*i,5,5,0 if i<len(self.state[2]) else 2,True)
 
+    def button_rects(self):
+        return super().button_rects()[:4]+[(34,51,17,10),(54,53,7,7)]
+
+    def draw_control(self,c,command,x,y):
+        if command<4: c.arrow(x,y,*DIRS[command],c.color(3))
+        elif command==4:
+            c.token(x-5,y,3,size=3); c.rect(x+3,y-2,5,5,2,True)
+            c.arrow(x,y,-1,0)
+        else: c.wait(x,y)
+
 
 
 class Timing(Puzzle):
@@ -398,9 +465,23 @@ class Timing(Puzzle):
         c.line((7,30),(7+4*self.m,30),2)
         for p,phase in self.phases.items():
             x=7+4*p; c.token(x,30,1,hollow=self.state[1]!=phase,size=3)
-            c.digit(x-1,18,phase+1,c.color(1))
+            c.line((x,24),(x,27),2)
+            for t in range(self.period):
+                c.rect(x-1,7+3*t,3,2,c.color(1) if t==phase else 2)
+                if t==self.state[1]: c.rect(x,7+3*t,1,1,0)
         c.cross(7+4*self.m,30,0,2); c.token(7+4*self.state[0],30,2)
-        for t in range(self.period): c.rect(8+6*t,42,4,3,0 if self.state[1]==t else 2)
+        # All hazard tracks align with this common clock. Downward progression
+        # and the return edge expose order and wrap-around, without phase IDs.
+        for t in range(self.period): c.rect(56,7+3*t,3,2,0 if t==self.state[1] else 2)
+        last=7+3*(self.period-1)
+        c.line((61,7),(61,last),2); c.arrow(61,last,0,1,2,1)
+        c.line((61,last+2),(54,last+2),2)
+        c.line((54,last+2),(54,5),2); c.line((54,5),(58,5),2)
+        c.arrow(58,6,0,1,2,1)
+
+    def draw_control(self,c,command,x,y):
+        if command==1: c.wait(x,y)
+        else: c.arrow(x,y,1 if command==0 else -1,0,c.color(2))
 
 
 
