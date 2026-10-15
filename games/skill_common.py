@@ -53,6 +53,46 @@ class Canvas:
         self.rect(x-radius,y,2*radius+1,1,self.color(value))
         self.rect(x,y-radius,1,2*radius+1,self.color(value))
 
+    def arrow(self, x, y, dx, dy, color=0, radius=2):
+        # At three pixels a shaft makes a symmetric plus. Use a chevron there.
+        if radius>1: self.line((x-radius*dx,y-radius*dy),(x+radius*dx,y+radius*dy),color)
+        for sign in (-1,1):
+            self.line((x+radius*dx,y+radius*dy),
+                      (x+sign*min(radius,2)*dy,y-sign*min(radius,2)*dx),color)
+
+    def turn(self, x, y, clockwise=True, color=0):
+        d=1 if clockwise else -1
+        for a,b in (((-2,1),(-2,-2)),((-2,-2),(2,-2)),((2,-2),(2,2))):
+            self.line((x+d*a[0],y+a[1]),(x+d*b[0],y+b[1]),color)
+        self.line((x+2*d,y+2),(x,y),color)
+        self.line((x+2*d,y+2),(x+3*d,y),color)
+
+    def play(self, x, y, color=0):
+        for i in range(4): self.rect(x+i,y-3+i,1,7-2*i,color)
+
+    def wait(self, x, y, color=0):
+        self.rect(x-2,y-2,1,5,color); self.rect(x+2,y-2,1,5,color)
+
+    def cycle(self, x, y, count, current=None, step=7):
+        """Ordered actual colour samples, forward arrows and an explicit return."""
+        for v in range(count):
+            self.token(x+step*v,y,v,size=3)
+            if v<count-1: self.arrow(x+step*v+step//2,y,1,0,2,1)
+            if current==v: self.rect(x+step*v-2,y-3,5,7,0,True)
+        end=x+step*(count-1)
+        self.line((end,y+3),(end,y+6),2)
+        self.line((end,y+6),(x,y+6),2)
+        self.arrow(x,y+4,0,-1,2,1)
+
+    def slots(self, x, y, count, capacity, color, *, columns=6, hollow=False):
+        """One separated cell per unit, including empty capacity and exact zero."""
+        if not 0 <= count <= capacity:
+            raise ValueError('quantity outside displayed capacity')
+        for i in range(capacity):
+            xx,yy=x+3*(i%columns),y+3*(i//columns)
+            self.rect(xx,yy,2,2,color if i<count else 2)
+            if hollow and i<count: self.rect(xx,yy,1,1,5)
+
     def label(self,x,y,index,color=0):
         letters=('010101111101101','110101110101110','111100100100111',
                  '110101101101110','111100110100111','111100110100100',
@@ -186,8 +226,18 @@ class Puzzle:
 
     def button_rects(self):
         n = len(self.commands)
-        cols = min(10,n)
-        return [(2+(i%cols)*6, 51+(i//cols)*6, 5, 5) for i in range(n)]
+        return [(1+8*i, 53, 7, 7) for i in range(n)]
+
+    def draw_controls(self,c):
+        for i,(x,y,w,h) in enumerate(self.button_rects()):
+            c.rect(x,y,w,h,2,True)
+            self.draw_control(c,i,x+w//2,y+h//2)
+
+    def draw_control(self,c,command,x,y):
+        if command in self.arrow_commands:
+            c.arrow(x,y,*DIRS[self.arrow_commands.index(command)])
+        else:
+            raise NotImplementedError(f'Missing pictorial control: {self.spec.context}/{command}')
 
     def click(self, x, y):
         if type(x) is not int or type(y) is not int or not (0<=x<64 and 0<=y<64):
@@ -207,9 +257,7 @@ class Puzzle:
     def render(self):
         c = Canvas(self.palette,self.size)
         self.draw(c)
-        for i,(x,y,w,h) in enumerate([] if getattr(self, "board_controls", False) else self.button_rects()):
-            c.rect(x,y,w,h,2,True)
-            c.label(x+1,y,i,self.palette[i%10])
+        if not getattr(self, 'board_controls', False): self.draw_controls(c)
         goals = self.subgoals()
         for i,g in enumerate(goals[:30]):
             c.rect(2+2*i,1,1,2,0 if g['achieved'] else 2)

@@ -208,7 +208,7 @@ class ProtocolTests(unittest.TestCase):
         normal = self.state()
         self.assertNotIn('subgoals',normal)
         self.assertEqual(debug().status_code,403)
-        self.assertEqual(help_info()['help']['controls'],['A: Retract rod 1','B: Extend rod 1'])
+        self.assertEqual(help_info()['help']['controls'],['Retract rod 1 · tap (4, 56)','Extend rod 1 · tap (12, 56)'])
         self.session.debug_subgoals = True
         self.assertTrue(help_info()['debug_available'])
         labels = debug().get_json()

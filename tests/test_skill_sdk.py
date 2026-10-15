@@ -179,7 +179,7 @@ class OfflineSDKTests(unittest.TestCase):
                 steps += 3
                 result = env.step(GameAction.ACTION5)
                 counts = [np.count_nonzero(f[18:22,2:54] == p.palette[0]) for f in result.frame[:3]]
-                self.assertEqual(counts,[4,8,12] if p.size<5 else [9,18,27])
+                self.assertEqual(counts,[4,8,12])  # separated 2×2 emitted units in symbols-v2
             else:
                 # Turn every branch on. Each source reaches the next lane in
                 # sequence. Inspect native outlet pixels, not helper output.

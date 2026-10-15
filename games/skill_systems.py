@@ -5,6 +5,7 @@ from games.skill_common import Canvas, DIRS, Puzzle, condition
 
 
 class Dials(Puzzle):
+    board_controls=True
     def setup(self):
         self.n = self.level
         self.mod = 2 if self.level <= 2 else min(4,2+(self.level-1)//2)
@@ -28,24 +29,28 @@ class Dials(Puzzle):
         return [condition('anchor',s[0],self.target[0])] + [
             condition(f'link-{i}',s[i] == s[i+1],equal) for i,equal in enumerate(self.equal)]
 
+    def button_rects(self): return [(4+10*i,27,8,8) for i in range(self.n)]
+
     def draw(self,c):
-        if not self.relational:
-            super().draw(c)
-        else:
-            c.token(7,15,self.target[0],True,size=7)
-            for i,value in enumerate(self.state):
-                c.token(7+9*i,31,value)
-                if i < self.n-1:
-                    c.rect(11+9*i,20,3,1,0)
-                    if self.equal[i]: c.rect(11+9*i,22,3,1,0)
-                    else: c.line((11+9*i,23),(13+9*i,19),0)
-        for v in range(self.mod): c.token(5+6*v,45,v,size=3)
-        if self.coupled:
-            for i in range(self.n-1): c.line((6+7*i,34),(13+7*i,34),2)
+        for i,(x,y,w,h) in enumerate(self.button_rects()):
+            if not self.relational or i==0: c.token(x+4,10,self.target[i],True,size=7)
+            c.rect(x,y,w,h,2,True); c.token(x+4,y+4,self.state[i])
+            if self.relational and i<self.n-1:
+                # A pair of concrete samples on the link, not an equality sign.
+                c.line((x+4,25),(x+4,20),2); c.line((x+14,25),(x+14,20),2)
+                c.line((x+4,20),(x+14,20),2)
+                c.token(x+7,20,0,size=3)
+                c.token(x+11,20,0 if self.equal[i] else 1,size=3)
+            if self.coupled and i<self.n-1:
+                c.line((x+7,36),(x+7,40),2)
+                c.line((x+7,40),(x+14,40),2)
+                c.arrow(x+14,37,0,-1,0,1)
+        c.cycle(7,47,self.mod)
 
 
 
 class Keys(Puzzle):
+    board_controls=True
     def setup(self):
         self.n = min(3,self.level)
         self.mod = 2 if self.level < 3 else self.level+1
@@ -63,13 +68,35 @@ class Keys(Puzzle):
             s[command]=(s[command]+1)%self.mod
         return tuple(s)
 
+    def button_rects(self):
+        return [(6+20*i,25,9,9) for i in range(self.n)] + ([(54,42,9,17)] if len(self.commands)>self.n else [])
+
     def draw(self,c):
-        super().draw(c)
-        for i in range(self.n):
-            c.digit(5+7*i,36,i+1)
+        for i,(x,y,w,h) in enumerate(self.button_rects()[:self.n]):
+            c.token(x+4,11,self.target[i],True,size=9)
+            c.line((x+4,17),(x+4,22),2)
+            c.rect(x,y,w,h,2,True); c.token(x+4,y+4,self.state[i])
             if self.gated and i:
-                c.token(6+7*i,44,self.mod-1,True,size=5)
-        c.rect(1,10,7*self.n+6,22,2,True)
+                # The predecessor's enabling sample lives ON its outgoing link,
+                # below the controls and separate from all final goal outlines.
+                previous=x-16
+                c.line((previous+3,35),(previous+3,39),2)
+                c.line((previous+3,39),(x+4,39),2)
+                c.token(x-6,39,self.mod-1,size=5)
+                enabled=self.state[i-1]==self.mod-1
+                c.arrow(x+4,36,0,-1,0 if enabled else 2,1)
+                if not enabled: c.rect(x+2,35,5,1,2)
+        c.cycle(5,49,self.mod)
+        if len(self.commands)>self.n:
+            # Connect the actual first/last objects even when their colours
+            # coincide with the middle attribute. Samples alone are ambiguous.
+            c.line((10,35),(10,39),2); c.line((10,39),(58,39),2)
+            c.line((58,39),(58,41),2)
+            c.line((50,35),(50,55),2); c.line((50,55),(54,55),2)
+            x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True)
+            c.token(x+4,y+3,self.state[0],size=3)
+            c.arrow(x+3,y+7,0,1); c.arrow(x+6,y+7,0,-1)
+            c.token(x+4,y+13,self.state[-1],size=3)
 
 
 
@@ -98,9 +125,14 @@ class Paint(Puzzle):
         for k,s in enumerate((self.target,self.state)):
             for i,v in enumerate(s): c.rect(4+30*k+(i%n)*unit,13+(i//n)*unit,unit-1,unit-1,c.color(v))
             c.rect(2+30*k,10,unit*n+2,unit*n+5,0 if k==0 else 2,True)
-        for i,mask in enumerate(self.masks):
-            c.rect(4+11*i,42,8,5,2,True)
-            for j in mask: c.rect(5+11*i+j%n,43+j//n,1,1,0)
+    def button_rects(self): return [(2+12*(i//2),44+8*(i%2),10,7) for i in range(len(self.commands))]
+
+    def draw_control(self,c,command,x,y):
+        # Each button carries the actual affected region and its paint colour.
+        mask=self.masks[command//2]
+        for j in range(self.n*self.n):
+            c.rect(x-4+j%self.n,y-2+j//self.n,1,1,c.color(command%2+1) if j in mask else 2)
+        c.rect(x+2,y-1,2,3,c.color(command%2+1))
 
 
 
@@ -108,7 +140,7 @@ class Loops(Puzzle):
     def setup(self):
         self.n=min(8,1+self.level)
         self.cycles=(tuple(range(self.n)),tuple(range(min(3,self.n))))
-        self.commands=('Loop A forward','Loop A backward','Loop B forward','Loop B backward')
+        self.commands=('Whole loop forward','Whole loop backward','Short loop forward','Short loop backward')
         self.state=tuple(range(self.n))
         self.reachable_target(2*self.level-1)
 
@@ -122,6 +154,18 @@ class Loops(Puzzle):
         c.line((6,36),(6+7*(self.n-1),36),c.color(8))
         c.line((6,40),(6+7*(len(self.cycles[1])-1),40),c.color(9))
         c.rect(4,32,3,9,2,True)
+
+    def button_rects(self): return [(3+11*(i%2)+31*(i//2),48,9,11) for i in range(4)]
+
+    def draw_controls(self,c):
+        for i,(x,y,w,h) in enumerate(self.button_rects()):
+            color=c.color(8+i//2)
+            lane=42+2*(i//2)
+            c.line((6,36+4*(i//2)),(6,lane),color)
+            c.line((6,lane),(x+w//2,lane),color)
+            c.line((x+w//2,lane),(x+w//2,y),color)
+            c.rect(x,y,w,h,color,True)
+            c.turn(x+w//2,y+h//2,i%2==0)
 
 
 
@@ -169,7 +213,8 @@ class Pegs(Puzzle):
             v=self.state[0][i]; c.rect(x,y,w,h,2,True)
             if v: c.token(x+w//2,y+h//2,v-1)
             if i==self.state[1]: c.rect(x,y,w,h,0,True)
-        c.token(54,15,0,size=3); c.digit(53,23,1)
+        c.rect(50,7,11,8,0,True); c.token(55,11,0,True,size=5)
+        c.slots(51,20,self.state[0].count(1),self.level+1,c.color(0),columns=3)
 
 
 
@@ -194,6 +239,10 @@ class Agents(Puzzle):
             c.token(6+6*self.state[i],y,i)
         c.rect(54,32,5,5,2,True)  # The second mover is autonomous, not selected.
 
+    def draw_control(self,c,command,x,y):
+        if command<2: c.arrow(x,y,-1 if command==0 else 1,0,c.color(0))
+        else: c.wait(x,y)
+
 
 
 class Tanks(Puzzle):
@@ -216,10 +265,16 @@ class Tanks(Puzzle):
             c.rect(x,bottom-unit*cap,width,unit*cap+1,2,True)
             c.rect(x+1,bottom-unit*self.state[i],width-2,unit*self.state[i],c.color(0))
             c.line((x-1,bottom-unit*self.target[i]),(x+width,bottom-unit*self.target[i]),c.color(1))
+            for slot in range(cap): c.rect(x,bottom-unit*slot,2,1,0)
+
+    def button_rects(self): return [(11+14*(i//2),47+8*(i%2),11,7) for i in range(len(self.commands))]
+
+    def draw_control(self,c,command,x,y): c.arrow(x,y,1 if command%2==0 else -1,0,c.color(0))
 
 
 
 class Flow(Puzzle):
+    board_controls=True
     def setup(self):
         self.n=self.level
         self.split=self.spec.skill=='bifurcacion'
@@ -274,6 +329,12 @@ class Flow(Puzzle):
             x=9+7*i; y=10+5*i
             c.line((x,y),(x+4,y+5),c.color(i) if bit else 2)
             c.token(x+2,y+2,i,hollow=not bit,size=self.size)
+            c.rect(x,y,5,5,0,True)
+        x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True)
+        c.play(x+3,y+h//2)
+        c.line((3,45),(x-2,45),2); c.arrow(x-2,45,1,0,2,1)
+
+    def button_rects(self): return [(9+7*i,10+5*i,5,5) for i in range(self.n)]+[(51,45,10,14)]
 
 
 
@@ -300,12 +361,18 @@ class Merge(Puzzle):
 
     def projection(self,state): return tuple(state[0].count(t) for t in range(5))
 
-    def button_rects(self): return [(5+(i%6)*9,23+(i//6)*13,8,9) for i in range(self.n)]
+    def button_rects(self): return [(5+(i%6)*9,42+(i//6)*10,8,9) for i in range(self.n)]
 
     def draw(self,c):
         for t,count in enumerate(self.target):
-            x=7+11*t; c.token(x,10,t,True,size=3+t)
-            c.digit(x-1,15,count)
+            x=2+12*t
+            c.token(x+5,8,t,True,size=3+t)
+            # Fixed-capacity trays display every type, including exact zero.
+            # Hollow upper units are required; solid lower units are present.
+            c.rect(x,12,11,14,0,True)
+            c.slots(x+1,14,count,self.n,c.color(t),columns=3,hollow=True)
+            c.rect(x,27,11,14,2,True)
+            c.slots(x+1,29,self.state[0].count(t),self.n,c.color(t),columns=3)
         for i,(x,y,w,h) in enumerate(self.button_rects()):
             v=self.state[0][i]
             if v>=0: c.token(x+4,y+4,v,size=min(7,self.size+v))

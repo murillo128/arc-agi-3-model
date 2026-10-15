@@ -33,13 +33,17 @@ def main():
               'originals_dir':str(args.originals_dir) if args.originals_dir else None}
     (output/'environment.json').write_text(json.dumps(metadata,indent=2)+'\n')
     suite=unittest.TestSuite()
-    for pattern in ('test_foundations.py','test_foundation_sdk.py','test_skill_curriculum.py','test_skill_sdk.py','test_square_cross*.py','test_play_game.py'):
+    for pattern in ('test_foundations.py','test_foundation_sdk.py','test_skill_curriculum.py','test_skill_sdk.py','test_square_cross*.py','test_play_game.py','test_symbolic_presentation.py'):
         suite.addTests(unittest.defaultTestLoader.discover(str(ROOT/'tests'),pattern=pattern))
     with (output/'rules-sdk-protocol.log').open('w') as log:
         result=unittest.TextTestRunner(stream=log,verbosity=2).run(suite)
     print(f'Rules/SDK/protocol: {result.testsRun} tests, {len(result.skipped)} skips',flush=True)
     if not result.wasSuccessful() or result.skipped:
         raise SystemExit(f'Required validation failed; see {output}/rules-sdk-protocol.log')
+    with (output/'presentation-replay.log').open('w') as log:
+        result=subprocess.run([sys.executable,str(ROOT/'tests/presentation_replay.py'),'--images'],cwd=ROOT,stdout=log,stderr=subprocess.STDOUT)
+    if result.returncode: raise SystemExit(f'Logical/pixel replay failed; see {output}/presentation-replay.log')
+    print('Presentation replay: PASS',flush=True)
     for name in ('play_game_browser','skill_browser','foundation_browser'):
         command=[sys.executable,'-u',str(ROOT/'tests'/f'{name}.py')]
         if args.originals_dir: command+=['--originals-dir',str(args.originals_dir.resolve())]

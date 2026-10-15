@@ -73,17 +73,19 @@ same seed rather than silently sampling a different puzzle.
 
 Frames are 64 × 64 palette arrays. Top pips show current subgoal satisfaction and
 the bottom bar shows remaining budget. A satisfied pip can become unsatisfied.
-Panel buttons read A, B, C, ... left-to-right, then top-to-bottom, in the command
-order printed by `skill_catalog.py --game <id>`. Spatial contexts also expose
-arrow actions. Flow/Program expose Space to execute; Ghost exposes it to record.
+Controls depict their object, affected region or movement directly.
+`skill_catalog.py --game <id>` reports semantic command effects and their native
+hitboxes for human inspection. Spatial contexts also expose arrow actions. Flow/Program expose Space to execute; Ghost exposes it to record.
 Board-control games are clicked directly: pegs and landings, blocks, answer
 glyphs, sigil dots or cards. There is no dragging or universal ACTION5 meaning.
 
 For token panels, hollow upper tokens are goals and lower solid tokens are live
 values. Paint uses a left reference and right canvas. Crosses mark geometry or
 position targets; tank lines mark target heights. Merge headers specify **exact**
-tier counts, not minimum counts. Command legends are human documentation, not
-additional actor observations. Programs use 0=no-op, 1/2=emit a symbol, 3=call F.
+tier quantities in hollow required / solid present trays, including exact zero. Command legends are human documentation, not
+additional actor observations. Program boards show switch configurations and
+concrete outputs, with nested brackets for call/return. Internal opcodes remain
+0=no-op, 1/2=emit a symbol, 3=call F; decimal reading is not required by the board.
 F(d) emits d first symbols then d second symbols through actual nested call/return
 execution. In the Recursion profile, slots instead pass a depth argument to F:
 0=no call, 1–3=depth. Execution is bounded and never uses Python eval/exec.
@@ -174,3 +176,8 @@ Issue #60 adds required real SDK/browser acceptance and fixes late-level structu
 plateaus in Keys, Linkage, Sigils and recursive programs, plus large-board control
 overlap. See [the validation report](../../docs/synthetic-validation.md) for exact
 coverage, reproduction, environment and the separate persistent-deployment status.
+
+The `symbols-v2` presentation revision preserves semantic-command replays but
+changes 54 profiles’ pixels and some control coordinates. See the complete
+[inventory, migration mapping and validation evidence](../../docs/synthetic-validation.md#non-linguistic-presentation-revision-issue-64).
+Historical observations and trained visual features are not rewritten.

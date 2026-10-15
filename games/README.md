@@ -238,3 +238,14 @@ an instance. `--teacher-info` is an explicit privileged inspection path, separat
 from ordinary actor frames. The existing opt-in web inspector works unchanged.
 See [foundation progression and validation](../docs/synthetic-validation.md#foundation-tier-issue-62)
 for structural parameters, action bounds, test commands, and evidence limits.
+
+## Native symbolic presentation
+
+All authored synthetic frames use object, relation, quantity and transformation
+cues without intentional alphabetic or decimal labels. The `symbols-v2` revision
+changes 54 skill profiles while retaining the foundation tier, genuine symbolic
+puzzles, all 70 entries and their 418 levels. Human HELP remains outside the
+canvas and obtains exact control locations from the native renderer. See the
+[revision inventory and replay/visual evidence](../docs/synthetic-validation.md#non-linguistic-presentation-revision-issue-64)
+for coordinate migration and the limits of validation. Live refresh follows
+independent review and merge; an isolated test server is not deployment.
