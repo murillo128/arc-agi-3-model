@@ -422,3 +422,26 @@ and the focused HELP protocol test. Red/green logs are retained in
 `artifacts/symbols-v2/reflection-*.log`. Browser coverage also exercises a rotated
 and reflected level-three piece through desktop clicks/mobile touches, captures
 both native/display states with HELP closed, and checks the updated control text.
+
+The complete on-demand acceptance command passed again on clean implementation
+`8b92d67f10b2e35368390985078fb7dbb8af72ac`: 119 tests, zero skips, 64.344 seconds
+for the rules/SDK/protocol suite; all 70 logical digests equal the original
+baseline over 1,672 SDK level completions and 22,305 native frames; all 16
+unaffected pixel digests remain equal. All three real Chromium suites passed,
+including desktop/mobile reflection input and display, 29 skill context WINs
+per viewport, eight foundation WINs per viewport, and the authorized original
+cache. No unexpected console/network errors were reported. This result record
+is the only subsequent change; executable code and tests retain the tested
+revision. Current logs and environment metadata are in
+`artifacts/synthetic-validation/`; the aggregate console log is
+`artifacts/symbols-v2/acceptance-reflection.log`.
+
+Visual inspection covered the four orientations before/after reflection in
+`artifacts/symbols-v2/reflection-orientations.png` and the new desktop/mobile
+`symbols-reflection-horizontal-*` / `symbols-reflection-flipped-*` screenshots.
+The cue agrees with the visible axis; this is not measured comprehension.
+Dependencies remain as recorded above. The resumed launcher again confirmed
+`gpt-6-astra` / `xhigh`. The active service and deployment record still identify
+the reviewed `06e7eb3e8c54dee071a8cfbec3d03d2a9f0a25da` release on port 8001;
+live refresh remains pending review/merge. No training or deployment mutation
+was performed.
