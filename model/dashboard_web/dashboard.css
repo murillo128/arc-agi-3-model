@@ -48,6 +48,9 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .series-0 { color: #77dabb; } .series-1 { color: #f4b979; } .series-2 { color: #a9a6ef; } .series-3 { color: #94a7aa; }
 .subgoal-dashboard svg { display: block; width: 100%; height: auto; }
 .subgoal-dashboard canvas.goal-image { width: 256px; max-width: 100%; height: auto; image-rendering: pixelated; }
+.subgoal-dashboard .fixed-evaluation { margin: 20px 0 28px; }
+.subgoal-dashboard .fixed-evaluation svg { max-width: 1000px; margin: auto; }
+.subgoal-dashboard .series-muted { color: #94a7aa; }
 .plot { height: 240px; position: relative; }
 canvas { display: block; width: 100%; height: 100%; }
 .tooltip { position: absolute; top: 8px; left: 64px; max-width: calc(100% - 80px); background: #0d1515f2; color: #edf8f2; padding: 10px 14px; border: 1px solid #40504b; border-radius: 6px; font-size: 11px; line-height: 1.7; white-space: pre-line; pointer-events: none; }

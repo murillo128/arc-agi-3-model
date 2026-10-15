@@ -14,11 +14,12 @@ function element() {
     getContext() {return {clearRect(){}, fillRect(){}};}};
 }
 const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],element()]));
-const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:.1},
+const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:.1,
+    evaluation_pairs:[{game:'a',level:1},{game:'b',level:1}]},
   progress:{phase:'training',actions:32,total_actions:65536,predictor_updates:1,path_updates:0,tps:2},
   curves:[{actions:1,predictor_loss:2,path_loss:null,tps:2,counts:{wrong:5,union:10,invented:2,missed:3}},
     {actions:32,predictor_loss:null,path_loss:0,tps:2,counts:{wrong:15,union:90,invented:10,missed:5}}],
-  episodes:[{end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
+  episodes:[{game:'a',level:1,end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
   evaluations:[]};
 let offline=false;
 const context=vm.createContext({console,AbortSignal,setTimeout(){},
@@ -36,9 +37,12 @@ const text=id=>nodes.get(id).textContent;
   // Aggregate pixel counts, not mean of the two error percentages (50%, 16.7%).
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].error',context),20);
   assert.equal(vm.runInContext('blocks(fixture.curves)[0].count.invented',context),12);
+  // No moving pixels is absence of delta evidence, not a measured 0% error.
+  assert.equal(vm.runInContext('blocks([{actions:32,counts:{wrong:0,union:0,changed:0}}])[0].error',context),null);
   assert.equal(nodes.get('changes-legend').children.length,4,'one aggregate series per error kind');
   const circles=id=>nodes.get(id).children.filter(n=>n.r===2);
-  assert.equal(circles('loss').length,1,'missing loss is not a fabricated zero');
+  assert.equal(circles('loss').filter(n=>n.children[0].textContent.startsWith('Actualización individual:')).length,1,'missing loss is not a fabricated zero');
+  assert.match(circles('loss')[0].children[0].textContent,/: 2 ·/,'mean includes only recorded updates');
   assert.match(circles('path-loss')[0].children[0].textContent,/Coste restante: 0/,'a genuine zero is retained');
   assert.equal(text('subgoals'),'1 / 1');
   nodes.get('tab-path').listeners.click();
@@ -53,9 +57,64 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('actions'),'32','evaluation does not advance the training counter');
   assert.match(text('progress'),/partida 1\/2 · acción 7/);
   assert.equal(nodes.get('evaluation-rows').children[0].children[6].textContent,'20 %');
+
+  // Only the same complete, fixed-random development coverage is comparable.
+  // Different pixel/action counts must not change each level's equal weight.
+  const evaluation=(actions,game,error,extra={})=>({actions,split:'dev',policy:'random',game,level:1,
+    episodes:2,delta_error:error,real_actions:10,...extra});
+  report.evaluations=[evaluation(500,'a',.1),evaluation(500,'b',.5,{real_actions:1000}),
+    evaluation(500,'a',1,{policy:'path_mpc'}),evaluation(1000,'a',.2),
+    evaluation(2000,'a',.9,{split:'final'}),evaluation(2000,'b',.9,{split:'final'})];
+  await vm.runInContext('poll()',context);
+  assert.equal(circles('fixed-delta').length,1,'partial sweeps and new-seed final evaluations are not comparable points');
+  assert.match(circles('fixed-delta')[0].children[0].textContent,/: 30 · acción 500 · 2 pares · 4 partidas/);
+  assert.match(text('fixed-summary'),/En curso: 1\/2 pares/);
+  report.evaluations.push(evaluation(1000,'b',.2));
+  await vm.runInContext('poll()',context);
+  assert.equal(circles('fixed-delta').length,2);
+  assert.match(circles('fixed-delta')[1].children[0].textContent,/: 20 · acción 1000/);
+  assert.doesNotMatch(text('fixed-summary'),/En curso/);
+
+  // Reports already being written by a running trainer have no pair metadata.
+  delete report.config.evaluation_pairs;
+  await vm.runInContext('poll()',context);
+  assert.equal(circles('fixed-delta').length,2,'live legacy reports retain the fixed evaluation history');
+
+  // Rolling ratios use summed pixels and exact action windows, not percentages
+  // or a number of optimizer updates. A real zero loss remains a measurement.
+  report.curves=[{actions:1,counts:{wrong:50,union:50},predictor_loss:16},
+    {actions:512,counts:{wrong:0,union:50},predictor_loss:0},
+    {actions:513,counts:{wrong:1,union:50},predictor_loss:null}];
+  assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).error',context),1);
+  assert.equal(vm.runInContext('trend(fixture.curves,blocks(fixture.curves)).at(-1).loss',context),0);
+
+  report.curves=[{actions:32,counts:{wrong:5,union:10,changed:10}},
+    {actions:64,counts:{wrong:0,union:0,changed:0}},
+    {actions:96,counts:{wrong:0,union:10,changed:10}},
+    {actions:128,counts:null}];
+  await vm.runInContext('poll()',context);
+  const rawLines=nodes.get('delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string');
+  assert.equal(rawLines.length,2,'no line bridges the no-change gap');
+  assert.ok(rawLines.every(n=>n.points.split(' ').length===1));
+  assert.equal(nodes.get('delta').children.filter(n=>n.height===5).length,1,'no-change is marked separately from missing data');
+  assert.match(text('interaction-summary'),/1 de 3 acciones medidas sin cambios/);
+  const rawTitles=circles('delta').map(n=>n.children[0].textContent).filter(s=>s.startsWith('Bloque'));
+  assert.equal(rawTitles.length,2);
+  assert.ok(rawTitles.some(s=>s.includes(': 0 · acción 96')),'a perfect prediction of actual changes remains 0%');
+
+  report.curves=[{actions:4096,counts:{wrong:0,union:0,changed:0}}];
+  await vm.runInContext('poll()',context);
+  assert.equal(circles('delta').length,0,'no-change-only window has no fabricated percentage');
+  assert.equal(nodes.get('delta').children.filter(n=>n.height===5).length,1);
+  assert.equal(circles('fixed-delta').length,2,'fixed evaluation history survives beyond the interaction window');
+  report.curves=[{actions:32,counts:{wrong:4,union:4,changed:0}}];
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('delta').children.filter(n=>n.height===5).length,0,'invented changes are errors even when the real image did not move');
+  assert.match(circles('delta')[0].children[0].textContent,/: 100 ·/);
   report.curves=[];report.episodes=[];report.evaluations=[];report.progress={phase:'loading',actions:0};
   await vm.runInContext('poll()',context);
   assert.equal(circles('delta').length,0,'no points borrowed from a previous run');
+  assert.equal(circles('fixed-delta').length,0,'fixed evaluations reset with the selected run');
   assert.equal(nodes.get('evaluation-rows').children.length,0);
   offline=true;await vm.runInContext('poll()',context);
   assert.match(text('connection'),/Sin conexión.*offline/);

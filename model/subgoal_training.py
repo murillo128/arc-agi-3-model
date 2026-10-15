@@ -184,7 +184,10 @@ def main(argv=None):
     torch.set_num_threads(4)
     torch.set_float32_matmul_precision('high')
     torch.manual_seed(args.seed)
-    report = dict(kind='synthetic_subgoals', status='running', config={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+    pairs = [(game, level) for game, n in SYNTHETIC_LEVELS.items() for level in range(1, n + 1)]
+    report_config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
+    report_config['evaluation_pairs'] = [dict(game=game, level=level) for game, level in pairs]
+    report = dict(kind='synthetic_subgoals', status='running', config=report_config,
                   progress={'phase': 'loading', 'actions': 0, 'total_actions': args.actions}, curves=[], episodes=[], evaluations=[])
     last_write, started = 0., time.monotonic()
 
@@ -214,7 +217,6 @@ def main(argv=None):
         del source
         world = OnlinePredictor(engine, args.predictor_error, args.learning_rate)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
-        pairs = [(game, level) for game, n in SYNTHETIC_LEVELS.items() for level in range(1, n + 1)]
         factories = {g: Factory(g, Path(__file__).resolve().parents[1] / 'games') for g in SYNTHETIC_LEVELS}
         counts, actions, episode_index = dict.fromkeys(pairs, 0), 0, 0
         next_eval, next_checkpoint = args.evaluate_every, args.checkpoint_every

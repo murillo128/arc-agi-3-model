@@ -61,6 +61,17 @@ aprendizaje y evaluación comparten la ejecución. Se muestran error previo a la
 actualización, gate, optimizadores separados, subobjetivo visual, coste, reward,
 TPS y evaluaciones por nivel. No mezcla las campañas antiguas.
 
+La curva principal utiliza solo evaluaciones de desarrollo completas con política
+aleatoria: mismas partidas y acciones en cada punto, media con igual peso por par
+juego/nivel, conservando toda la ejecución. No mezcla la política del planner ni
+la confirmación con semillas distintas. Dos partidas por par son una señal inicial.
+El diagnóstico durante la interacción conserva las últimas 4.096 acciones, con
+datos por bloques de 32 y una tendencia móvil de hasta 512 acciones. El error de
+la tendencia es la suma de errores dividida por la suma de uniones de deltas,
+no la media de porcentajes. Los bloques sin cambios reales ni predichos se marcan
+aparte y dejan un hueco en la serie original. La pérdida solo promedia las
+actualizaciones realizadas; una acción sin actualización no es una pérdida cero.
+
 ```sh
 .venv/bin/python -m model.dashboard --subgoal-report model/runs/subgoals/current/report.json
 ```
