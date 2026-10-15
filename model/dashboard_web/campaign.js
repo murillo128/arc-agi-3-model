@@ -241,6 +241,9 @@ function renderLearningProbe(probe) {
     : streaming ? `${fmt(p.actions)} / ${fmt(p.total_actions)} acciones · ${fmt(p.updates)} actualizaciones`
     : `${fmt(p.updates)} / ${fmt(p.total_updates)} actualizaciones`;
   $('probe-status').textContent = probe.status === 'failed' ? `Error: ${probe.error}` : `${title(p.variant)} · ${phase} · ${progress}`;
+  if (streaming && probe.status === 'complete') {
+    $('probe-status').textContent = `Ensayo terminado · ${fmt(probe.coverage?.actions)} acciones nuevas · predictor y V/Q evaluados`;
+  }
   for (const row of probe.results || []) {
     if (!finite(row.best?.selection_error)) continue;
     const tr = document.createElement('tr');

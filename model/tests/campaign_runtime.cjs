@@ -118,8 +118,10 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   await vm.runInContext('pollCampaign()', context);
   assert.match(text('campaign-connection'), /sin datos recientes/);
   report.learning_probe.status = 'complete';
+  report.learning_probe.coverage.actions = 4096;
   await vm.runInContext('pollCampaign()', context);
   assert.doesNotMatch(text('campaign-connection'), /sin datos recientes/);
+  assert.match(text('probe-status'), /Ensayo terminado.*4096 acciones nuevas/);
   report.status = 'complete';
   report.final = {reference: {win_rate: .5, wins: 2, episodes: 4}, selected: {win_rate: .75, wins: 3, episodes: 4}};
   await vm.runInContext('pollCampaign()', context);
