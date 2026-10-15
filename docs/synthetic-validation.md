@@ -365,3 +365,33 @@ explicit exchange/arm connections when object colours coincide. Browser screensh
 HELP/debug closed for introductory and advanced context states, including every
 program variant. These are engineering checks and visual inspections, not a
 usability study, an OCR score, measured comprehension or a benchmark improvement.
+
+### Executed acceptance, 2026-10-15
+
+The complete on-demand command passed against clean implementation commit
+`2f5c64aa41010becfbc7b1a3c6c1f95253f24d51`. This result record is a documentation-only
+follow-up; executable code, fixtures and tests are unchanged from that target.
+
+| Executed boundary | Result |
+| --- | --- |
+| Rules / SDK / protocol / literal presentation | 117 tests passed, zero skips, 66.633 seconds |
+| Baseline semantic replay | All 70 IDs matched; 1,672 sequential SDK level completions across seeds 0, 1, 42, 123; 22,305 native frames observed |
+| Unaffected pixel replay | All 16 unchanged IDs matched baseline hashes; precisely the 54 inventoried skill IDs changed pixels |
+| Regression proof | All ten presentation test families failed on the isolated baseline for assertion-level visual defects; all passed on the implementation |
+| Existing play browser suite | Passed real Chromium acceptance, including native/display pixels, source switching, keyboard/touch, action gating and epoch/atomic switching regressions |
+| Expanded skill browser suite | Passed desktop and mobile: every synthetic entry loaded/actioned/reset; 29 context variants each completed levels 1–6; HELP/inspector, animations, reduced motion and cancellation passed |
+| Foundation browser suite | Passed desktop and mobile: eight six-level WINs per viewport, solution bounds, controls, privacy, Undo/reset and still mismatch reveals under reduced motion |
+| Authorized original-cache smoke | ft09, ls20 and vc33 loaded, took legal actions, reset and switched back to synthetic on both viewports; no code downloaded or edited |
+| Visual evidence | 70 before and 70 after image matrices, all-level appearance extremes, native transient archives and actual browser screenshots with HELP/debug closed; selected images inspected as described above |
+
+The passing browser runners assert no unexpected page, console, request or HTTP
+errors. They do not measure human/agent understanding. Runtime dependencies were
+Python 3.12.14, arc-agi 0.9.9, ARCEngine 0.9.3, NumPy 2.5.4, Playwright 1.63.0 and
+Chromium 153.0.8010.12 on CPU. The pinned project SDK requirement is unchanged.
+
+Detailed logs and the clean tested revision/dependency record are under
+`artifacts/synthetic-validation/`; native before/after matrices, compressed frame
+archives and regression red/green logs are under `artifacts/symbols-v2/`.
+Browser captures are under `artifacts/square-cross/`. These remain ignored.
+No live release was refreshed: independent review/merge and actual durable
+endpoint verification remain separate from this successful isolated acceptance.
