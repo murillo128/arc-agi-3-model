@@ -1,0 +1,12 @@
+{
+  "game_id": "sy34-v1",
+  "title": "Skills: Conditional capture",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "pegs",
+    "reescritura_condicional"
+  ],
+  "default_fps": 10
+}

@@ -1,0 +1,12 @@
+{
+  "game_id": "sy23-v1",
+  "title": "Skills: Parts move the whole",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "centroid",
+    "relaciones_parte_todo"
+  ],
+  "default_fps": 10
+}

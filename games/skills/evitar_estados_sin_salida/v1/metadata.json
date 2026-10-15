@@ -1,0 +1,12 @@
+{
+  "game_id": "sy33-v1",
+  "title": "Skills: Do not strand a peg",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "pegs",
+    "evitar_estados_sin_salida"
+  ],
+  "default_fps": 10
+}

@@ -1,0 +1,12 @@
+{
+  "game_id": "sy21-v1",
+  "title": "Skills: Use a wall as a tool",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "twins",
+    "obstaculos_como_herramientas"
+  ],
+  "default_fps": 10
+}

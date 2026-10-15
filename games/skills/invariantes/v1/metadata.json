@@ -1,0 +1,12 @@
+{
+  "game_id": "sy19-v1",
+  "title": "Skills: Mirrored invariants",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "twins",
+    "invariantes"
+  ],
+  "default_fps": 10
+}

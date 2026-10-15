@@ -1,0 +1,12 @@
+{
+  "game_id": "sy49-v1",
+  "title": "Skills: Draw an operator",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "sigils",
+    "simbolos_y_significado"
+  ],
+  "default_fps": 10
+}

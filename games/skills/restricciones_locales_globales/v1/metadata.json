@@ -1,0 +1,12 @@
+{
+  "game_id": "sy03-v1",
+  "title": "Skills: Linked constraints",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "dials",
+    "restricciones_locales_globales"
+  ],
+  "default_fps": 10
+}

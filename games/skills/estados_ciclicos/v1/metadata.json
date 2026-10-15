@@ -1,0 +1,12 @@
+{
+  "game_id": "sy04-v1",
+  "title": "Skills: Cyclic states",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "dials",
+    "estados_ciclicos"
+  ],
+  "default_fps": 10
+}

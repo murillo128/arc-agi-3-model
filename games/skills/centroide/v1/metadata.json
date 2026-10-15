@@ -1,0 +1,12 @@
+{
+  "game_id": "sy22-v1",
+  "title": "Skills: Move the centroid",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "centroid",
+    "centroide"
+  ],
+  "default_fps": 10
+}

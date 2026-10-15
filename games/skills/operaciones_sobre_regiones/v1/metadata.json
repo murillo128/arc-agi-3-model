@@ -1,0 +1,12 @@
+{
+  "game_id": "sy17-v1",
+  "title": "Skills: Paint regions",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "paint",
+    "operaciones_sobre_regiones"
+  ],
+  "default_fps": 10
+}

@@ -1,0 +1,12 @@
+{
+  "game_id": "sy35-v1",
+  "title": "Skills: Contact and impulse",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "boxes",
+    "dinamica_por_contacto"
+  ],
+  "default_fps": 10
+}

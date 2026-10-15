@@ -1,0 +1,12 @@
+{
+  "game_id": "sy39-v1",
+  "title": "Skills: Arrive together",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "agents",
+    "sincronizacion"
+  ],
+  "default_fps": 10
+}

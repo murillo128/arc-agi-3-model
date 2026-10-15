@@ -1,0 +1,12 @@
+{
+  "game_id": "sy27-v1",
+  "title": "Skills: Switchable bridges",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "maze",
+    "topologia_dinamica"
+  ],
+  "default_fps": 10
+}

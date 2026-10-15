@@ -1,0 +1,12 @@
+{
+  "game_id": "sy44-v1",
+  "title": "Skills: Predict the entire flow",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "flow",
+    "simulacion_causal"
+  ],
+  "default_fps": 10
+}

@@ -1,0 +1,12 @@
+{
+  "game_id": "sy40-v1",
+  "title": "Skills: Transfer, do not create",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "tanks",
+    "conservacion_y_transferencia"
+  ],
+  "default_fps": 10
+}

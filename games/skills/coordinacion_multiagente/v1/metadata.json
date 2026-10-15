@@ -1,0 +1,12 @@
+{
+  "game_id": "sy37-v1",
+  "title": "Skills: Coordinate two movers",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "agents",
+    "coordinacion_multiagente"
+  ],
+  "default_fps": 10
+}

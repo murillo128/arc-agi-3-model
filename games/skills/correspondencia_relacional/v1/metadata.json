@@ -1,0 +1,12 @@
+{
+  "game_id": "sy10-v1",
+  "title": "Skills: Relational matching",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "rules",
+    "correspondencia_relacional"
+  ],
+  "default_fps": 10
+}

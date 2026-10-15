@@ -1,0 +1,12 @@
+{
+  "game_id": "sy60-v1",
+  "title": "Skills: Move before the hazard",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "timing",
+    "orden_de_eventos"
+  ],
+  "default_fps": 10
+}

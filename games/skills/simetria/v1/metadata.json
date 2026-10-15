@@ -1,0 +1,12 @@
+{
+  "game_id": "sy12-v1",
+  "title": "Skills: Mirror images",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "transform",
+    "simetria"
+  ],
+  "default_fps": 10
+}

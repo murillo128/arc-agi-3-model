@@ -1,0 +1,12 @@
+{
+  "game_id": "sy30-v1",
+  "title": "Skills: Route on a budget",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "maze",
+    "recursos_limitados"
+  ],
+  "default_fps": 10
+}

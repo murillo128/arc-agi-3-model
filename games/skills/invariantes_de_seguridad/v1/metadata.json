@@ -1,0 +1,12 @@
+{
+  "game_id": "sy28-v1",
+  "title": "Skills: Keep a safe foothold",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "maze",
+    "invariantes_de_seguridad"
+  ],
+  "default_fps": 10
+}

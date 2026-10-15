@@ -1,0 +1,12 @@
+{
+  "game_id": "sy38-v1",
+  "title": "Skills: Discover the other mover",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "agents",
+    "inferencia_de_roles"
+  ],
+  "default_fps": 10
+}

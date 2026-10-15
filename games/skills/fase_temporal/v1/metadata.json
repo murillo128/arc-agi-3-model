@@ -1,0 +1,12 @@
+{
+  "game_id": "sy59-v1",
+  "title": "Skills: Cross in the right phase",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "timing",
+    "fase_temporal"
+  ],
+  "default_fps": 10
+}

@@ -1,0 +1,12 @@
+{
+  "game_id": "sy46-v1",
+  "title": "Skills: Merge to exact counts",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "merge",
+    "cardinalidad_exacta"
+  ],
+  "default_fps": 10
+}

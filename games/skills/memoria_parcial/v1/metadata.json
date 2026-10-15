@@ -1,0 +1,12 @@
+{
+  "game_id": "sy55-v1",
+  "title": "Skills: Remember hidden pairs",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "memory",
+    "memoria_parcial"
+  ],
+  "default_fps": 10
+}

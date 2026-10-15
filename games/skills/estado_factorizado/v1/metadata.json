@@ -1,0 +1,12 @@
+{
+  "game_id": "sy06-v1",
+  "title": "Skills: Factorized keys",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "keys",
+    "estado_factorizado"
+  ],
+  "default_fps": 10
+}

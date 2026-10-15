@@ -1,0 +1,12 @@
+{
+  "game_id": "sy47-v1",
+  "title": "Skills: Compose dictionaries",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "rules",
+    "composicion_de_funciones"
+  ],
+  "default_fps": 10
+}

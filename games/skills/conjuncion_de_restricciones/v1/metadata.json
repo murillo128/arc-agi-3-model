@@ -1,0 +1,12 @@
+{
+  "game_id": "sy02-v1",
+  "title": "Skills: All constraints at once",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "dials",
+    "conjuncion_de_restricciones"
+  ],
+  "default_fps": 10
+}

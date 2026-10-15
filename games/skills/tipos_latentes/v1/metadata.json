@@ -1,0 +1,12 @@
+{
+  "game_id": "sy56-v1",
+  "title": "Skills: Probe hidden types",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "memory",
+    "tipos_latentes"
+  ],
+  "default_fps": 10
+}

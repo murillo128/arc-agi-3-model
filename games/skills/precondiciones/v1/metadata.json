@@ -1,0 +1,12 @@
+{
+  "game_id": "sy08-v1",
+  "title": "Skills: Unlock before changing",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "keys",
+    "precondiciones"
+  ],
+  "default_fps": 10
+}

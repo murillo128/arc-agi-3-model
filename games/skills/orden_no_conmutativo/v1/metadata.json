@@ -1,0 +1,12 @@
+{
+  "game_id": "sy18-v1",
+  "title": "Skills: Order of painting",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "paint",
+    "orden_no_conmutativo"
+  ],
+  "default_fps": 10
+}

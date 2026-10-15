@@ -1,0 +1,12 @@
+{
+  "game_id": "sy09-v1",
+  "title": "Skills: Position and key state",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "maze",
+    "planificacion_en_estado_ampliado"
+  ],
+  "default_fps": 10
+}

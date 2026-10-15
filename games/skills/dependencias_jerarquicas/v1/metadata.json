@@ -1,0 +1,12 @@
+{
+  "game_id": "sy25-v1",
+  "title": "Skills: Parent and child rods",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "linkage",
+    "dependencias_jerarquicas"
+  ],
+  "default_fps": 10
+}

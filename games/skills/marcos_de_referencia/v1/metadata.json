@@ -1,0 +1,12 @@
+{
+  "game_id": "sy13-v1",
+  "title": "Skills: Moving reference frame",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "transform",
+    "marcos_de_referencia"
+  ],
+  "default_fps": 10
+}

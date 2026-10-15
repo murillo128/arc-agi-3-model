@@ -1,0 +1,12 @@
+{
+  "game_id": "sy50-v1",
+  "title": "Skills: Binary instructions",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "program",
+    "codificacion_binaria"
+  ],
+  "default_fps": 10
+}

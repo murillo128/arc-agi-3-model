@@ -1,0 +1,12 @@
+{
+  "game_id": "sy42-v1",
+  "title": "Skills: Route a signal",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "flow",
+    "propagacion"
+  ],
+  "default_fps": 10
+}

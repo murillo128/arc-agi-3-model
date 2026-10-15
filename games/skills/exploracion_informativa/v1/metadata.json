@@ -1,0 +1,12 @@
+{
+  "game_id": "sy57-v1",
+  "title": "Skills: Reveal before choosing",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "memory",
+    "exploracion_informativa"
+  ],
+  "default_fps": 10
+}

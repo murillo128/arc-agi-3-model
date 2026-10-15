@@ -1,0 +1,12 @@
+{
+  "game_id": "sy48-v1",
+  "title": "Skills: Symbols across appearances",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "rules",
+    "invariancia_perceptiva"
+  ],
+  "default_fps": 10
+}

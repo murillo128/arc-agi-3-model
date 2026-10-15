@@ -1,0 +1,12 @@
+{
+  "game_id": "sy11-v1",
+  "title": "Skills: Geometric transforms",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "transform",
+    "transformaciones_geometricas"
+  ],
+  "default_fps": 10
+}

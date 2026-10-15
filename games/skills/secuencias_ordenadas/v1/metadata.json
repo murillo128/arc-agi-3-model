@@ -1,0 +1,12 @@
+{
+  "game_id": "sy32-v1",
+  "title": "Skills: Order the tokens",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "loops",
+    "secuencias_ordenadas"
+  ],
+  "default_fps": 10
+}

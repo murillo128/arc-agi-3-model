@@ -1,0 +1,12 @@
+{
+  "game_id": "sy53-v1",
+  "title": "Skills: Return to the caller",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "program",
+    "pila_de_ejecucion"
+  ],
+  "default_fps": 10
+}

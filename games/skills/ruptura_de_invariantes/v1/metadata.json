@@ -1,0 +1,12 @@
+{
+  "game_id": "sy20-v1",
+  "title": "Skills: Break the symmetry",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "twins",
+    "ruptura_de_invariantes"
+  ],
+  "default_fps": 10
+}

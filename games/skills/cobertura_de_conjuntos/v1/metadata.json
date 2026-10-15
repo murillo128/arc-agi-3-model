@@ -1,0 +1,12 @@
+{
+  "game_id": "sy14-v1",
+  "title": "Skills: Cover every mark",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "transform",
+    "cobertura_de_conjuntos"
+  ],
+  "default_fps": 10
+}

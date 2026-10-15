@@ -1,0 +1,12 @@
+{
+  "game_id": "sy45-v1",
+  "title": "Skills: Move then settle",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "gravity",
+    "dinamica_autonoma"
+  ],
+  "default_fps": 10
+}

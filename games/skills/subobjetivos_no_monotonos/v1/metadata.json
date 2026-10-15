@@ -1,0 +1,12 @@
+{
+  "game_id": "sy26-v1",
+  "title": "Skills: Retract before extending",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "linkage",
+    "subobjetivos_no_monotonos"
+  ],
+  "default_fps": 10
+}

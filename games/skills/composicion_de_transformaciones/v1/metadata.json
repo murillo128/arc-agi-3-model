@@ -1,0 +1,12 @@
+{
+  "game_id": "sy07-v1",
+  "title": "Skills: Transform a key",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "keys",
+    "composicion_de_transformaciones"
+  ],
+  "default_fps": 10
+}

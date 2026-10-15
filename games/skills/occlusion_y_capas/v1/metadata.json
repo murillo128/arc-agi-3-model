@@ -1,0 +1,12 @@
+{
+  "game_id": "sy16-v1",
+  "title": "Skills: Paint layers",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "paint",
+    "occlusion_y_capas"
+  ],
+  "default_fps": 10
+}

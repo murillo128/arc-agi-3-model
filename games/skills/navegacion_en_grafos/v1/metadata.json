@@ -1,0 +1,12 @@
+{
+  "game_id": "sy29-v1",
+  "title": "Skills: Connected rooms",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "maze",
+    "navegacion_en_grafos"
+  ],
+  "default_fps": 10
+}

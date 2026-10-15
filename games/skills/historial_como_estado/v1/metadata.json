@@ -1,0 +1,12 @@
+{
+  "game_id": "sy58-v1",
+  "title": "Skills: Record a ghost helper",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "ghost",
+    "historial_como_estado"
+  ],
+  "default_fps": 10
+}

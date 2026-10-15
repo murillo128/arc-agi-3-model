@@ -1,0 +1,12 @@
+{
+  "game_id": "sy31-v1",
+  "title": "Skills: Overlapping loops",
+  "tags": [
+    "synthetic",
+    "training",
+    "micro-skill",
+    "loops",
+    "permutaciones"
+  ],
+  "default_fps": 10
+}
