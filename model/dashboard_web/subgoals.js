@@ -119,7 +119,7 @@ function fixedEvaluations(report) {
     if(!rows.length||rows.some(r=>!r||!finite(r.delta_error))) {pending={actions,expected:required.size,pairs:rows.filter(r=>r&&finite(r.delta_error)).length};continue;}
     const mean=key=>rows.every(r=>finite(r.quality?.[key]))?100*rows.reduce((s,r)=>s+r.quality[key],0)/rows.length:null;
     points.push({actions,stage:rows[0].stage,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
-      reconstruction:mean('reconstruction_error'),rollout:mean('rollout_error'),
+      reconstruction:mean('reconstruction_error'),rollout:mean('rollout_error'),drift:mean('latent_drift'),
       pairs:rows.length,episodes:rows.reduce((s,r)=>s+r.episodes,0)});
   }
   return {points,expected:expected.size,pending};
@@ -157,9 +157,11 @@ function render(report) {
     : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
+  // Relative latent drift can exceed 100%; allow this chart to expand its axis.
   plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
     {name:'Reconstrucción',points:qualityPoints('reconstruction')},
-    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')}],{percent:true,responsive:true,empty:'Pendiente de una evaluación fija completa'});
+    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')},
+    {name:'Deriva latente',points:qualityPoints('drift')}],{percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
   $('fixed-summary').textContent=(last?`Última completa: ${fmt(last.error,2)} % · acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
     (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
