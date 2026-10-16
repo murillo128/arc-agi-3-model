@@ -1,5 +1,118 @@
 # Modelo residual latente
 
+## Entrenamiento configurable
+
+`model.subgoal_training --training-config ARCHIVO.json` permite elegir juegos,
+niveles, orden y umbrales sin editar código. Empieza con
+[`training_config.example.json`](training_config.example.json); el ejemplo
+[`training_config.sdk.example.json`](training_config.sdk.example.json) combina
+un sintético con el SDK. Las rutas internas son relativas al archivo JSON.
+La configuración de red sigue en `init_config`; todos los componentes se
+inicializan desde cero. Sin `--training-config`, la CLI anterior sigue disponible.
+
+```sh
+.venv/bin/python -m model.subgoal_training \
+  --training-config model/training_config.example.json --validate-config
+.venv/bin/python -u -m model.subgoal_training \
+  --training-config model/training_config.example.json \
+  --output model/runs/mi-entrenamiento --device cuda
+```
+
+La primera orden solo valida y muestra el plan; no construye el modelo ni abre
+un entorno. La segunda exige un directorio vacío y toma un bloqueo exclusivo.
+`--device cpu` permite usar una red pequeña en CPU. No cambia servicios activos.
+
+El contrato JSON v1 tiene estas claves:
+
+| Clave | Significado |
+| --- | --- |
+| `phase` | `development` o `final`, según la política de datos del repositorio. |
+| `init_config` | Archivo con `network`, `training` y, opcionalmente, `outcome_width`. |
+| `settings` | Presupuesto `actions`, `steps` por episodio (máximo 128), `seed`, intervalos de evaluación/checkpoint, episodios de evaluación, tasas de aprendizaje, congelación, replay y ajustes existentes del path planner. Los nombres y valores por defecto están en `SETTINGS` de `training_config.py`. |
+| `thresholds` | Límites globales de calidad y requisitos de evidencia. |
+| `curriculum` | Lista ordenada de `{source, game, levels, thresholds?, objective?}`. |
+| `sdk` | Directorio de juegos, modo `offline`/`normal`, split de desarrollo y presupuesto `access_steps` para llegar al nivel. Solo necesario con entradas SDK. |
+
+`levels: [3, 1, 2]` ejecuta ese orden. Primero se recorren los niveles de una
+entrada y después la siguiente entrada. No se ordena ni se añaden niveles;
+se rechazan pares juego/nivel duplicados y claves desconocidas. Solo se practica
+y evalúa la etapa activa. Al cambiar de etapa se conservan pesos y optimizadores,
+y se vacían los replays del predictor/planner para no practicar etapas anteriores
+implícitamente. Cada etapa inicia sus propios permisos de aprendizaje.
+
+Los umbrales pueden sobrescribirse dentro de cada entrada:
+
+| Umbral | Condición |
+| --- | --- |
+| `representation_open` | Error máximo de reconstrucción para activar el predictor. |
+| `prediction_open` | Error máximo de predicción a un paso y rollout de tres pasos. |
+| `latent_drift` | Deriva máxima entre evaluaciones de las mismas observaciones. |
+| `success` | Fracción mínima de niveles resueltos por el planner en etapas sintéticas. |
+| `patience` | Evaluaciones consecutivas necesarias para cada permiso/avance. |
+| `minimum_samples` | Transiciones mínimas en las evaluaciones de uno y tres pasos. |
+| `minimum_changed` | Transiciones con cambios mínimas; la excepción estacionaria exige una terminación nativa observada. |
+
+Los 70 sintéticos del catálogo permiten seleccionar directamente el nivel.
+Square Cross y su variante admiten `objective: "subgoals"` (valor por defecto para
+esos dos juegos): encoder/decoder, predictor y planner con su profesor.
+Los 68 juegos de fundamentos/habilidades usan `objective: "world_model"`:
+representación y predictor con acciones aleatorias, sin un profesor compatible.
+También se puede elegir ese modo para Square Cross. En el SDK,
+no hay selección portátil de nivel ni profesor: se llega al nivel solicitado
+mediante acciones aleatorias reales, hasta `sdk.access_steps`. Si no se alcanza,
+el entrenamiento informa del error y no salta a otra etapa. El coste de acceso
+se registra aparte de las acciones de entrenamiento; esos frames no entran al
+encoder, replay ni pérdida. Tampoco entra la respuesta que cruza al siguiente
+nivel. En las etapas `world_model` se entrenan representación y predictor con acciones
+aleatorias; el avance requiere calidad predictiva, no éxito de un planner que
+no se ha entrenado para esos juegos.
+
+En desarrollo, `sdk.split` utiliza el formato de
+[`configs/splits.example.json`](../configs/splits.example.json): juegos disjuntos
+y límite de niveles por juego. El ejemplo ilustra el formato, no sustituye la
+partición oficial completa de [la política de entrenamiento](../docs/training-policy.md).
+Se rechaza entrenar un juego reservado o superar su límite y se reserva además
+el último nivel informado por el SDK. `phase: final` permite los niveles públicos
+reservados por desarrollo, siempre desde pesos aleatorios; nunca datos privados.
+En todos los casos se usan observaciones/acciones públicas, sin leer reglas internas.
+
+Para reanudar, conserva el archivo y la revisión del código:
+
+```sh
+.venv/bin/python -u -m model.subgoal_training \
+  --training-config model/training_config.example.json \
+  --output model/runs/mi-entrenamiento --device cuda --resume --actions 524288
+```
+
+La extensión opcional es un presupuesto **total** mayor. Se restauran pesos,
+cursor, permisos y contadores; se reinician momentos del optimizador y replay
+en RAM, igual que en la CLI anterior. Cambiar el plan/umbrales/arquitectura al
+reanudar se rechaza. SIGUSR1 conserva su checkpoint atómico; SIGUSR2 avanza de
+fase y SIGHUP avanza a la siguiente entrada del orden configurado. Un avance
+manual no acredita los umbrales y deshabilita la publicación como run satisfactorio.
+
+`budget_exhausted` significa que quedan etapas pendientes. `converged` indica
+que se han superado sus gates; antes de publicar también se evalúan **todas** las
+etapas con los pesos finales congelados y semillas distintas de desarrollo,
+incluyendo éxito del planner en `subgoals`. Así se detecta el olvido de etapas
+anteriores. La deriva temporal se acredita durante desarrollo; una evaluación
+con pesos congelados no la inventa como cero. Los datos de evaluación no entrenan.
+
+La preparación de una release verifica el plan, evidencia, checkpoint exacto,
+ausencia de avances manuales, revisión de origen limpia y pesos finitos/cargables:
+
+```sh
+.venv/bin/python -m model.training_release \
+  --run model/runs/mi-entrenamiento --output model/runs/mi-release
+```
+
+Produce `agent.pt`, `manifest.json` y `SHA256SUMS` en una carpeta nueva. Excluye
+runtime, observaciones, replay, cachés y rutas privadas. No sube nada. El
+[skill `arc3-training`](../skills/arc3-training/SKILL.md) describe la ejecución
+desde cero y publicación autorizada como assets de GitHub Releases tras verificar
+la descarga. Los pesos no se guardan como blobs en Git. Superar estas pruebas
+locales no equivale a un resultado independiente de competición.
+
 ## Plan activo: aprendizaje incremental y currículo acumulativo
 
 Sustituye las campañas anteriores. La campaña activa empieza desde cero: encoder,

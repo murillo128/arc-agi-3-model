@@ -42,7 +42,7 @@ class LevelReadiness:
     promotion_passes: int = 0
     measurements: dict = field(default_factory=dict)
 
-    def observe(self, quality, success, config):
+    def observe(self, quality, success, config, *, world_only=False):
         """Automatic permissions require a completed development evaluation."""
         self.measurements = dict(quality, success=success)
         recon, drift = quality.get('reconstruction_error'), quality.get('latent_drift')
@@ -66,10 +66,10 @@ class LevelReadiness:
         good_pred = (good_rep and self.predictor and predictive_evidence and measured(one) and measured(rollout)
                      and max(one, rollout) <= config.prediction_open)
         self.prediction_passes = self.prediction_passes + 1 if good_pred else 0
-        if self.prediction_passes >= config.patience:
+        if self.prediction_passes >= config.patience and not world_only:
             self.planner = True
-        good_level = (good_rep and good_pred and self.planner and measured(success)
-                      and success >= config.success)
+        good_level = (good_rep and good_pred and (world_only or
+                      (self.planner and measured(success) and success >= config.success)))
         self.promotion_passes = self.promotion_passes + 1 if good_level else 0
 
 
@@ -164,3 +164,84 @@ class Curriculum:
                 state = self.readiness[pair]
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
             self.episode_counts[pair] = row.get('episodes', 0)
+
+
+class OrderedCurriculum(Curriculum):
+    """Explicit stages, with no implicit sorting or earlier-level practice."""
+    def __init__(self, stages):
+        self.stages = list(stages)
+        self.index, self.completed = 0, False
+        self.readiness = {(s['game'], s['level']): LevelReadiness() for s in stages}
+        self.episode_counts = dict.fromkeys(self.readiness, 0)
+        self.preferred_pair = None
+
+    @property
+    def stage(self):
+        return self.index + 1
+
+    @property
+    def config(self):
+        return CurriculumConfig(**self.stages[self.index]['thresholds'])
+
+    @property
+    def pairs(self):
+        entry = self.stages[self.index]
+        return [(entry['game'], entry['level'])]
+
+    @property
+    def unlocked(self):
+        return dict(self.pairs)
+
+    def advance_phase(self, pair):
+        entry = self.stages[self.index]
+        if entry.get('objective') == 'world_model' or entry['source'] == 'sdk':
+            state = self.readiness[pair]
+            if state.predictor:
+                return False
+            state.predictor = True
+            return True
+        return super().advance_phase(pair)
+
+    def advance_level(self, game):
+        if self.index + 1 == len(self.stages):
+            return None
+        self.index += 1
+        return self.pairs[0]
+
+    def advance(self, *, latest_only=True):
+        if self.completed or self.readiness[self.pairs[0]].promotion_passes < self.config.patience:
+            return []
+        if self.index + 1 == len(self.stages):
+            self.completed = True
+            return []
+        return [self.advance_level(self.pairs[0][0])]
+
+    def snapshot(self):
+        rows = []
+        for i, entry in enumerate(self.stages):
+            pair = entry['game'], entry['level']
+            rows.append(dict(game=pair[0], level=pair[1], source=entry['source'],
+                             objective=entry.get('objective', 'world_model' if entry['source'] == 'sdk' else 'subgoals'),
+                             thresholds=entry['thresholds'], unlocked=i <= self.index,
+                             active=i == self.index, episodes=self.episode_counts[pair],
+                             **asdict(self.readiness[pair])))
+        return dict(stage=self.stage, unlocked=self.unlocked, thresholds=asdict(self.config),
+                    ordered_stages=self.stages, index=self.index, completed=self.completed,
+                    levels=rows)
+
+    def restore(self, snapshot, **overrides):
+        if any(overrides.values()) or snapshot.get('ordered_stages') != self.stages:
+            raise ValueError('Checkpoint ordered curriculum does not match this run')
+        index = snapshot.get('index')
+        completed = snapshot.get('completed')
+        if (type(index) is not int or not 0 <= index < len(self.stages) or
+                type(completed) is not bool or (completed and index != len(self.stages) - 1)):
+            raise ValueError('Invalid ordered curriculum cursor')
+        rows = snapshot['levels']
+        if [(r['game'], r['level']) for r in rows] != list(self.readiness):
+            raise ValueError('Checkpoint levels do not match ordered curriculum')
+        self.index, self.completed = index, completed
+        for row in rows:
+            pair = row['game'], row['level']
+            self.readiness[pair] = LevelReadiness(**{k: row[k] for k in LevelReadiness.__dataclass_fields__})
+            self.episode_counts[pair] = row['episodes']

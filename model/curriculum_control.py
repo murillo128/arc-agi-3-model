@@ -66,9 +66,11 @@ class CurriculumControl:
         row = next((r for r in levels if (r['game'], r['level']) == (target.get('game'), target.get('level'))), {})
         running = bool(pid and report.get('status') == 'running' and p.get('actions', 0) < p.get('total_actions', 0)
                        and report.get('control_signals') == dict(checkpoint='SIGUSR1', phase='SIGUSR2', level='SIGHUP'))
+        ordered = report.get('curriculum', {}).get('ordered_stages')
         return dict(token=self.token, target=target, pending=({'operation': self.pending['operation']} if self.pending else None),
-                    result=self.result, phase=running and bool(row) and not row.get('planner') and not self.pending,
-                    level=running and any(r['game'] == target.get('game') and not r.get('unlocked') for r in levels)
+                    result=self.result, phase=running and bool(row) and not row.get('planner')
+                    and not ((row.get('objective') == 'world_model' or row.get('source') == 'sdk') and row.get('predictor')) and not self.pending,
+                    level=running and any((ordered or r['game'] == target.get('game')) and not r.get('unlocked') for r in levels)
                     and not self.pending)
 
     def snapshot(self, report):

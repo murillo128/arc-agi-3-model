@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "phase": "development",
+  "init_config": "subgoal_config.json",
+  "settings": {"actions": 262144, "steps": 128, "evaluation_episodes": 8},
+  "sdk": {
+    "environments_dir": "../environment_files",
+    "mode": "offline",
+    "split": "../configs/splits.example.json",
+    "access_steps": 512
+  },
+  "curriculum": [
+    {"source": "synthetic", "game": "sc01-v1", "levels": [2, 1]},
+    {"source": "sdk", "game": "ls20", "levels": [1], "thresholds": {"prediction_open": 0.15}}
+  ]
+}

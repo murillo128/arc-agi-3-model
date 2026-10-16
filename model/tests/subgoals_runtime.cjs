@@ -796,6 +796,25 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('control-status'),/El último nivel ya estaba abierto/);
   assert.equal(nodes.get('advance-phase').disabled,true);
   assert.equal(nodes.get('advance-level').disabled,true);
+  report.config.training_plan={version:1};
+  report.curriculum={stage:2,index:1,unlocked:{'sc01-v1':2},thresholds:{patience:2,representation_open:.1,
+    prediction_open:.2,latent_drift:.15,success:.8},
+    ordered_stages:[{game:'sc01-v1',level:5,objective:'world_model'},
+      {game:'sc01-v1',level:2,objective:'world_model'},{game:'bf01-v1',level:1,objective:'world_model'}],
+    levels:[{game:'sc01-v1',level:5,unlocked:true,predictor:true,objective:'world_model'},
+      {game:'sc01-v1',level:2,unlocked:true,predictor:true,objective:'world_model'},
+      {game:'bf01-v1',level:1,unlocked:false,objective:'world_model'}]};
+  report.status='running';report.progress.phase='training';
+  controls={target:{game:'sc01-v1',level:2},phase:false,level:true};
+  await vm.runInContext('poll()',context);
+  assert.match(text('curriculum-summary'),/Etapa 2 \/ 3/);
+  assert.match(text('thresholds'),/sin profesor de subobjetivos/);
+  assert.match(text('goal-detail'),/sin profesor/);
+  assert.equal(nodes.get('advance-level').parentNode,nodes.get('curriculum-rows').children[1].children[0],
+    'configured order owns the next-stage control, not the highest numeric visited level');
+  report.status='budget_exhausted';report.progress.phase='budget_exhausted';
+  await vm.runInContext('poll()',context);
+  assert.match(text('connection'),/Presupuesto agotado/);
   offline=true;await vm.runInContext('poll()',context);
   assert.equal(nodes.get('advance-phase').parentNode,nodes.get('curriculum-action-parking'),'unavailable controls leave the table');
   assert.equal(nodes.get('advance-level').disabled,true);
