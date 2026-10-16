@@ -651,16 +651,18 @@ const text=id=>nodes.get(id).textContent;
   const action=id=>({id,data:{}});
   const predicted=(id,color)=>({action:action(id),frames:packed([color,color],[1,1,2])});
   const modern={...trajectory,id:'matrix',format_version:2,actions:3,frame_count:5,steps:[
-    {...trajectory.steps[0],goal_frame:packed([9,16],[1,1,2]),imagination_status:'planned',
+    {...trajectory.steps[0],goal_frame:packed([9,16],[1,1,2]),imagination_status:'planned',imagination_source:'searched_continuation',
       imagination:[predicted(4,6),predicted(3,7),predicted(2,8)]},
     {action:action(2),source:'planner',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([8,8],[1,1,2]),
-      imagination_status:'planned',imagination:[predicted(2,9),predicted(1,10),predicted(4,11)]},
+      imagination_status:'planned',imagination_source:'searched_alternative',imagination:[predicted(2,9),predicted(1,10),predicted(4,11)]},
     {action:action(1),source:'exploration',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([9,9],[1,1,2]),
       imagination_status:'exploration',imagination:[]}]};
   report.planner_trajectory={id:'matrix'};trajectoryReply={ok:true,json:async()=>({trajectory:modern})};
   await vm.runInContext('poll()',context);
   const descendants=node=>[node,...node.children.flatMap(descendants)];
   const matrix=nodes.get('trajectory-matrix'), all=descendants(matrix);
+  assert.ok(all.some(n=>n.textContent==='Continuación explorada'));
+  assert.ok(all.some(n=>n.textContent==='Alternativa explorada'));
   const cell=(origin,time)=>all.find(n=>n.className==='trajectory-cell trajectory-prediction'&&n['data-origin']===origin&&n['data-time']===time);
   assert.equal(cell(0,1)['data-diverged'],'false');
   assert.equal(cell(0,2)['data-diverged'],'true');

@@ -202,6 +202,7 @@ a { color: #77dabb; font-size: 13px; }
 .action-badge { display: block; width: fit-content; min-width: 62px; margin: 0 auto; padding: 4px 7px; border: 1px solid #3a4d47; border-radius: 6px; color: #cdded7; background: #21302d; font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
 #trajectory-matrix .trajectory-section th { padding: 12px 14px; color: #bdb5f4; font-size: 11px; font-weight: 600; text-align: left; background: #1b242b; letter-spacing: .03em; }
 .trajectory-imagined .trajectory-row-label { color: #bcb8ef; }
+.trajectory-route-kind { display: block; max-width: 112px; margin-top: 6px; color: #91a59d; font-size: 10px; line-height: 1.5; font-weight: 400; white-space: normal; }
 .trajectory-origin-button { min-width: 66px; min-height: 36px; border-radius: 999px; border: 1px solid #477d69; background: transparent; color: #91e0c5; font: inherit; font-size: 11px; cursor: pointer; }
 .trajectory-origin-button:hover { background: #223e33; }
 .trajectory-prediction .trajectory-thumb { outline: 1px solid #8277b6; outline-offset: 2px; }

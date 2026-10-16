@@ -311,12 +311,18 @@ del umbral de éxito no sustituye los demás requisitos de promoción del currí
 de la observación y el subobjetivo de la muestra seleccionada. El tiempo avanza
 hacia la derecha: la fila real contiene el estado final de cada acción y su
 etiqueta; cada fila inferior parte de un origen `t` y alinea sus predicciones
-en las columnas `t+1`, `t+2`, `t+3`. Son reconstrucciones de los latentes de la
-ruta elegida entonces, capturados antes de ejecutar la acción o aprender de su
-resultado. Se decodifican hasta tres estados ya calculados, sin repetir la
+en las columnas `t+1`, `t+2`, `t+3`. Son reconstrucciones de los latentes de una
+ruta explorada hasta el horizonte disponible, capturados antes de ejecutar la
+acción o aprender de su resultado. La ruta que decide la acción puede ser más
+corta: el visor prioriza una continuación de ese prefijo dentro de las ramas
+que sobrevivieron a la búsqueda. Si no queda ninguna, prioriza la misma primera
+acción y, en último caso, muestra la mejor alternativa de ese horizonte. Las
+filas distinguen «Ruta elegida», «Continuación explorada» y «Alternativa explorada»;
+esta selección para inspección no cambia la decisión ni las puntuaciones.
+Se decodifican hasta tres estados ya calculados, sin repetir la
 búsqueda ni ejecutar nuevas predicciones, sin gradientes y sin cambiar pesos.
 La captura añade ese coste de lectura/decodificación sólo a las partidas elegibles.
-Una ruta más corta no se rellena. Las secuencias que difieren de las acciones
+El presupuesto restante puede acortar el horizonte; no se rellena. Las secuencias que difieren de las acciones
 finalmente ejecutadas se marcan «Ruta distinta»; no son medidas de error de
 predicción sobre la trayectoria real. Los destinos posteriores al final real
 se muestran sin observación de referencia.

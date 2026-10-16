@@ -28,8 +28,10 @@ class TelemetryTests(unittest.TestCase):
             self.assertFalse(torch.is_grad_enabled())
             self.assertEqual((height, width), (1, 1))
             return torch.nn.functional.one_hot(z.long().reshape(-1, 1, 1), 16).float()
-        planner = SimpleNamespace(last_plan=[Action(4), Action(2)],
-            last_states=[torch.tensor([3.]), torch.tensor([7.])],
+        planner = SimpleNamespace(last_plan=[Action(4)], last_states=[torch.tensor([12.])],
+            last_forecast_plan=[Action(2), Action(4)],
+            last_forecast_states=[torch.tensor([3.]), torch.tensor([7.])],
+            last_forecast_source='searched_alternative',
             goal=dict(frame=np.array([[9]], dtype=np.uint8), pixel_mask=np.array([[False]])))
         agent = SimpleNamespace(planner=planner, last_diagnostics={'path': {'score': 1}},
             engine=SimpleNamespace(decode=decode, autocast=nullcontext), state=SimpleNamespace(geometry=(1, 1)))
@@ -45,14 +47,15 @@ class TelemetryTests(unittest.TestCase):
             rng, tensor_rng = random.getstate(), torch.get_rng_state().clone()
             capture(agent, Action(4), False)
             # Later learning/goal replacement must not rewrite the captured route.
-            planner.last_states[0].fill_(12)
+            planner.last_forecast_states[0].fill_(12)
             planner.goal['frame'][:] = 2
             capture(agent, Action(2), True)
             sample.add(episode, records, dict(success=False, reason='budget'))
             saved = json.loads(path.read_text())
             self.assertEqual(saved['format_version'], 2)
             steps = saved['steps']
-            self.assertEqual([p['action']['id'] for p in steps[0]['imagination']], [4, 2])
+            self.assertEqual([p['action']['id'] for p in steps[0]['imagination']], [2, 4])
+            self.assertEqual(steps[0]['imagination_source'], 'searched_alternative')
             self.assertEqual([base64.b64decode(p['frames']['pixels']) for p in steps[0]['imagination']], [b'\x03', b'\x07'])
             self.assertEqual(base64.b64decode(steps[0]['goal_frame']['pixels']), b'\x10')
             self.assertEqual(steps[1]['imagination'], [])

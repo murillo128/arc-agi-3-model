@@ -61,7 +61,11 @@ class PathPlanner:
 
     def reset(self):
         self.goal = None
+        self.clear_paths()
+
+    def clear_paths(self):
         self.last_plan, self.last_states, self.last_endpoint = [], [], None
+        self.last_forecast_plan, self.last_forecast_states, self.last_forecast_source = [], [], None
 
     @torch.no_grad()
     def set_goal(self, frame, mask):
@@ -77,7 +81,7 @@ class PathPlanner:
         tensor = F.avg_pool2d(tensor, patch, patch, ceil_mode=True).flatten(2).transpose(1, 2)
         self.goal = dict(z=z.detach(), mask=tensor, frame=np.array(frame, copy=True),
                          pixel_mask=np.array(mask, dtype=bool, copy=True))
-        self.last_plan, self.last_states = [], []
+        self.clear_paths()
 
     @torch.no_grad()
     def choose(self, state, observation, rng, mode='path_mpc', diagnostics=None, *, remaining_budget=None):
@@ -125,6 +129,15 @@ class PathPlanner:
                 z, h, paths, history = z[keep], h[keep], selected_paths, selected_history
         self.last_plan, self.last_states = best_path, best_history
         self.last_endpoint = best_history[-1]
+        # Keep a full explored horizon for inspection. The selected action and
+        # its cheapest (possibly shorter) path above remain unchanged. Prefer
+        # its continuation; pruning may leave only another explored branch.
+        matching_prefix = [i for i, path in enumerate(paths) if path[:len(best_path)] == best_path]
+        matching_action = [i for i, path in enumerate(paths) if path[0] == best_path[0]]
+        index = (matching_prefix or matching_action or [0])[0]
+        self.last_forecast_plan, self.last_forecast_states = paths[index], history[index]
+        self.last_forecast_source = ('selected_route' if paths[index] == best_path else
+                                    'searched_continuation' if matching_prefix else 'searched_alternative')
         if diagnostics is not None:
             diagnostics['path'] = {'predicted_cost': best, 'steps': [a.id for a in best_path],
                                    'horizon': horizon, 'source': 'latent_search'}

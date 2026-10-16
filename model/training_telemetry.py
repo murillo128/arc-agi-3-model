@@ -58,17 +58,19 @@ class PlannerTrajectory:
 
     @torch.no_grad()
     def capture_step(self, agent, action, exploring):
-        """Capture the chosen plan BEFORE the real result or any weight update."""
+        """Capture an explored horizon BEFORE the real result or any weight update."""
         if self.capture_error:
             return
         try:
             planner = agent.planner
             goal = planner.goal
             image = np.where(goal['pixel_mask'], goal['frame'], 16).astype(np.uint8)[None] if goal else None
-            row = dict(goal=image, imagination=[], status='exploration' if exploring else 'unavailable')
-            plan, states = planner.last_plan, planner.last_states
+            row = dict(goal=image, imagination=[], status='exploration' if exploring else 'unavailable', source=None)
+            selected = planner.last_plan
+            plan = getattr(planner, 'last_forecast_plan', None) or selected
+            states = getattr(planner, 'last_forecast_states', None) or planner.last_states
             # Exploration leaves old planner diagnostics untouched; never reuse them.
-            if (not exploring and agent.last_diagnostics.get('path') and plan and plan[0] == action
+            if (not exploring and agent.last_diagnostics.get('path') and selected and selected[0] == action
                     and len(plan) == len(states)):
                 horizon = min(3, len(states))
                 with agent.engine.autocast():
@@ -77,6 +79,7 @@ class PlannerTrajectory:
                 row['imagination'] = [dict(action=dict(id=a.id, data=dict(a.data)), frame=f[None])
                                       for a, f in zip(plan[:horizon], images)]
                 row['status'] = 'planned'
+                row['source'] = getattr(planner, 'last_forecast_source', None) or 'selected_route'
             self.trace_bytes += (image.nbytes if image is not None else 0) + sum(
                 p['frame'].nbytes for p in row['imagination'])
             if self.trace_bytes > self.max_bytes or len(self.rows) >= 128:
@@ -113,7 +116,7 @@ class PlannerTrajectory:
                     raise ValueError('Faltan predicciones de la trayectoria')
                 for step, row in zip(steps, self.rows):
                     step.update(goal_frame=pack(row['goal']) if row['goal'] is not None else None,
-                                imagination_status=row['status'], imagination=[
+                                imagination_status=row['status'], imagination_source=row['source'], imagination=[
                                     dict(action=p['action'], frames=pack(p['frame'])) for p in row['imagination']])
             self.sequence += 1
             metadata = dict(id=f'{self.session}:{self.sequence}', captured_at=time.time(), **context,

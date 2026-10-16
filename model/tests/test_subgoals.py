@@ -2,6 +2,7 @@
 from dataclasses import replace
 from contextlib import nullcontext
 import json
+import math
 from pathlib import Path
 import random
 import tempfile
@@ -118,6 +119,60 @@ def path_agent():
 
 
 class PathTests(unittest.TestCase):
+    def test_full_forecast_keeps_short_decision_and_labels_pruned_alternatives(self):
+        # State digits record the literal action prefix. A cheap one-step
+        # decision must remain selected even when its full preview costs more.
+        class Value(nn.Module):
+            def __init__(self, costs):
+                super().__init__()
+                self.costs = costs
+            def forward(self, z, h, goal, mask, rows, columns):
+                return torch.tensor([math.log1p(self.costs.get(int(v), 50)) for v in z.flatten()])
+
+        calls = []
+        def predict(z, h, actions, height, width):
+            calls.append(len(z))
+            following = z * 10 + actions[:, :1, None]
+            return following, h + 1, following - z
+
+        engine = SimpleNamespace(device=torch.device('cpu'), model=nn.Identity(),
+            actions=lambda actions: torch.tensor([[a.id] for a in actions]), predict=predict, autocast=nullcontext)
+        engine.model.config = SimpleNamespace(patch=1)
+        initial = State(torch.tensor([[0.]]), torch.tensor([[0.]]), (1, 1))
+        observation = replace(obs(1), available_actions=(1, 2))
+        cases = [
+            # The best deepest route is 211, but 111 continues the chosen 1.
+            ({1: 0, 2: 4, 11: 4, 21: 2, 111: 8, 211: 1, 212: 15}, [1, 1, 1], 'searched_continuation'),
+            ({1: 0, 2: 4, 21: 2, 22: 3, 211: 3, 212: 4}, [2, 1, 1], 'searched_alternative'),
+        ]
+        for costs, expected_path, source in cases:
+            planner = PathPlanner(engine, Value(costs), PathConfig(horizon=3, beam=2))
+            planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1, 1, 1), frame=np.zeros((1, 1)))
+            rng_states = []
+            for diagnostics in (None, {}):
+                calls.clear()
+                rng = random.Random(0)
+                self.assertEqual(planner.choose(initial, observation, rng, diagnostics=diagnostics), Action(1))
+                self.assertEqual(planner.last_plan, [Action(1)])
+                self.assertEqual([a.id for a in planner.last_forecast_plan], expected_path)
+                self.assertEqual([int(z.item()) for z in planner.last_forecast_states],
+                                 [1, 11, 111] if source == 'searched_continuation' else [2, 21, 211])
+                self.assertEqual(planner.last_forecast_source, source)
+                self.assertEqual(calls, [2, 4, 4], 'the preview adds no dynamics calls')
+                rng_states.append(rng.getstate())
+            self.assertEqual(rng_states[0], rng_states[1])
+            calls.clear()
+            planner.choose(initial, observation, random.Random(0), remaining_budget=1)
+            self.assertEqual(planner.last_forecast_plan, [Action(1)])
+            self.assertEqual(planner.last_forecast_source, 'selected_route')
+            self.assertEqual(calls, [2])
+            planner.clear_paths()
+            self.assertEqual(planner.last_forecast_states, [])
+            self.assertIsNone(planner.last_forecast_source)
+            self.assertIsNotNone(planner.goal)
+            planner.reset()
+            self.assertIsNone(planner.goal)
+
     def test_two_step_search_can_choose_an_initially_worse_action_without_pixels(self):
         # Literal tiny world: ACTION1 goes to -1, then reaches goal 2;
         # ACTION2 goes to a permanent trap at 1. Greedy predicted cost picks 2,
@@ -271,7 +326,7 @@ class PathTests(unittest.TestCase):
                     base = f'http://127.0.0.1:{server.server_port}'
                     with urlopen(base + '/api/state') as response:
                         state = json.load(response)
-                        self.assertEqual(set(state), {'subgoals'})
+                        self.assertEqual(set(state), {'subgoals', 'gpu'})
                         self.assertEqual(state['subgoals']['progress']['actions'], 1)
                     for route in ('/', '/campaign.html'):
                         with urlopen(base + route) as response:

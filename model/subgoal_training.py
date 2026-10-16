@@ -203,7 +203,7 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
                                       rollout=rollout)
             if losses is not None:
                 agent.state = real_states(agent.engine, episode)[-1]
-                agent.planner.last_plan, agent.planner.last_states, agent.planner.last_endpoint = [], [], None
+                agent.planner.clear_paths()
         level_success = after.state == 'WIN' or boundary
         success = not boundary and teacher.training_goal_reached(goal)
         failure = after.state == 'GAME_OVER' or (position + 1 == steps and not success)

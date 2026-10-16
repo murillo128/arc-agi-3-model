@@ -237,6 +237,8 @@ function buildTrajectoryMatrix(){
   player.steps.forEach((step,origin)=>{
     const row=make('tr','trajectory-imagined');row.setAttribute('data-origin',origin);
     const label=make('th','trajectory-row-label',`Desde t = ${origin}`);label.setAttribute('scope','row');row.append(label);
+    const routeLabel={selected_route:'Ruta elegida',searched_continuation:'Continuación explorada',searched_alternative:'Alternativa explorada'}[step.imagination_source];
+    if(routeLabel)label.append(make('small','trajectory-route-kind',routeLabel));
     if(origin)row.append(spacer(origin));
     const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Origen');
     button.type='button';button.setAttribute('aria-label',`Ver origen t = ${origin}`);
