@@ -96,7 +96,7 @@
       "reason": "resume",
       "saved_at": 1792164006.9579475
     },
-    "observed_actions": 141097,
+    "observed_actions": 141471,
     "live_evaluations": [
       {
         "actions": 140317,
@@ -168,6 +168,24 @@
         "episodes": 8,
         "delta_error": 0.30708483754512633,
         "real_actions": 97,
+        "analyzed_actions": null
+      },
+      {
+        "actions": 141312,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.275,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 141312,
+        "policy": "path_mpc",
+        "successes": 7,
+        "episodes": 8,
+        "delta_error": 0.37285012285012287,
+        "real_actions": 79,
         "analyzed_actions": null
       }
     ],
