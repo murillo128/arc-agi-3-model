@@ -41,9 +41,9 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
    En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
-   La receta activa usa `prediction_delta_loss: "focal"`, con temperatura 1.
+   La receta activa usa `prediction_delta_loss: "recall_focal"`, con temperatura 1.
    Si `q` es la probabilidad del color real y `C` los píxeles realmente cambiados,
-   suma `-log(q)` en `C` y `lambda*(1-q)^2*(-log(q))` en los estáticos; divide
+   suma `2*(-log(q))` en `C` y `lambda*(1-q)^2*(-log(q))` en los estáticos; divide
    por `max(1, |C|)` en cada imagen y promedia las imágenes del lote.
    `false_change_weight` fija lambda (1 en esta receta). La máscara y el divisor
    dependen de la realidad, sin argmax ni cortes de gradiente en los pesos suaves.
@@ -54,7 +54,8 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    overlap suave; `delta_overlap_weight` sigue aplicándose a la reconstrucción.
 3. PathValue se incorpora cuando además los errores de predicción a uno y tres
    pasos son ≤10 % durante tres evaluaciones. Aprende al terminar cada segmento
-   real de subobjetivo; encoder, decoder y predictor continúan actualizándose.
+   real de subobjetivo; el predictor continúa actualizándose. Encoder y decoder
+   siguen la política de congelación por nivel descrita arriba.
 
 Los permisos se mantienen una vez abiertos **para cada juego/nivel**. Una regresión
 se muestra y bloquea avanzar de nivel, pero no apaga componentes ya habilitados.
@@ -114,9 +115,22 @@ para métricas, nunca una ruta ni una etiqueta privilegiada para decidir accione
 **Path Planner:** búsqueda latente con horizonte 3, beam 4 y 16 candidatos uniformes
 de clic. Replanifica tras cada acción real; cada rama imaginada conserva su propio h.
 Tras habilitarse, exploración de 100 % a 20 % en sus primeras 8.192 acciones por
-nivel. PathValue aprende `log1p(acciones restantes + 128 * fracaso)` de segmentos
-reales completos, SmoothL1, cuatro pasadas, LR 3e-4. El estado final de éxito tiene
-coste cero. Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`.
+nivel. PathValue usa features compartidas y el presupuesto restante para aprender
+`P(éxito dentro del presupuesto)` con BCE y `log1p(acciones restantes | éxito)`
+con SmoothL1, sólo para segmentos exitosos (cero en el estado final alcanzado).
+Se entrena en segmentos reales completos, cuatro pasadas, LR 3e-4. El fracaso
+observado supervisa la probabilidad; no significa que ese estado sea irresoluble.
+El presupuesto de cada ejemplo es el de la partida menos las acciones ya gastadas,
+también al cambiar de subobjetivo. No se renueva artificialmente.
+
+Tanto la poda del beam como la elección final priorizan probabilidad: entre rutas
+a menos de 0,02 del máximo, eligen menor duración total (prefijo imaginado más
+restante condicionada al éxito). Los empates numéricos de duración (1e-6 acciones)
+se aleatorizan con el RNG de la partida; no se prefiere A1 por orden de enumeración.
+La probabilidad procede de la política de recogida y puede estar mal calibrada o
+explotar errores del predictor. No sustituye la confirmación real del profesor.
+Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como
+métrica histórica, no como criterio de selección ni target de PathValue.
 Un corte administrativo queda censurado, no se etiqueta como fracaso.
 
 **Coherencia de los pesos:** representación, predictor y planner tienen optimizadores
@@ -159,13 +173,22 @@ permite cambiar únicamente ese umbral con `--resume`.
 `--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
 deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
 reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
-`--prediction-delta-loss focal` permite seleccionar explícitamente la nueva NLL,
+`--prediction-delta-loss recall_focal` permite seleccionar explícitamente la nueva NLL,
 también con `--resume`. Sin esta opción se hereda la pérdida del checkpoint o del
 JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
-Los modos anteriores `balanced` y `union` siguen disponibles sin cambiar sus fórmulas.
+Los modos anteriores `balanced`, `union` y `focal` siguen disponibles sin cambiar sus fórmulas.
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
+Para reanudar un PathValue antiguo se exige `--migrate-path-value`: conserva sus
+features compartidas y todos los pesos del mundo, pero reinicia las dos salidas
+(éxito inicial 0,5; duración inicial 16 acciones) y añade la entrada de presupuesto.
+Los siguientes checkpoints ya usan `objective_version: 2` y no necesitan migración.
+Se mantienen contadores/permisos, se reinician rachas de promoción y se guarda antes
+de actuar. Como en todo resume, los optimizadores y el replay RAM se reinician.
+El reporte registra las transiciones de objetivo; pérdidas anteriores y nuevas no
+son directamente comparables. La trayectoria muestra por separado la estimación
+de la elección y la de la ruta visualizada, que puede ser una alternativa.
 `--encoder-learning-rate-after-predictor 3e-6` también admite un cambio explícito
 al reanudar. El valor debe ser positivo y no mayor que el LR de representación.
 Se guarda en el checkpoint y se hereda al omitir la opción; checkpoints antiguos
@@ -1171,13 +1194,19 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
    ni `false_change_weight`: todos los píxeles de la unión pesan igual.
    Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
-   La receta incremental actual selecciona `"focal"`: suma la NLL de cambios
+   La receta incremental actual selecciona `"recall_focal"`: suma el doble de la NLL de cambios
    reales y la NLL estática ponderada por `false_change_weight*(1-q)^2`, dividida
    por `max(1, número de cambios reales)`, con `q=softmax(logits)[y]` y T=1.
    No selecciona píxeles mediante argmax ni diferencia el divisor; sí diferencia
    los pesos suaves. Su contribución estática disminuye de forma continua al
    acertar con más confianza. No es estrictamente invariante a añadir fondo con
    incertidumbre, y no altera la métrica de evaluación basada en colores argmax.
+   El modo `focal` anterior conserva peso 1 para cambios reales; `recall_focal`
+   usa peso 2. Esta preferencia por recuperar cambios es experimental: no identifica
+   objetos ni garantiza preservar piezas. A confianza 0,9/0,1 y 56 cambios reales,
+   omitir 25 cambios aporta más pérdida que acertarlos e inventar 30 estáticos;
+   acertar todo sin inventar sigue siendo mejor. Los errores de color en cambios
+   reales reciben también peso 2. El MSE latente mantiene su peso anterior.
    El aprendiz conjunto histórico y la reconstrucción añaden un término
    diferenciable de error sobre la unión de deltas. El predictor de la campaña
    incremental (`OnlinePredictor`) no lo utiliza, ni a uno ni a tres pasos.

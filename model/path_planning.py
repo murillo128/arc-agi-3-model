@@ -1,4 +1,4 @@
-"""Goal-conditioned latent search and a learned remaining-cost evaluator.
+"""Goal-conditioned latent search with success-first route selection.
 
 The agent accepts only the current visual goal. The synthetic oracle, distance
 and completion predicate are deliberately absent from this module.
@@ -21,26 +21,36 @@ class PathConfig:
     horizon: int = 3
     beam: int = 4
     clicks: int = 16
+    success_margin: float = .02
 
     def __post_init__(self):
         if any(type(n) is not int or not 1 <= n <= 64 for n in (self.horizon, self.beam, self.clicks)):
             raise ValueError('Path search budgets must be integers in 1..64')
+        if not math.isfinite(self.success_margin) or not 0 <= self.success_margin <= 1:
+            raise ValueError('Success margin must be finite and in 0..1')
 
 
 class PathValue(nn.Module):
-    """Predict log(1 + remaining actions + failure penalty) for a visual goal."""
-    def __init__(self, latent, memory, width=64):
+    """Estimate success within budget and log1p duration conditional on success."""
+    def __init__(self, latent, memory, width=64, objective_version=2):
         super().__init__()
-        self.config = dict(latent=latent, memory=memory, width=width)
+        if objective_version != 2:
+            raise ValueError('Unsupported PathValue objective')
+        self.config = dict(latent=latent, memory=memory, width=width, objective_version=2)
         self.project = nn.Linear(latent, width)
         self.spatial = nn.Sequential(nn.Conv2d(width * 3 + 3, width, 3, padding=1), nn.SiLU(),
             nn.Conv2d(width, width, 3, padding=1), nn.SiLU(), nn.AdaptiveAvgPool2d((4, 4)))
         self.memory = nn.Linear(memory, width)
         self.readout = nn.Sequential(nn.Linear(width * 17, 128), nn.SiLU(), nn.Linear(128, 1))
+        self.budget = nn.Linear(1, 128, bias=False)
+        self.success = nn.Linear(128, 1)
+        nn.init.zeros_(self.budget.weight)
+        nn.init.zeros_(self.success.weight)
+        nn.init.zeros_(self.success.bias)
         nn.init.zeros_(self.readout[-1].weight)
         nn.init.constant_(self.readout[-1].bias, math.log(math.expm1(math.log1p(16))))
 
-    def forward(self, z, h, goal, mask, rows, columns):
+    def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
         z, h, goal, mask = z.float(), h.float(), goal.float(), mask.float()
         current = self.project(z)
         target = self.project(goal).expand_as(current)
@@ -50,7 +60,44 @@ class PathValue(nn.Module):
         xy = torch.stack((x, y), -1)[None].expand(z.shape[0], -1, -1)
         features = torch.cat((current, target, target - current, mask, xy), -1)
         image = features.transpose(1, 2).reshape(z.shape[0], -1, rows, columns)
-        return F.softplus(self.readout(torch.cat((self.spatial(image).flatten(1), self.memory(h)), -1))).flatten()
+        hidden = self.readout[0](torch.cat((self.spatial(image).flatten(1), self.memory(h)), -1))
+        hidden = F.silu(hidden + self.budget(remaining_budget.float().reshape(-1, 1).log1p()))
+        return self.success(hidden).flatten(), F.softplus(self.readout[-1](hidden)).flatten()
+
+    def load_legacy_features(self, weights):
+        """Explicit migration: old failure-penalty output is not a success duration."""
+        current = self.state_dict()
+        new_keys = {'budget.weight', 'success.weight', 'success.bias'}
+        if set(weights) != set(current) - new_keys:
+            raise ValueError('Unexpected legacy PathValue weights')
+        for key, value in weights.items():
+            if value.shape != current[key].shape:
+                raise ValueError(f'Unexpected legacy PathValue shape: {key}')
+            if key not in {'readout.2.weight', 'readout.2.bias'}:
+                current[key] = value
+        self.load_state_dict(current, strict=True)
+
+
+def rank_routes(probabilities, costs, rng, margin):
+    """Success bands first, duration second; seeded random numerical ties.
+
+Each band is anchored to its own maximum, avoiding a non-transitive pairwise
+comparison which could admit a route far below the actual best probability.
+"""
+    remaining = list(range(len(costs)))
+    ranked = []
+    while remaining:
+        best = max(probabilities[i] for i in remaining)
+        band = [i for i in remaining if probabilities[i] >= best - margin]
+        band.sort(key=lambda i: costs[i])
+        while band:
+            cheapest = costs[band[0]]
+            tied = [i for i in band if costs[i] <= cheapest + 1e-6]
+            rng.shuffle(tied)
+            ranked.extend(tied)
+            band = [i for i in band if i not in tied]
+        remaining = [i for i in remaining if i not in ranked]
+    return ranked
 
 
 class PathPlanner:
@@ -66,6 +113,7 @@ class PathPlanner:
     def clear_paths(self):
         self.last_plan, self.last_states, self.last_endpoint = [], [], None
         self.last_forecast_plan, self.last_forecast_states, self.last_forecast_source = [], [], None
+        self.last_estimate, self.last_forecast_estimate = None, None
 
     @torch.no_grad()
     def set_goal(self, frame, mask):
@@ -98,7 +146,8 @@ class PathPlanner:
         count = len(choices)
         z, h, paths = state.z[None], state.h, [[]]
         history = [[]]
-        best, best_path, best_history = float('inf'), None, None
+        routes = []
+        budget = remaining_budget if remaining_budget is not None else self.config.horizon
         height, width = state.geometry
         patch = self.engine.model.config.patch
         rows, columns = (height + patch - 1) // patch, (width + patch - 1) // patch
@@ -108,38 +157,44 @@ class PathPlanner:
                 n = len(z)
                 z, h, _ = self.engine.predict(z.repeat_interleave(count, 0), h.repeat_interleave(count, 0),
                                              actions.repeat(n, 1), height, width)
-                costs = self.readout(z, h, self.goal['z'][None], self.goal['mask'], rows, columns).float()
-                if not torch.isfinite(costs).all() or not torch.isfinite(z).all():
+                budgets = torch.full((len(z),), budget - depth - 1, device=z.device)
+                logits, log_costs = self.readout(z, h, self.goal['z'][None], self.goal['mask'],
+                                                 rows, columns, budgets)
+                if (not torch.isfinite(logits).all() or not torch.isfinite(log_costs).all()
+                        or not torch.isfinite(z).all()):
                     raise ValueError('Nonfinite latent path/value')
-                scores = depth + 1 + costs.clamp(max=math.log1p(1024)).expm1()
-                # Random tie order avoids a fixed preference for ACTION1 before
-                # the fresh evaluator has received any terminal trajectories.
-                order = list(range(len(z)))
-                rng.shuffle(order)
-                order = torch.tensor(order, device=z.device)
-                keep = order[torch.argsort(scores[order], stable=True)[:self.config.beam]]
-                selected_paths, selected_history = [], []
-                for index in keep.tolist():
+                probabilities = logits.float().sigmoid().tolist()
+                scores = (depth + 1 + log_costs.float().clamp(max=math.log1p(1024)).expm1()).tolist()
+                keep = rank_routes(probabilities, scores, rng, self.config.success_margin)[:self.config.beam]
+                selected_paths, selected_history, estimates = [], [], []
+                for index in keep:
                     path = paths[index // count] + [choices[index % count]]
                     states = history[index // count] + [z[index].detach().clone()]
+                    estimate = dict(success_probability=probabilities[index], successful_actions=scores[index],
+                                    remaining_budget=budget, depth=depth + 1)
                     selected_paths.append(path)
                     selected_history.append(states)
-                    if float(scores[index]) < best:
-                        best, best_path, best_history = float(scores[index]), path, states
+                    estimates.append(estimate)
+                    routes.append((path, states, estimate))
                 z, h, paths, history = z[keep], h[keep], selected_paths, selected_history
+        winner = rank_routes([r[2]['success_probability'] for r in routes],
+                             [r[2]['successful_actions'] for r in routes], rng, self.config.success_margin)[0]
+        best_path, best_history, self.last_estimate = routes[winner]
         self.last_plan, self.last_states = best_path, best_history
         self.last_endpoint = best_history[-1]
-        # Keep a full explored horizon for inspection. The selected action and
-        # its cheapest (possibly shorter) path above remain unchanged. Prefer
+        # Keep a full explored horizon for inspection of the selected action.
+        # Its success-first decision may use a shorter prefix. Prefer
         # its continuation; pruning may leave only another explored branch.
         matching_prefix = [i for i, path in enumerate(paths) if path[:len(best_path)] == best_path]
         matching_action = [i for i, path in enumerate(paths) if path[0] == best_path[0]]
         index = (matching_prefix or matching_action or [0])[0]
         self.last_forecast_plan, self.last_forecast_states = paths[index], history[index]
+        self.last_forecast_estimate = estimates[index]
         self.last_forecast_source = ('selected_route' if paths[index] == best_path else
                                     'searched_continuation' if matching_prefix else 'searched_alternative')
         if diagnostics is not None:
-            diagnostics['path'] = {'predicted_cost': best, 'steps': [a.id for a in best_path],
+            diagnostics['path'] = {**self.last_estimate, 'success_margin': self.config.success_margin,
+                                   'steps': [a.id for a in best_path],
                                    'horizon': horizon, 'source': 'latent_search'}
         return best_path[0]
 
@@ -166,19 +221,22 @@ class PathLearner:
         self.readout = torch.compile(self.forward, fullgraph=True, dynamic=True) if compile_model else self.forward
         self.updates = 0
 
-    def forward(self, z, h, goal, mask, rows, columns):
-        return self.planner.evaluator(z, h, goal, mask, rows, columns)
+    def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
+        return self.planner.evaluator(z, h, goal, mask, rows, columns, remaining_budget)
 
     def update(self, episode, start, success, budget, *, passes=4):
         """Monte Carlo targets from a FINISHED real subgoal segment, no inventions.
 
-Success costs the real remaining actions. Failure adds one full action budget.
-The final success state has zero remaining cost. Cut-off runs are not failures.
+Success/failure supervises reachability within the episode budget. Duration is
+supervised only on successful segments, including zero at the reached goal.
+Cut-off runs are not failures. States and targets are detached real experience.
 """
+        if type(success) is not bool:
+            raise ValueError('Path targets require a completed real outcome')
         planner, engine = self.planner, self.planner.engine
         states = real_states(engine, episode)
         end = len(episode.actions)
-        indices = list(range(start, end + int(success)))
+        indices = list(range(start, end + 1))
         indices = [i for i in indices if states[i].z is not None]
         if not indices:
             return None
@@ -192,20 +250,18 @@ The final success state has zero remaining cost. Cut-off runs are not failures.
                 selected = indices[offset:offset + 16]
                 z = torch.stack([states[i].z for i in selected]).detach()
                 h = torch.cat([states[i].h for i in selected]).detach()
-                target = torch.tensor([math.log1p(segment_cost(end - i, success, budget)) for i in selected], device=engine.device)
+                target = torch.tensor([math.log1p(end - i) for i in selected], device=engine.device)
+                budgets = torch.tensor([max(0, budget - i) for i in selected], device=engine.device)
                 self.optimizer.zero_grad(set_to_none=True)
                 with engine.autocast():
-                    prediction = self.readout(z, h, planner.goal['z'][None], planner.goal['mask'], rows, columns)
-                loss = F.smooth_l1_loss(prediction.float(), target)
+                    logits, duration = self.readout(z, h, planner.goal['z'][None], planner.goal['mask'],
+                                                    rows, columns, budgets)
+                loss = F.binary_cross_entropy_with_logits(logits.float(), torch.full_like(logits.float(), float(success)))
+                if success:
+                    loss = loss + F.smooth_l1_loss(duration.float(), target)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(planner.evaluator.parameters(), 1., error_if_nonfinite=True)
                 self.optimizer.step()
                 self.updates += 1
                 losses.append(float(loss.detach()))
         return sum(losses) / len(losses)
-
-
-def segment_cost(remaining_actions, success, budget):
-    if remaining_actions < 0 or budget < 1:
-        raise ValueError('Invalid completed segment cost')
-    return remaining_actions + (0 if success else budget)

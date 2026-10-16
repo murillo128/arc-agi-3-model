@@ -18,13 +18,13 @@ from torch import nn
 
 from games.square_cross.v1.sc01 import Sc01
 from games.square_cross_interactions.v1.si01 import Si01
-from model import agent_checkpoint
+from model import agent_checkpoint, checkpoint
 from model.agent import Agent, AgentConfig
 from model.data import Action, Episode
 from model.dashboard import subgoal_snapshot, make_server
 from model.environment import Factory
 from model.learning import State
-from model.path_planning import PathConfig, PathPlanner, PathValue, PathLearner, segment_cost
+from model.path_planning import PathConfig, PathPlanner, PathValue, PathLearner, rank_routes
 from model.planning import fingerprint
 from model.subgoal_training import OnlinePredictor, play
 from model.training_telemetry import PlannerTrajectory
@@ -126,8 +126,8 @@ class PathTests(unittest.TestCase):
             def __init__(self, costs):
                 super().__init__()
                 self.costs = costs
-            def forward(self, z, h, goal, mask, rows, columns):
-                return torch.tensor([math.log1p(self.costs.get(int(v), 50)) for v in z.flatten()])
+            def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
+                return torch.zeros(len(z)), torch.tensor([math.log1p(self.costs.get(int(v), 50)) for v in z.flatten()])
 
         calls = []
         def predict(z, h, actions, height, width):
@@ -178,8 +178,8 @@ class PathTests(unittest.TestCase):
         # ACTION2 goes to a permanent trap at 1. Greedy predicted cost picks 2,
         # but two-step search finds the cheaper route through -1.
         class Value(nn.Module):
-            def forward(self, z, h, goal, mask, rows, columns):
-                return (2 * (goal - z).abs().flatten(1).mean(1)).log1p()
+            def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
+                return torch.zeros(len(z)), (2 * (goal - z).abs().flatten(1).mean(1)).log1p()
 
         def predict(z, h, actions, height, width):
             following = torch.where(z == 0, torch.where(actions[:, :1, None] == 1, -1., 1.),
@@ -202,10 +202,92 @@ class PathTests(unittest.TestCase):
         self.assertEqual(initial.z.item(), 0)
         self.assertEqual(initial.h.item(), 0)
 
-    def test_cost_targets_success_failure_and_last_action(self):
-        self.assertEqual([segment_cost(n, True, 128) for n in (3, 2, 1, 0)], [3, 2, 1, 0])
-        self.assertEqual([segment_cost(n, False, 128) for n in (3, 2, 1)], [131, 130, 129])
-        self.assertEqual(segment_cost(1, True, 1), 1)
+    def test_success_band_precedes_cost_and_ties_are_seeded(self):
+        # A cheap but unreliable path must lose. C is within 2pp of B.
+        self.assertEqual(rank_routes([.5, .91, .90], [3, 8, 6], random.Random(0), .02), [2, 1, 0])
+        self.assertEqual(rank_routes([.5, .91, .90], [3, 8, 6], random.Random(0), 0), [1, 2, 0])
+        # Bands anchor to the maximum: do not chain pairwise "similarity".
+        self.assertEqual(rank_routes([.91, .895, .88], [8, 6, 1], random.Random(0), .02), [1, 0, 2])
+        ranks = [rank_routes([.5] * 4, [3, 3 + 1e-8, 3, 3], random.Random(seed), .02) for seed in range(32)]
+        self.assertEqual({r[0] for r in ranks}, {0, 1, 2, 3})
+        self.assertEqual(ranks[0], rank_routes([.5] * 4, [3, 3 + 1e-8, 3, 3], random.Random(0), .02))
+
+    def test_success_priority_in_beam_and_across_depths_with_budget(self):
+        calls = []
+        class Value(nn.Module):
+            def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
+                calls.append((z.flatten().tolist(), remaining_budget.tolist()))
+                # 2 wins the first beam despite costing more; 21 then wins globally.
+                p = {1:.5, 2:.8, 21:.95, 22:.6}
+                cost = {1:0, 2:2, 21:5, 22:0}
+                return (torch.tensor([p[int(v)] for v in z.flatten()]).logit(),
+                        torch.tensor([math.log1p(cost[int(v)]) for v in z.flatten()]))
+        engine = SimpleNamespace(device=torch.device('cpu'), model=nn.Identity(),
+            actions=lambda actions: torch.tensor([[a.id] for a in actions]), autocast=nullcontext,
+            predict=lambda z,h,a,height,width: (z*10+a[:,:1,None],h,z))
+        engine.model.config = SimpleNamespace(patch=1)
+        planner = PathPlanner(engine, Value(), PathConfig(horizon=2, beam=1))
+        planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)))
+        chosen = planner.choose(State(torch.tensor([[0.]]),torch.zeros(1,1),(1,1)),
+            replace(obs(1),available_actions=(1,2)), random.Random(0), remaining_budget=2)
+        self.assertEqual(chosen, Action(2))
+        self.assertEqual(planner.last_plan, [Action(2),Action(1)])
+        self.assertEqual(calls, [([1.,2.],[1,1]),([21.,22.],[0,0])])
+        self.assertAlmostEqual(planner.last_estimate['success_probability'], .95, places=6)
+        self.assertAlmostEqual(planner.last_estimate['successful_actions'], 7, places=6)
+
+    def test_real_outcomes_train_success_and_conditional_duration_with_episode_budget(self):
+        class Value(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.success = nn.Parameter(torch.tensor(0.))
+                self.duration = nn.Parameter(torch.tensor(0.))
+                self.budgets = []
+            def forward(self,z,h,goal,mask,rows,columns,remaining_budget):
+                self.budgets.append(remaining_budget.tolist())
+                return self.success.expand(len(z)), self.duration.expand(len(z))
+        episode = Episode([obs(1),obs(2),obs(3)], [Action(1),Action(2)])
+        states = [State(torch.zeros(1,1),torch.zeros(1,1),(1,1)) for _ in range(3)]
+        for success in (True,False):
+            value = Value()
+            engine = SimpleNamespace(device=torch.device('cpu'),model=SimpleNamespace(config=SimpleNamespace(patch=1)),autocast=nullcontext)
+            planner = SimpleNamespace(engine=engine,evaluator=value,goal=dict(z=torch.zeros(1,1),mask=torch.ones(1,1,1)))
+            learner = PathLearner(planner)
+            with patch('model.path_planning.real_states',return_value=states):
+                loss = learner.update(episode,1,success,2,passes=1)
+            expected = math.log(2) + ((.5*math.log(2)**2)/2 if success else 0)
+            self.assertAlmostEqual(loss, expected, places=6)
+            self.assertEqual(value.budgets, [[1,0]])
+            self.assertGreater(float(value.success.detach()) * (1 if success else -1), 0)
+            if success:
+                self.assertGreater(float(value.duration.detach()), 0)
+            else:
+                self.assertIsNone(value.duration.grad)
+                self.assertEqual(float(value.duration.detach()), 0)
+
+    def test_explicit_legacy_path_migration_preserves_world_and_features(self):
+        agent = path_agent()
+        with tempfile.TemporaryDirectory() as temp:
+            filename = Path(temp)/'legacy.pt'
+            agent_checkpoint.save(filename,agent)
+            saved = checkpoint.load(filename)
+            value = saved['components']['path_evaluator']
+            del value['config']['objective_version']
+            for key in ('budget.weight','success.weight','success.bias'):
+                del value['weights'][key]
+            value['weights']['readout.2.weight'].fill_(9)
+            value['weights']['readout.2.bias'].fill_(8)
+            checkpoint.write(filename,saved)
+            with self.assertRaisesRegex(ValueError,'explicit migrate_path_value'):
+                agent_checkpoint.load(filename)
+            migrated = agent_checkpoint.load(filename,migrate_path_value=True)
+            self.assertEqual(fingerprint(migrated.engine.model),fingerprint(agent.engine.model))
+            self.assertEqual(fingerprint(migrated.path_evaluator.spatial),fingerprint(agent.path_evaluator.spatial))
+            self.assertEqual(torch.count_nonzero(migrated.path_evaluator.success.weight).item(),0)
+            self.assertEqual(torch.count_nonzero(migrated.path_evaluator.readout[-1].weight).item(),0)
+            agent_checkpoint.save(filename,migrated)
+            reloaded=agent_checkpoint.load(filename)
+            self.assertEqual(fingerprint(reloaded.path_evaluator),fingerprint(migrated.path_evaluator))
 
     def test_gate_updates_dynamics_only_and_goal_learning_keeps_world(self):
         agent = path_agent()

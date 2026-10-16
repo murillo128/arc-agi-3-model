@@ -96,7 +96,7 @@ def save(path, agent, *, include_runtime=False, training_progress=None):
 
 
 def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
-         resume_runtime=False):
+         resume_runtime=False, migrate_path_value=False):
     payload = checkpoint.load(path)
     if payload.get('format') != FORMAT or payload.get('version') != VERSION:
         raise ValueError('Expected an arc3-agent v1 checkpoint; convert legacy artifacts explicitly')
@@ -126,7 +126,14 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
                 raise ValueError(f'Unknown active component: {name}')
             cls = ProposalPolicy if name == 'proposal_policy' else PathValue
             module = cls(**saved['config']).to(device)
-            module.load_state_dict(saved['weights'], strict=True)
+            legacy_path = name == 'path_evaluator' and 'objective_version' not in saved['config']
+            if legacy_path:
+                if not migrate_path_value or resume_runtime:
+                    raise ValueError('Legacy PathValue needs explicit migrate_path_value=True (no live carry)')
+                module.load_legacy_features(saved['weights'])
+                module.migrated_from_legacy = True
+            else:
+                module.load_state_dict(saved['weights'], strict=True)
             components[name] = module
     agent = Agent(engine, heads, config, seed=payload['seed'] if seed is None else seed,
                   compile_heads=compile_model, **components)

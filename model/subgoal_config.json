@@ -22,7 +22,7 @@
     "local_reconstruction_weight": 1.0,
     "delta_overlap_weight": 1.0,
     "false_change_weight": 1.0,
-    "prediction_delta_loss": "focal",
+    "prediction_delta_loss": "recall_focal",
     "variance_weight": 0.0,
     "frame_chunk": 4,
     "decoder_readout": "contextual",

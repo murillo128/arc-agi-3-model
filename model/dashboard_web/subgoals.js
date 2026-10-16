@@ -242,6 +242,15 @@ function buildTrajectoryMatrix(){
     const label=make('th','trajectory-row-label',`Desde t = ${origin}`);label.setAttribute('scope','row');row.append(label);
     const routeLabel={selected_route:'Ruta elegida',searched_continuation:'Continuación explorada',searched_alternative:'Alternativa explorada'}[step.imagination_source];
     if(routeLabel)label.append(make('small','trajectory-route-kind',routeLabel));
+    for(const [name,estimate] of [['Elección',step.selected_estimate],['Vista',step.forecast_estimate]]){
+      if(estimate&&finite(estimate.success_probability)&&estimate.success_probability>=0&&estimate.success_probability<=1
+          &&finite(estimate.successful_actions)&&estimate.successful_actions>=0&&finite(estimate.remaining_budget)){
+        const summary=`${name} · ${fmt(100*estimate.success_probability)} % · ${fmt(estimate.successful_actions)} acc.`;
+        const detail=make('small','trajectory-route-kind',summary);
+        detail.title=`Probabilidad de éxito y duración si tiene éxito. Estimación al decidir, con ${estimate.remaining_budget} acciones disponibles; incluye prefijo imaginado y duración restante. No es un resultado observado.`;
+        label.append(detail);
+      }
+    }
     if(origin)row.append(spacer(origin));
     const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Origen');
     button.type='button';button.setAttribute('aria-label',`Ver origen t = ${origin}`);
@@ -637,7 +646,9 @@ function render(report) {
     ...lossTerms.map(s=>({...s,points:movingAverage(s.points)}))
   ],{digits:4,minimumRange:.001,empty:'Todavía no hay componentes de pérdida registrados'});
   const lossMode=report.config?.prediction_delta_loss;
-  $('predictor-objective').textContent=lossMode==='focal'
+  $('predictor-objective').textContent=lossMode==='recall_focal'
+    ? 'NLL activa: 2× el error de color de los cambios reales + penalización focal de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales. Se penalizan omisiones, colores erróneos y cambios inventados; sin argmax ni solapamiento.'
+    : lossMode==='focal'
     ? 'NLL activa: cambios reales y penalización focal suave de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales, sin máscara de argmax.'
     : lossMode==='union'
     ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
@@ -651,6 +662,17 @@ function render(report) {
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
   plot('speed',[series('Acciones/s · últimos 60 s','recent_tps')],{unit:'acciones/s'});
+  const successFirst=report.config?.path_objective_version===2;
+  const margin=report.config?.path_success_margin;
+  $('path-objective').textContent=successFirst
+    ? `Primero éxito estimado dentro del presupuesto; entre rutas a ${fmt(100*(finite(margin)?margin:.02))} puntos porcentuales de la mejor, menos acciones. Empates aleatorios. La estimación aún debe aprenderse; no certifica el éxito.`
+    : 'Criterio histórico: duración estimada más penalización por fracaso.';
+  const change=report.objective_changes?.at(-1);
+  const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa.`:'';
+  $('path-objective-loss').textContent=(successFirst
+    ? 'BCE de éxito/fracaso + error de duración solo en trayectorias exitosas. Los intentos interrumpidos no entrenan estas salidas.'
+    : 'Error del coste mixto de duración y fracaso.')+since;
+  $('predictor-objective').textContent+=since;
   renderPlannerSuccess(report);
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);

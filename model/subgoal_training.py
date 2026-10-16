@@ -299,7 +299,8 @@ def main(argv=None):
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
     parser.add_argument('--encoder-learning-rate-after-predictor', type=float,
                         help='Lower encoder LR after first predictor admission; decoder unchanged. Resume inherits checkpoint.')
-    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal'),
+    parser.add_argument('--migrate-path-value', action='store_true', help='Reset legacy mixed-cost outputs for success-first training; preserve world weights')
+    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal', 'recall_focal'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
                         help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')
@@ -367,7 +368,7 @@ def main(argv=None):
                     previous = dict(previous, latent_drift=gates.latent_drift)
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
-            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder',
+            if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder', 'migrate_path_value',
                            'predictor_replay_episodes', 'predictor_batch_size',
                            'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
@@ -488,7 +489,8 @@ def main(argv=None):
     try:
         publish(force=True)
         if args.resume or args.source:
-            source = agent_checkpoint.load(args.output / 'latest.pt' if args.resume else args.source, device=args.device)
+            source = agent_checkpoint.load(args.output / 'latest.pt' if args.resume else args.source, device=args.device,
+                                           migrate_path_value=args.migrate_path_value)
             engine, heads = source.engine, source.heads
             evaluator = source.path_evaluator if args.resume else None
             del source
@@ -499,6 +501,10 @@ def main(argv=None):
             heads = GoalValue(net.config.latent, net.config.memory,
                               width=initial.get('outcome_width', 64)).to(args.device)
             evaluator = None
+        migrated_path = bool(evaluator is not None and getattr(evaluator, 'migrated_from_legacy', False))
+        if args.resume and migrated_path:
+            report['resumed_from']['path_objective'] = dict(old='failure_penalty', new='success_first', reset_outputs=True)
+        report['config'].update(path_objective_version=2, path_success_margin=PathConfig().success_margin)
         engine.optimizer_bits = 8 if args.device == 'cuda' else 32
         previous_loss = engine.config.prediction_delta_loss
         selected_loss = args.prediction_delta_loss or previous_loss
@@ -512,11 +518,17 @@ def main(argv=None):
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
         report['config']['prediction_delta_loss'] = selected_loss
         report['config']['freeze_encoder'] = freeze_encoder
+        if changed_loss or migrated_path:
+            at_action = (restored or {}).get('actions', 0)
+            changes = [r for r in report.get('objective_changes', []) if r['actions'] <= at_action]
+            changes.append(dict(actions=at_action, prediction_delta_loss=selected_loss,
+                                path_objective_version=2, path_heads_reset=migrated_path))
+            report['objective_changes'] = changes[-32:]
         if args.resume and changed_loss:
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
         if args.resume and changed_freeze:
             report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
-        if args.resume and (changed_loss or changed_freeze or changed_replay or changed_encoder_rate or changed_planner_freeze):
+        if args.resume and (changed_loss or migrated_path or changed_freeze or changed_replay or changed_encoder_rate or changed_planner_freeze):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
@@ -690,7 +702,7 @@ def main(argv=None):
                 encoder_frozen=representation.freeze_encoder, representation_frozen=representation.frozen,
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
-                            or args.update_evaluation_interval or changed_loss or changed_freeze or changed_replay
+                            or args.update_evaluation_interval or changed_loss or migrated_path or changed_freeze or changed_replay
                             or changed_encoder_rate or changed_planner_freeze):
             save('resume')
         if not args.resume:

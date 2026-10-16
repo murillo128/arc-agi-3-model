@@ -258,7 +258,7 @@ class CurriculumTests(unittest.TestCase):
             self.assertFalse(report['progress']['encoder_frozen'])
 
     def test_resume_selects_predictive_loss_preserving_weights_counters_and_admissions(self):
-        for mode in ('union', 'focal'):
+        for mode in ('union', 'focal', 'recall_focal'):
             with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
                 root = Path(temp)
                 agent_checkpoint.save(root / 'source.pt', path_agent())

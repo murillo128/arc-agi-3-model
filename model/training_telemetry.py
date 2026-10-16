@@ -78,6 +78,8 @@ class PlannerTrajectory:
                 images = images.argmax(-1).to(torch.uint8).cpu().numpy()
                 row['imagination'] = [dict(action=dict(id=a.id, data=dict(a.data)), frame=f[None])
                                       for a, f in zip(plan[:horizon], images)]
+                row['selected_estimate'] = getattr(planner, 'last_estimate', None)
+                row['forecast_estimate'] = getattr(planner, 'last_forecast_estimate', None)
                 row['status'] = 'planned'
                 row['source'] = getattr(planner, 'last_forecast_source', None) or 'selected_route'
             self.trace_bytes += (image.nbytes if image is not None else 0) + sum(
@@ -116,6 +118,7 @@ class PlannerTrajectory:
                     raise ValueError('Faltan predicciones de la trayectoria')
                 for step, row in zip(steps, self.rows):
                     step.update(goal_frame=pack(row['goal']) if row['goal'] is not None else None,
+                                selected_estimate=row.get('selected_estimate'), forecast_estimate=row.get('forecast_estimate'),
                                 imagination_status=row['status'], imagination_source=row['source'], imagination=[
                                     dict(action=p['action'], frames=pack(p['frame'])) for p in row['imagination']])
             self.sequence += 1

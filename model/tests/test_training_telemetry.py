@@ -32,6 +32,8 @@ class TelemetryTests(unittest.TestCase):
             last_forecast_plan=[Action(2), Action(4)],
             last_forecast_states=[torch.tensor([3.]), torch.tensor([7.])],
             last_forecast_source='searched_alternative',
+            last_estimate=dict(success_probability=.91,successful_actions=8,remaining_budget=128),
+            last_forecast_estimate=dict(success_probability=.90,successful_actions=6,remaining_budget=128),
             goal=dict(frame=np.array([[9]], dtype=np.uint8), pixel_mask=np.array([[False]])))
         agent = SimpleNamespace(planner=planner, last_diagnostics={'path': {'score': 1}},
             engine=SimpleNamespace(decode=decode, autocast=nullcontext), state=SimpleNamespace(geometry=(1, 1)))
@@ -56,6 +58,10 @@ class TelemetryTests(unittest.TestCase):
             steps = saved['steps']
             self.assertEqual([p['action']['id'] for p in steps[0]['imagination']], [2, 4])
             self.assertEqual(steps[0]['imagination_source'], 'searched_alternative')
+            self.assertEqual(steps[0]['selected_estimate'],dict(success_probability=.91,successful_actions=8,remaining_budget=128))
+            self.assertEqual(steps[0]['forecast_estimate'],dict(success_probability=.90,successful_actions=6,remaining_budget=128))
+            self.assertIsNone(steps[1]['selected_estimate'])
+            self.assertIsNone(steps[1]['forecast_estimate'])
             self.assertEqual([base64.b64decode(p['frames']['pixels']) for p in steps[0]['imagination']], [b'\x03', b'\x07'])
             self.assertEqual(base64.b64decode(steps[0]['goal_frame']['pixels']), b'\x10')
             self.assertEqual(steps[1]['imagination'], [])

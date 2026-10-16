@@ -365,6 +365,15 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('predictor-objective'),/penalización focal suave/);
   assert.match(text('predictor-objective'),/γ=2, T=1/);
   assert.match(text('predictor-objective'),/sin máscara de argmax/);
+  report.config.prediction_delta_loss='recall_focal';
+  report.config.path_objective_version=2;report.config.path_success_margin=.02;
+  report.objective_changes=[{actions:1026}];
+  await vm.runInContext('poll()',context);
+  assert.match(text('predictor-objective'),/2× el error de color de los cambios reales/);
+  assert.match(text('predictor-objective'),/1026/);
+  assert.match(text('path-objective'),/2 puntos porcentuales/);
+  assert.match(text('path-objective-loss'),/BCE de éxito\/fracaso/);
+  delete report.objective_changes;delete report.config.path_objective_version;
   report.config.prediction_delta_loss='balanced';
   report.curves=[{actions:1026,predictor_terms:null}];
   await vm.runInContext('poll()',context);
@@ -678,6 +687,8 @@ const text=id=>nodes.get(id).textContent;
   const predicted=(id,color)=>({action:action(id),frames:packed([color,color],[1,1,2])});
   const modern={...trajectory,id:'matrix',format_version:2,actions:3,frame_count:5,steps:[
     {...trajectory.steps[0],goal_frame:packed([9,16],[1,1,2]),imagination_status:'planned',imagination_source:'searched_continuation',
+      selected_estimate:{success_probability:.91,successful_actions:8,remaining_budget:128},
+      forecast_estimate:{success_probability:.90,successful_actions:6,remaining_budget:128},
       imagination:[predicted(4,6),predicted(3,7),predicted(2,8)]},
     {action:action(2),source:'planner',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([8,8],[1,1,2]),
       imagination_status:'planned',imagination_source:'searched_alternative',imagination:[predicted(2,9),predicted(1,10),predicted(4,11)]},
@@ -688,6 +699,9 @@ const text=id=>nodes.get(id).textContent;
   const descendants=node=>[node,...node.children.flatMap(descendants)];
   const matrix=nodes.get('trajectory-matrix'), all=descendants(matrix);
   assert.ok(all.some(n=>n.textContent==='Continuación explorada'));
+  assert.ok(all.some(n=>n.textContent==='Elección · 91 % · 8 acc.'));
+  assert.ok(all.some(n=>n.textContent==='Vista · 90 % · 6 acc.'));
+  assert.ok(all.some(n=>n.title?.includes('128 acciones disponibles')));
   assert.ok(all.some(n=>n.textContent==='Alternativa explorada'));
   const cell=(origin,time)=>all.find(n=>n.className==='trajectory-cell trajectory-prediction'&&n['data-origin']===origin&&n['data-time']===time);
   assert.equal(cell(0,1)['data-diverged'],'false');

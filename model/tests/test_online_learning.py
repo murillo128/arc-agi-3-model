@@ -36,6 +36,30 @@ def union_example():
 
 
 class OnlineLearningTests(unittest.TestCase):
+    def test_recall_focal_prefers_complete_piece_and_keeps_false_change_supervision(self):
+        # 56 changed pixels, 40 static. Same .9/.1 two-color confidence everywhere.
+        reference = torch.zeros(1,1,96,dtype=torch.long)
+        actual = reference.clone();actual[:,:,:56] = 1
+        correct = torch.nn.functional.one_hot(actual,2).float()*.8+.1
+        omitted = correct.clone();omitted[:,:,:25] = omitted[:,:,:25].flip(-1)
+        invented = correct.clone();invented[:,:,56:86] = invented[:,:,56:86].flip(-1)
+        def value(probs,mode):
+            return visual_delta_loss(probs.log(),reference,actual,mode=mode).item()
+        self.assertLess(value(omitted,'focal'),value(invented,'focal'))
+        self.assertGreater(value(omitted,'recall_focal'),value(invented,'recall_focal'))
+        expected = -(2*(31*math.log(.9)+25*math.log(.1))+40*.1**2*math.log(.9))/56
+        self.assertAlmostEqual(value(omitted,'recall_focal'),expected,places=6)
+        self.assertLess(value(correct,'recall_focal'),value(invented,'recall_focal'))
+        for target in (0,1):
+            logits=torch.tensor([[[[1000.,-1000.]]]],requires_grad=True)
+            loss=visual_delta_loss(logits,torch.ones(1,1,1,dtype=torch.long),
+                torch.full((1,1,1),target,dtype=torch.long),mode='recall_focal').sum()
+            loss.backward()
+            self.assertTrue(torch.isfinite(loss))
+            self.assertTrue(torch.isfinite(logits.grad).all())
+            if target==1: # All-static false change still produces a corrective gradient.
+                self.assertLess(float(logits.grad[0,0,0,1]),0)
+
     def test_encoder_rate_drop_preserves_decoder_rate_decay_and_optimizer_moments(self):
         model = nn.Module()
         for name in ('encoder', 'decoder'):
@@ -192,7 +216,7 @@ class OnlineLearningTests(unittest.TestCase):
         self.assertEqual(int(torch.count_nonzero(empty_logits.grad)), 0)
 
     def test_online_predictor_uses_only_mse_and_nll_at_one_and_three_steps_with_decoder_frozen(self):
-        for mode in ('union', 'focal'):
+        for mode in ('union', 'focal', 'recall_focal'):
             before, actual, probability = union_example()
 
             class Dynamics(nn.Module):
@@ -227,11 +251,12 @@ class OnlineLearningTests(unittest.TestCase):
                 rollout=(state, [Action(1)] * 3, before[0].numpy()))
             expected = -(math.log(.8) + math.log(.1) + math.log(.2) + math.log(.3)) / 4
             gradient = .8 + .1 + .2 + .3 - 4
-            if mode == 'focal':
-                expected = -(math.log(.8) + math.log(.1) + math.log(.3)
+            if mode in {'focal', 'recall_focal'}:
+                weight = 2 if mode == 'recall_focal' else 1
+                expected = -(weight * (math.log(.8) + math.log(.1) + math.log(.3))
                              + 2 * .8 ** 2 * math.log(.2) + 2 * .3 ** 2 * math.log(.7)) / 3
                 static_gradient = sum(2 * (2 * p * (1-p) ** 2 * math.log(p) - (1-p) ** 3) for p in (.2, .7))
-                gradient = 4 * (.8 + .1 + .3 - 3 + static_gradient) / 3
+                gradient = 4 * (weight * (.8 + .1 + .3 - 3) + static_gradient) / 3
             self.assertAlmostEqual(result['visual'], expected, places=6)
             self.assertAlmostEqual(result['rollout'], expected, places=6)
             self.assertAlmostEqual(result['total'], 2 * expected, places=6)

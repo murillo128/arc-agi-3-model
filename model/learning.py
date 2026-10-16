@@ -263,13 +263,13 @@ def visual_delta_loss(color_logits, reference, actual, false_change_weight=1., *
     if mode == 'union':
         # This objective weights every union pixel equally, including false changes.
         return change_union_delta_loss(color_logits, reference, actual)
-    if mode == 'focal':
+    if mode in {'focal', 'recall_focal'}:
         # T=1, gamma=2. Both the mask and denominator depend only on real
         # changes. Keep gradients through the static weights: no argmax/detach.
         logp = color_logits.float().log_softmax(-1).gather(-1, actual[..., None]).squeeze(-1)
         changed = actual != reference
         static_weight = false_change_weight * (-logp.expm1()).square()
-        weights = torch.where(changed, 1., static_weight)
+        weights = torch.where(changed, 2. if mode == 'recall_focal' else 1., static_weight)
         return (-weights * logp).sum((1, 2)) / changed.sum((1, 2)).clamp_min(1)
     if mode != 'balanced':
         raise ValueError(f'Invalid delta NLL mode: {mode}')
