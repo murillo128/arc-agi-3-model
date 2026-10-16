@@ -376,7 +376,7 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('predictor-objective'),/no identifica el modo/);
 
   // Goal statistics average events in an action window, not the last N goals.
-  // Simultaneous completions count equally, failures affect reward only, and a
+  // Simultaneous completions count equally, efficiency excludes failures, and a
   // censored segment without reward never dilutes the denominator.
   const oldEpisodes=report.episodes;
   const goal=(actions,minimum_actions,reward,success=true)=>({actions,minimum_actions,reward,success});
@@ -397,6 +397,32 @@ const text=id=>nodes.get(id).textContent;
   assert.ok(rewardMean.some(n=>n.children[0].textContent.endsWith(': -26,5 · acción 32')),'future goals cannot change an earlier mean');
   assert.ok(circles('reward').some(n=>n.opacity<1&&n.children[0].textContent==='Reward individual: -160 · acción 33'));
   assert.match(nodes.get('reward-legend').children[0].textContent,/: -28$/);
+  const outcomeMeans=circles('subgoal-outcomes').map(n=>n.children[0].textContent);
+  assert.ok(outcomeMeans.some(s=>s.includes(': 66,6667 · acción 33 · 2 éxitos · 1 fracaso · 3 subobjetivos')),
+    'two observed successes out of three completed goals');
+  assert.ok(outcomeMeans.at(-1).includes(': 83,3333 · acción 513 · 5 éxitos · 1 fracaso · 6 subobjetivos'),
+    'cutoff excludes action 1 and includes both simultaneous goals plus the zero-action success');
+  assert.match(text('subgoal-outcomes-summary'),/acción 513: 5 éxitos · 1 fracaso · 6 subobjetivos/);
+  assert.ok(!outcomeMeans.some(s=>s.includes('acción 514')),'censored segment is not a completed failure');
+  const outcomeDots=nodes.get('subgoal-outcomes').children.filter(n=>n.r===3);
+  assert.equal(outcomeDots.length,7);
+  assert.equal(outcomeDots.filter(n=>n.fill==='#f4b979').length,1);
+  assert.ok(outcomeDots.some(n=>n.children[0].textContent==='Fracaso: 0 · acción 33 · a / nivel 1 · Subobjetivo · 160 acciones · mínimo 0'));
+  const outcomeLines=nodes.get('subgoal-outcomes').children.filter(n=>typeof n.points==='string');
+  assert.equal(outcomeLines.length,1,'binary outcomes are points, not connected routes');
+  assert.equal(outcomeLines[0].stroke,'#a9a6ef');
+  report.episodes=[{game:'a',level:1,end_action:1025,segments:[goal(5,2,-133,false)]}];
+  await vm.runInContext('poll()',context);
+  assert.match(nodes.get('subgoal-outcomes-legend').children[0].textContent,/: 0 %$/,'measured zero is not missing');
+  assert.match(text('subgoal-outcomes-summary'),/0 éxitos · 1 fracaso · 1 subobjetivo/);
+  report.episodes.push({game:'a',level:1,end_action:1030,segments:[goal(0,0,0)]});
+  await vm.runInContext('poll()',context);
+  assert.match(nodes.get('subgoal-outcomes-legend').children[0].textContent,/: 50 %$/);
+  report.episodes=[{game:'a',level:1,end_action:1040,segments:[goal(2,2,null,false),{success:null,reward:0}]}];
+  await vm.runInContext('poll()',context);
+  assert.match(text('subgoal-outcomes-summary'),/Sin resultados registrados/);
+  assert.match(nodes.get('subgoal-outcomes-legend').children[0].textContent,/: —$/);
+  assert.equal(nodes.get('subgoal-outcomes').children.filter(n=>n.r===2||n.r===3).length,0,'empty refresh clears old results');
   report.episodes=oldEpisodes;
 
   // The trailing 512-action window excludes action 1. Missing measurements are

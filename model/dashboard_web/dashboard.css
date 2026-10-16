@@ -51,6 +51,7 @@ h3 span { font-size: 11px; font-weight: 400; color: #96aaa2; float: right; margi
 .subgoal-dashboard .legend button:focus-visible { outline: 1px solid currentColor; outline-offset: 2px; }
 .subgoal-dashboard .legend button:disabled { cursor: default; }
 .legend .threshold-label::before { content: ''; display: inline-block; width: 14px; border-top: 1px dashed; vertical-align: middle; }
+.outcome-key span::before { content: '●'; }
 .series-0 { color: #77dabb; } .series-1 { color: #f4b979; } .series-2 { color: #a9a6ef; } .series-3 { color: #94a7aa; }
 .subgoal-dashboard svg { display: block; width: 100%; height: auto; }
 .subgoal-dashboard canvas.goal-image { width: 256px; max-width: 100%; height: auto; image-rendering: pixelated; }

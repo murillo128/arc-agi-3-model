@@ -103,8 +103,8 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     for(const p of s.points) {
       // Leave a gap when there was no measurement; never join across it.
       if(!finite(p[0])||!finite(p[1])) {flush();continue;}
-      segment.push(p);
-      const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2,fill:color,opacity});
+      if(!s.pointsOnly)segment.push(p);
+      const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:s.pointsOnly?3:2,fill:color,opacity});
       circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
     }
     flush();
@@ -406,6 +406,29 @@ function movingAverage(points, window=512) {
     return [x,count?sum/count:null];
   });
 }
+function renderGoalOutcomes(goals){
+  // Finished training segments have a boolean outcome and a terminal reward.
+  // Missing/censored records must not silently become failures.
+  const completed=goals.filter(g=>finite(g.x)&&typeof g.success==='boolean'&&finite(g.reward)).sort((a,b)=>a.x-b.x);
+  const outcomes=completed.map(g=>[g.x,g.success?100:0,
+    `${g.game||'Juego sin dato'} / nivel ${fmt(g.level)} · ${g.goal||'Subobjetivo'} · ${fmt(g.actions)} acciones · mínimo ${fmt(g.minimum_actions)}`]);
+  let start=0,end=0,wins=0;
+  const rates=[...new Set(completed.map(g=>g.x))].map(x=>{
+    while(end<completed.length&&completed[end].x<=x){wins+=Number(completed[end].success);end++;}
+    while(start<end&&completed[start].x<=x-512){wins-=Number(completed[start].success);start++;}
+    const total=end-start;
+    return [x,100*wins/total,`${fmt(wins)} ${wins===1?'éxito':'éxitos'} · ${fmt(total-wins)} ${total-wins===1?'fracaso':'fracasos'} · ${fmt(total)} ${total===1?'subobjetivo terminado':'subobjetivos terminados'}`];
+  });
+  plot('subgoal-outcomes',[
+    {name:'Éxito',colorIndex:0,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===100)},
+    {name:'Fracaso',colorIndex:1,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===0)},
+    {name:'Éxito · hasta 512 acciones',colorIndex:2,points:rates}
+  ],{percent:true,empty:'Sin resultados de subobjetivos terminados'});
+  const last=rates.at(-1);
+  $('subgoal-outcomes-summary').textContent=last
+    ?`Ventana en acción ${fmt(last[0])}: ${last[2]}. Cada subobjetivo cuenta una vez.`
+    :'Sin resultados registrados. Los intentos incompletos no cuentan como fracasos.';
+}
 function lossBreakdown(id, rows, key) {
   const target=$(id);target.replaceChildren();
   const row=rows.findLast(r=>r[key]&&Object.values(r[key]).some(finite));
@@ -628,7 +651,7 @@ function render(report) {
   renderPlannerSuccess(report);
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);
-  const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
+  const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action,game:e.game,level:e.level})));
   $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
   renderObservationContext();
@@ -637,6 +660,7 @@ function render(report) {
     ...efficiency.map(s=>({...s,faint:true,legend:false})),
     ...efficiency.map(s=>({...s,name:`${s.name} · media de hasta 512 acciones`,points:movingAverage(s.points)}))
   ],{unit:'acciones'});
+  renderGoalOutcomes(goals);
   const rewards=goals.map(g=>[g.x,g.reward]);
   plot('reward',[{name:'Media por subobjetivo · hasta 512 acciones',points:movingAverage(rewards)},
     {name:'Reward individual',points:rewards,muted:true}]);

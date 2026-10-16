@@ -289,6 +289,17 @@ de cierre de su partida, cuando se publican. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
 
+Junto a **Eficiencia por subobjetivo**, **Resultado por subobjetivo** muestra los
+éxitos y fracasos reales de entrenamiento como puntos en 100/0 y su porcentaje de
+éxito en una ventana de 512 acciones. Los detalles indican juego, nivel, acciones
+gastadas y mínimo inicial; el resumen muestra éxitos, fracasos y denominador.
+Se agrupan todos los subobjetivos publicados en la misma acción antes de calcular
+el porcentaje. Cada segmento terminado cuenta una vez, incluidos éxitos de cero
+acciones; registros sin resultado booleano o reward terminal quedan fuera. Esta
+curva incluye la exploración y los niveles registrados: no representa éxito
+imaginado ni sustituye las evaluaciones fijas por nivel del planner. La eficiencia
+sigue midiendo únicamente subobjetivos alcanzados.
+
 La cabecera y la gráfica de velocidad muestran acciones de entrenamiento por
 segundo en los **últimos 60 segundos** de reloj (ventana menor al arrancar).
 Incluyen el tiempo de evaluación, guardado y pausas; excluyen la compilación
