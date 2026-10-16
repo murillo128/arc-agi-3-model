@@ -180,7 +180,10 @@ function frameImage(frame){
   return frame?Array.from({length:frame.height},(_,y)=>Array.from({length:frame.width},(_,x)=>frame.pixels.charCodeAt(frame.offset+y*frame.width+x))):null;
 }
 function actionLabel(action){
-  return action?`A${action.id}${action.id===6?` (${action.data.x}, ${action.data.y})`:''}`:'Inicio';
+  if(!action)return 'Inicio';
+  // Official input controls (https://docs.arcprize.org/actions), not inferred game effects.
+  const names={0:'Reiniciar',1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'↶ Deshacer'};
+  return `A${action.id} ${names[action.id]||''}${action.id===6?` (${action.data.x}, ${action.data.y})`:''}`.trim();
 }
 function sameAction(a,b){
   return !!a&&!!b&&a.id===b.id&&Object.keys(a.data||{}).length===Object.keys(b.data||{}).length
