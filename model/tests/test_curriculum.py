@@ -16,7 +16,7 @@ from unittest.mock import patch
 import numpy as np
 import torch
 
-from model.curriculum import Curriculum, CurriculumConfig, LevelReadiness
+from model.curriculum import Curriculum, CurriculumConfig, LevelReadiness, planner_exploration
 from model import agent_checkpoint, checkpoint
 from model.data import Action, Episode
 from model.environment import Environment, Factory
@@ -35,6 +35,62 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_exploration_warmup_preserves_initial_and_mature_policy(self):
+        for warmup, halfway, endpoint in ((8192,4096,8192),(2048,1024,2048)):
+            self.assertEqual(planner_exploration(0,warmup),1.)
+            self.assertAlmostEqual(planner_exploration(halfway,warmup),.6)
+            self.assertAlmostEqual(planner_exploration(endpoint,warmup),.2)
+            self.assertEqual(planner_exploration(36970,warmup),.2)
+        self.assertAlmostEqual(planner_exploration(1024),.9)
+
+    def test_resume_exploration_warmup_preserves_weights_permissions_and_inherits(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root/'source.pt',path_agent())
+            args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                    '--device','cpu','--steps','2','--evaluate-every','4096','--evaluation-episodes','1']
+            main([*args,'--actions','4'])
+            saved = checkpoint.load(root/'run/latest.pt')
+            self.assertEqual(saved['training_progress']['path_exploration_warmup'],8192)
+            progress = saved['training_progress']
+            progress['curriculum']['levels'][0].update(predictor=True,planner=True,
+                representation_passes=3,prediction_passes=2,promotion_passes=1)
+            progress['planner_actions'][0]['actions'] = 1024
+            checkpoint.write(root/'run/latest.pt',saved)
+            old = agent_checkpoint.load(root/'run/latest.pt')
+            expected = fingerprint(old.engine.model),fingerprint(old.path_evaluator)
+            snapshots = []
+            save = agent_checkpoint.save
+            def capture(path,agent,**kwargs):
+                state = kwargs['training_progress']
+                if state['actions'] == 4:
+                    self.assertEqual((fingerprint(agent.engine.model),fingerprint(agent.path_evaluator)),expected)
+                    snapshots.append(state)
+                return save(path,agent,**kwargs)
+            with patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture):
+                main([*args,'--actions','6','--resume','--path-exploration-warmup','2048'])
+            self.assertEqual(len(snapshots),1)
+            state = snapshots[0]
+            self.assertEqual(state['path_exploration_warmup'],2048)
+            self.assertEqual(state['planner_actions'],progress['planner_actions'])
+            self.assertEqual(state['curriculum'],progress['curriculum'])
+            for key in ('updates','representation_updates','path_updates','episodes'):
+                self.assertEqual(state[key],progress[key])
+            report_path = root/'run/report.json'
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['resumed_from']['path_exploration_warmup'],dict(old=8192,new=2048))
+            self.assertAlmostEqual(report['progress']['epsilon'],.6)
+            main([*args,'--actions','8','--resume'])
+            report = json.loads(report_path.read_text())
+            self.assertEqual(report['config']['path_exploration_warmup'],2048)
+            self.assertNotIn('path_exploration_warmup',report['resumed_from'])
+            self.assertAlmostEqual(report['progress']['epsilon'],.59921875)
+            self.assertEqual(checkpoint.load(root/'run/latest.pt')['training_progress']['path_exploration_warmup'],2048)
+            before = report_path.read_bytes()
+            with self.assertRaises(SystemExit), patch('sys.stderr',new=io.StringIO()):
+                main([*args,'--actions','10','--resume','--path-exploration-warmup','0'])
+            self.assertEqual(report_path.read_bytes(),before)
+
     def test_planner_freeze_skips_representation_then_new_level_trains_again(self):
         agent = path_agent()
         e = agent.engine

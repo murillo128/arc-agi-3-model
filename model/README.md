@@ -115,7 +115,12 @@ para métricas, nunca una ruta ni una etiqueta privilegiada para decidir accione
 **Path Planner:** búsqueda latente con horizonte 3, beam 4 y 16 candidatos uniformes
 de clic. Replanifica tras cada acción real; cada rama imaginada conserva su propio h.
 Tras habilitarse, exploración de 100 % a 20 % en sus primeras 8.192 acciones por
-nivel. PathValue usa features compartidas y el presupuesto restante para aprender
+nivel por defecto. `--path-exploration-warmup 2048` acorta ese arranque; conserva
+el mínimo del 20 % y cuenta sólo acciones del planner del propio nivel. Antes de
+habilitarlo se mantiene la recogida aleatoria. El valor se guarda y se hereda al
+reanudar; un cambio explícito conserva pesos, contadores, permisos y rachas de
+evaluación, y se registra antes de recoger más experiencia. Las evaluaciones
+fijas siguen sin exploración del planner. PathValue usa features compartidas y el presupuesto restante para aprender
 `P(éxito dentro del presupuesto)` con BCE y `log1p(acciones restantes | éxito)`
 con SmoothL1, sólo para segmentos exitosos (cero en el estado final alcanzado).
 Se entrena con cuatro pasadas y LR 1e-4 sobre una mezcla de hasta ocho segmentos
@@ -161,8 +166,14 @@ global. Ampliar el margen de .02 a .03 sumó una victoria en cada nivel de la mu
 de confirmación, pero no acortó ninguna de las rutas exitosas compartidas. Un
 horizonte de dos perdió una victoria del nivel 1 en el cribado. Bajar exploración
 de .20 a .10 redujo acciones en algunos éxitos, pero en la confirmación del nivel 1
-bajó de 21/32 a 17/32 victorias (nivel 2: 22/32 con ambas). Se conservaron los
-parámetros activos; los resultados completos por semilla están en
+bajó de 21/32 a 17/32 victorias (nivel 2: 22/32 con ambas). Se conservaron esos
+tres parámetros. Tras activarse manualmente el planner del nivel 2, su exploración
+de arranque estaba al 91 %. Una comparación posterior con pesos de la acción
+129057 confirmó que bajarla de .90 a .65 pasó de 13/32 a 16/32 victorias; en las
+diez partidas ganadas por ambos bajó de 139 a 94 acciones. Se adoptó un arranque
+de 2.048 acciones, manteniendo el mínimo .20: los niveles que ya completaron el
+arranque permanecen igual. Es evidencia con pesos fijos, no una garantía de la
+evolución futura del aprendizaje. Los resultados completos por semilla están en
 [`path_tuning_evidence.json`](path_tuning_evidence.json).
 
 Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como

@@ -667,6 +667,8 @@ function render(report) {
   $('path-objective').textContent=successFirst
     ? `Primero éxito estimado dentro del presupuesto; entre rutas a ${fmt(100*(finite(margin)?margin:.02))} puntos porcentuales de la mejor, menos acciones. Empates aleatorios. La estimación aún debe aprenderse; no certifica el éxito.`
     : 'Criterio histórico: duración estimada más penalización por fracaso.';
+  if(finite(report.config?.path_exploration_warmup))$('path-objective').textContent+=
+    ` Exploración de entrenamiento: del 100 % al 20 % durante ${fmt(report.config.path_exploration_warmup)} acciones del planner por nivel. La evaluación del planner no añade exploración.`;
   const change=report.objective_changes?.at(-1);
   const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa.`:'';
   const pathReplay=p.path_replay;

@@ -28,6 +28,11 @@ def measured(value):
     return isinstance(value, (float, int)) and math.isfinite(value) and value >= 0
 
 
+def planner_exploration(actions, warmup=8192):
+    """Per-level collection schedule; fixed evaluations never use exploration."""
+    return max(.2, 1. - .8 * actions / warmup)
+
+
 @dataclass
 class LevelReadiness:
     predictor: bool = False

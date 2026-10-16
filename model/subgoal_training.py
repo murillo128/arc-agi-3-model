@@ -29,7 +29,7 @@ from .learning import Engine
 from .networks import WorldModel
 from .online_learning import OnlinePredictor, OnlineRepresentation
 from .online_replay import PredictorReplay
-from .curriculum import Curriculum, CurriculumConfig
+from .curriculum import Curriculum, CurriculumConfig, planner_exploration
 from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
 from .planning import GoalValue
@@ -314,7 +314,11 @@ def main(argv=None):
                         help='Additional goals actually reached in real planner replay; resume inherits policy')
     parser.add_argument('--path-predicted-inputs', action=argparse.BooleanOptionalAction, default=None,
                         help='Calibrate predicted inputs against real outcomes; resume inherits policy')
+    parser.add_argument('--path-exploration-warmup', type=int,
+                        help='Planner actions per level to reduce exploration from 100%% to 20%%; default 8192, resume inherits')
     args = parser.parse_args(argv)
+    if args.path_exploration_warmup is not None and args.path_exploration_warmup < 1:
+        parser.error('Path exploration warmup must be a positive integer')
     if args.update_representation_threshold and not args.resume:
         parser.error('--update-representation-threshold requires --resume')
     if args.update_latent_drift_threshold and not args.resume:
@@ -374,6 +378,7 @@ def main(argv=None):
                 continue
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder', 'migrate_path_value',
                            'predictor_replay_episodes', 'predictor_batch_size', 'path_hindsight', 'path_predicted_inputs',
+                           'path_exploration_warmup',
                            'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
@@ -446,8 +451,16 @@ def main(argv=None):
                                          ('predicted_inputs', args.path_predicted_inputs))}
     changed_path_learning = path_learning != previous_path_learning
     report['config'].update({f'path_{name}': value for name, value in path_learning.items()})
+    previous_warmup = (restored or {}).get('path_exploration_warmup', 8192)
+    exploration_warmup = previous_warmup if args.path_exploration_warmup is None else args.path_exploration_warmup
+    if type(exploration_warmup) is not int or exploration_warmup < 1:
+        parser.error('Saved path exploration warmup must be a positive integer')
+    changed_warmup = exploration_warmup != previous_warmup
+    report['config']['path_exploration_warmup'] = exploration_warmup
     if args.resume:
         report['resumed_from']['path_replay_buffer'] = 'empty'
+        if changed_warmup:
+            report['resumed_from']['path_exploration_warmup'] = dict(old=previous_warmup, new=exploration_warmup)
         if changed_path_learning:
             report['resumed_from']['path_learning'] = dict(old=previous_path_learning, new=path_learning)
     recovery = (restored or {}).get('path_recovery')
@@ -671,6 +684,7 @@ def main(argv=None):
                 'encoder_learning_rate_after_predictor': encoder_rate,
                 'predictor_replay': replay_config,
                 'path_learning': path_learning,
+                'path_exploration_warmup': exploration_warmup,
                 'path_recovery': recovery,
                 'curriculum': curriculum.snapshot(),
                 'active_pair': active_pair,
@@ -725,7 +739,7 @@ def main(argv=None):
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval or changed_loss or migrated_path or changed_freeze or changed_replay
-                            or changed_encoder_rate or changed_planner_freeze or changed_path_learning):
+                            or changed_encoder_rate or changed_planner_freeze or changed_path_learning or changed_warmup):
             save('resume')
         if not args.resume:
             save('initial')
@@ -738,7 +752,7 @@ def main(argv=None):
             game, level = pair
             readiness = curriculum.readiness[pair]
             seed = episode_seeds('train', 1, offset=args.seed * 10000 + episode_index)[0]
-            epsilon = max(.2, 1. - .8 * planner_actions[pair] / 8192) if readiness.planner else 1.
+            epsilon = planner_exploration(planner_actions[pair], exploration_warmup) if readiness.planner else 1.
             def progress(row):
                 nonlocal actions, began_learning
                 actions += 1
