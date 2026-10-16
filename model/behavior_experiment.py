@@ -193,12 +193,36 @@ def fit(engine, heads, records, epochs, batch_size, learning_rate, seed, compile
 
 
 @torch.no_grad()
-def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None, role='candidate'):
+def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unspecified', round_index=None,
+             role='candidate', game=None, pair_index=None, pair_count=None, progress_callback=None):
     results, started = [], time.monotonic()
+    seeds = list(seeds)
+    context = {'split': split, 'round': round_index, 'role': role, 'policy': mode,
+               'horizon': planner.config.horizon, 'game': game,
+               'pair_index': pair_index, 'pair_count': pair_count}
+    last_progress, completed_actions, wins = started, 0, 0
+
+    def progress(*, complete=False, force=False):
+        nonlocal last_progress
+        now = time.monotonic()
+        if not force and now - last_progress < 2:
+            return
+        last_progress = now
+        data = dict(context, level=current_level,
+             episodes=len(results), total_episodes=len(seeds), wins=wins,
+             current_episode=index + 1, episode_actions=actions, episode_budget=steps,
+             episode_complete=complete, actions=completed_actions + (0 if complete else actions),
+             seconds=now - started, episode_seconds=now - episode_start)
+        emit('behavior_evaluation_progress', **data)
+        if progress_callback:
+            progress_callback(**data)
+
     levels = [level] if isinstance(level, int) else level
     for index, seed in enumerate(seeds):
         current_level = levels[index % len(levels)]
         episode_start = time.monotonic()
+        actions = 0
+        progress(force=True)
         rng, env = random.Random(seed), factory.make(seed, current_level)
         obs, actions, event = env.observation, 0, 0
         state = engine.initial(obs) if mode != 'random' else None
@@ -217,6 +241,7 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
             event = outcome(obs, after)
             if hasattr(planner, 'after_real_action'):
                 planner.after_real_action(action, obs, after)
+            progress()
             if event:
                 break
             if mode != 'random':
@@ -225,10 +250,9 @@ def evaluate(engine, planner, factory, level, seeds, steps, mode, *, split='unsp
         results.append({'seed': seed, 'level': current_level, 'success': event == 1, 'game_over': event == 2,
                         'truncated': event == 0 and not obs.terminal, 'actions': actions,
                         'decision_seconds': decision_seconds, 'seconds': time.monotonic() - episode_start})
-        if (index + 1) % 16 == 0:
-            emit('behavior_evaluation_progress', split=split, round=round_index, role=role, policy=mode, horizon=planner.config.horizon,
-                 level=current_level, episodes=index + 1, wins=sum(r['success'] for r in results))
-    context = {'split': split, 'round': round_index, 'role': role, 'policy': mode, 'horizon': planner.config.horizon}
+        completed_actions += actions
+        wins += event == 1
+        progress(complete=True, force=True)
     report = {**context, 'level': levels[0] if len(levels) == 1 else None,
               **evaluation_summary(results, time.monotonic() - started)}
     if len(levels) > 1:

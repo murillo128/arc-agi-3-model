@@ -78,6 +78,23 @@ class LMEXSyncTests(unittest.TestCase):
         packages = list(self.public.resolve().parent.glob('package-*'))
         self.assertEqual(packages, [self.public.resolve()])
 
+    def test_portable_agent_exports_active_path_weights_and_keeps_world_names(self):
+        self.payload = {'format': 'arc3-agent', 'version': 1, 'agent': {'mode': 'path_mpc'},
+            'world': {'network': self.payload['network'], 'weights': self.payload['weights']},
+            'components': {'path_evaluator': {'weights': {'readout.bias': torch.tensor([3.])}}},
+            'outcome_value': {'weights': {'unused': torch.tensor([999.])}},
+            'training_progress': {'actions': 2048, 'updates': 800, 'path_updates': 20}}
+        self.save()
+        report = self.publish()
+        self.assertEqual(report['actions'], 2048)
+        self.assertEqual(report['path_updates'], 20)
+        tensors = load_file(self.public / 'model.safetensors')
+        self.assertEqual(set(tensors), {'encoder.weight', 'decoder.bias', 'path_evaluator.readout.bias'})
+        self.assertEqual(tensors['path_evaluator.readout.bias'].tolist(), [3.])
+        self.assertEqual(tensors['encoder.weight'].tolist(), [[1.25, -2.], [0., 8.]])
+        config = json.loads((self.public / 'config.json').read_text())
+        self.assertEqual(config['architectures'], ['WorldModel', 'PathValue'])
+
     def test_bad_input_preserves_last_complete_package(self):
         self.publish()
         original = self.public.resolve()

@@ -1,6 +1,634 @@
 # Modelo residual latente
 
-## Plan de evolución aprobado
+## Plan activo: aprendizaje incremental y currículo acumulativo
+
+Sustituye las campañas anteriores. La campaña activa empieza desde cero: encoder,
+decoder, predictor y PathValue con pesos nuevos; también contadores, criterios de
+activación y resultados. Un solo juego (`sc01-v1`), hasta 262.144 acciones reales,
+sin barrido de variantes. `subgoal_config.json` fija los tamaños y la receta
+del modelo, sin depender de checkpoints previos para inicializarlo.
+
+**Activación acumulativa de predictor y planner, con representación congelable:**
+
+1. Por defecto, encoder y decoder aprenden desde la primera acción real y siguen
+   durante toda la campaña salvo que se active la congelación al admitir el planner.
+   El experimento opcional `--freeze-encoder` fija sólo
+   el encoder y mantiene el aprendizaje del decoder.
+   Reconstrucción de las dos últimas observaciones:
+   CE de colores, delta visual y overlap, tanto con el decoder contextual como
+   con su lectura local auxiliar (peso 1). La lectura local obliga a conservar
+   información visual en z sin depender de la corrección contextual del decoder.
+   SIGReg (peso 0,002) se usa sólo antes de la primera activación del predictor.
+   Desde esa activación se apaga para todo el encoder compartido, incluso al
+   abrir niveles nuevos o reanudar.
+   En este arranque desde cero, AdamW LR 3e-5 mediante
+   `--representation-learning-rate 3e-5`; se evalúan calidad y deriva antes de
+   admitir el predictor. La campaña añade `--encoder-learning-rate-after-predictor 3e-6`:
+   en la fase predictor, sólo el encoder baja a 3e-6; el decoder conserva 3e-5.
+   Son grupos separados del mismo optimizador, sin reiniciar sus momentos al
+   cambiar la tasa. Con la política por nivel, un nivel nuevo empieza con ambos a 3e-5.
+   Las tasas son hipótesis de la campaña, no una garantía de convergencia.
+   La campaña activa también usa `--freeze-representation-after-planner`: durante
+   las partidas de un nivel con planner se congelan **encoder y decoder**.
+   Al practicar un nivel nuevo vuelven a aprender, conservando los pesos.
+   Los niveles anteriores siguen practicándose según su propia fase.
+   Mientras están congelados, se detienen reconstrucción, regularizadores e invalidaciones del caché de z;
+   las evaluaciones y vistas de reconstrucción siguen disponibles. Predictor y
+   PathValue continúan aprendiendo. La memoria h aún se reconstruye con el predictor
+   actualizado, y el replay sigue siendo secuencial; esto no elimina todo su coste.
+2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
+   del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
+   aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
+   LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
+   En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
+   La receta activa usa `prediction_delta_loss: "recall_focal_capped"`, con temperatura 1.
+   Si `q` es la probabilidad del color real y `C` los píxeles realmente cambiados,
+   suma `2*(-log(q))` en `C` y `lambda*(1-q)^2*(-log(q))` en los estáticos; divide
+   por `max(32, |C|)` en cada imagen y promedia las imágenes del lote.
+   `false_change_weight` fija lambda (1 en esta receta). La máscara y el divisor
+   dependen de la realidad, sin argmax ni cortes de gradiente en los pesos suaves.
+   Los estáticos bien conservados aportan poco, no cero; muchos estáticos dudosos
+   pueden acumular una penalización grande. El suelo de 32 limita la amplificación
+   en deltas pequeños; una imagen sin cambios conserva supervisión con divisor 32.
+   No normaliza por el total de píxeles ni limita el valor máximo de la pérdida.
+   El objetivo del predictor es **MSE latente + NLL visual**,
+   tanto a un paso como en el extremo del rollout de tres pasos. No incluye
+   overlap suave; `delta_overlap_weight` sigue aplicándose a la reconstrucción.
+3. PathValue se incorpora cuando además los errores de predicción a uno y tres
+   pasos son ≤10 % durante tres evaluaciones. Aprende al terminar cada segmento
+   real de subobjetivo; el predictor continúa actualizándose. Encoder y decoder
+   siguen la política de congelación por nivel descrita arriba.
+
+Los permisos se mantienen una vez abiertos **para cada juego/nivel**. Una regresión
+se muestra y bloquea avanzar de nivel, pero no apaga componentes ya habilitados.
+La reconstrucción baja por sí sola no prueba estabilidad: la deriva compara z de
+las mismas imágenes iniciales entre evaluaciones (norma RMS de la diferencia /
+norma RMS anterior). La primera evaluación no tiene esa comparación y no abre
+permisos. Los umbrales, paciencia y tasas son configurables; son valores iniciales,
+no una conclusión experimental ni garantía de estabilidad.
+
+La penalización adicional de varianza tiene peso **0** en esta campaña. Aplicarla
+a sólo dos observaciones consecutivas exigía separar sus latentes en cada
+posición, aunque la imagen apenas cambiase. SIGReg también usa una muestra pequeña;
+conservarlo sólo al principio es una hipótesis de entrenamiento, no una garantía
+contra el colapso. Los diagnósticos de diversidad, rango y respuesta de zonas
+estáticas siguen activos. El cambio corrige además una omisión del entrenador
+incremental: `local_reconstruction_weight` ahora participa realmente en la pérdida.
+Los comandos de experimentos anteriores mantienen sus propias configuraciones.
+
+**Un solo juego por campaña:** `--game sc01-v1` por defecto. `si01-v1` también
+puede seleccionarse para otra campaña, pero no se intercalan ambos juegos.
+Primero nivel 1; después 1+2; después 1+2+3, etc. Se alternan partidas nuevas
+entre los niveles desbloqueados del juego elegido, con parámetros aleatorios. No se
+borran pesos al avanzar; la experiencia temporal sí se descarta en cada partida.
+El avance automático a otro nivel exige calidad de representación/predicción y ≥80 %
+de éxito del planner en **el último nivel desbloqueado** de ese juego durante
+tres evaluaciones consecutivas. No basta una media global ni agotar un presupuesto.
+
+**Evaluación:** cada 256 acciones (`--evaluate-every`), al terminar la partida,
+solo se comprueba el último nivel desbloqueado. Se juegan ocho partidas aleatorias
+una vez por nivel y se conservan sus resultados como referencia fija. Las observaciones
+y acciones reales se guardan atómicamente en `evaluation/` dentro del directorio
+local de la campaña, separadas del replay de entrenamiento. Cada comprobación
+recalcula representación y predicción con los pesos actuales sobre esas mismas
+trayectorias, sin nuevas llamadas al entorno ni aprendizaje. No se guardan latentes
+aprendidos: la calidad necesita recalcularse aunque el éxito aleatorio sea constante.
+El planner se evalúa aparte una vez habilitado: ocho partidas con las mismas
+semillas y presupuesto de 128 acciones. El historial de niveles anteriores sigue
+visible, pero ya no detectamos regresiones periódicamente en ellos. El entrenamiento
+acumulativo de niveles anteriores se mantiene.
+
+La caché persiste al reanudar; un archivo incompatible o corrupto produce un error.
+Las campañas antiguas sin trayectorias guardadas recogen la muestra una vez en la
+primera comprobación de cada nivel. La migración guarda el protocolo nuevo antes
+de entrenar, conserva pesos/contadores/permisos y reinicia las rachas de activación.
+Las filas `quality_probe` no son nuevas partidas: tienen cero acciones nuevas y
+resultados de victoria ausentes. La referencia `random` se registra una sola vez;
+su línea permanece horizontal. La frecuencia sigue siendo 256 acciones, configurable.
+La calidad predictiva requiere al menos ocho muestras y cuatro con cambios reales
+a cada horizonte. Una predicción exacta sin cambios tiene error cero, pero no
+sustituye la cobertura de transiciones con cambios. Para tareas que terminan sin
+cambiar píxeles, se admite una evaluación enteramente estática solo si incluye
+una terminación nativa observada; se decide por evidencia pública, no por el juego.
+El éxito del planner sigue siendo obligatorio para avanzar automáticamente. La confirmación final utiliza
+otras semillas y no modifica permisos ni currículo.
+
+Calidad, deriva y activaciones usan la misma frecuencia. La deriva mide cambios
+entre estas evaluaciones: acortar el intervalo cambia el criterio de estabilidad,
+no solo la frecuencia del gráfico. Para cambiarlo al reanudar, se requiere
+`--resume --evaluate-every 256 --update-evaluation-interval`. Se conservan pesos,
+contadores y permisos ya abiertos, pero se reinician las rachas de comprobación.
+La primera evaluación reconstruye los anclajes; las siguientes pueden contar
+para las tres comprobaciones consecutivas. Cada fila registra su intervalo.
+
+**Subobjetivos desde el inicio:** los juegos generan la lista después de
+aleatorizarse. El agente recibe solamente la imagen/máscara del objetivo actual;
+una lista de longitud uno usa el mismo contrato que una lista de varios objetivos.
+Solo la confirmación real del profesor avanza la lista. La memoria recurrente se
+conserva entre objetivos de la misma partida. El mínimo de acciones es una referencia
+para métricas, nunca una ruta ni una etiqueta privilegiada para decidir acciones.
+
+**Path Planner:** búsqueda latente con horizonte 3, beam 4 y 16 candidatos uniformes
+de clic. Replanifica tras cada acción real; cada rama imaginada conserva su propio h.
+Tras habilitarse, exploración de 100 % a 20 % en sus primeras 8.192 acciones por
+nivel por defecto. `--path-exploration-warmup 2048` acorta ese arranque; conserva
+el mínimo del 20 % y cuenta sólo acciones del planner del propio nivel. Antes de
+habilitarlo se mantiene la recogida aleatoria. El valor se guarda y se hereda al
+reanudar; un cambio explícito conserva pesos, contadores, permisos y rachas de
+evaluación, y se registra antes de recoger más experiencia. Las evaluaciones
+fijas siguen sin exploración del planner. PathValue usa features compartidas y el presupuesto restante para aprender
+`P(éxito dentro del presupuesto)` con BCE y `log1p(acciones restantes | éxito)`
+con SmoothL1, sólo para segmentos exitosos (cero en el estado final alcanzado).
+Se entrena con cuatro pasadas y LR 1e-4 sobre una mezcla de hasta ocho segmentos
+reales completos, conservados en un replay de hasta 64 segmentos y limitado por
+el presupuesto de bytes del motor. Cada segmento tiene el mismo peso, aunque su
+partida sea más larga. Se guardan observaciones y objetivos originales, y se
+recalculan sus latentes y memorias con los pesos actuales. El fracaso
+observado supervisa la probabilidad; no significa que ese estado sea irresoluble.
+El presupuesto de cada ejemplo es el de la partida menos las acciones ya gastadas,
+también al cambiar de subobjetivo. No se renueva artificialmente.
+
+Tanto la poda del beam como la elección final priorizan probabilidad: entre rutas
+a menos de 0,02 del máximo, eligen menor duración total (prefijo imaginado más
+restante condicionada al éxito). Los empates numéricos de duración (1e-6 acciones)
+se aleatorizan con el RNG de la partida; no se prefiere A1 por orden de enumeración.
+La probabilidad procede de la política de recogida y puede estar mal calibrada o
+explotar errores del predictor. No sustituye la confirmación real del profesor.
+
+`model.path_tuning` compara márgenes sobre un checkpoint fijo y las mismas semillas
+de desarrollo, sin entrenar ni generar pesos. Por ejemplo, tras copiar el checkpoint
+a una ruta estable fuera de Git:
+
+```sh
+.venv/bin/python -m model.path_tuning --source /tmp/planner-fixed.pt \
+  --output /tmp/planner-margin-screen --levels 1 2 --margins .02 .05 .10 \
+  --episodes 16 --dev-offset 710000
+```
+
+El primer margen es la referencia. `--horizons 3 2` compara también profundidad de
+búsqueda sin modificar los horizontes de entrenamiento; la primera combinación es
+la referencia de cada nivel. `--epsilons .2 .1` compara exploración aleatoria con
+los mismos pesos; por defecto es cero como en la evaluación fija del planner.
+`--noop-cooldowns 0 8` compara la exclusión temporal de acciones observadas sin
+efecto. `--leaf-only` es una variante experimental que puntúa sólo rutas de toda
+la profundidad; está desactivada en la campaña. Ninguna opción cambia pesos.
+El informe conserva semillas, hash del checkpoint,
+victorias ganadas/perdidas, acciones totales, acciones de partidas exitosas y acciones
+en las mismas partidas ganadas por ambos candidatos. Reducir sólo la media de los
+éxitos puede ocultar que ahora fracasan las partidas largas. Un candidato debe
+confirmarse frente a la referencia en otro conjunto de desarrollo (`--dev-offset`
+distinto); estas comparaciones no demuestran equivalencia estadística ni cambian
+el currículo o la configuración del entrenamiento activo.
+
+En la comparación del checkpoint de la acción 126984 no se adoptó ningún ajuste
+global. Ampliar el margen de .02 a .03 sumó una victoria en cada nivel de la muestra
+de confirmación, pero no acortó ninguna de las rutas exitosas compartidas. Un
+horizonte de dos perdió una victoria del nivel 1 en el cribado. Bajar exploración
+de .20 a .10 redujo acciones en algunos éxitos, pero en la confirmación del nivel 1
+bajó de 21/32 a 17/32 victorias (nivel 2: 22/32 con ambas). Se conservaron esos
+tres parámetros. Tras activarse manualmente el planner del nivel 2, su exploración
+de arranque estaba al 91 %. Una comparación posterior con pesos de la acción
+129057 confirmó que bajarla de .90 a .65 pasó de 13/32 a 16/32 victorias; en las
+diez partidas ganadas por ambos bajó de 139 a 94 acciones. Se adoptó un arranque
+de 2.048 acciones, manteniendo el mínimo .20: los niveles que ya completaron el
+arranque permanecen igual. Es evidencia con pesos fijos, no una garantía de la
+evolución futura del aprendizaje. Los resultados completos por semilla están en
+[`path_tuning_evidence.json`](path_tuning_evidence.json).
+
+En el checkpoint 140330, ampliar de tres a seis pasos no cambió las victorias ni
+las acciones en 16 partidas por nivel y multiplicó por aproximadamente 2,2 el coste de decisión.
+Puntuar sólo las hojas empeoró los resultados. Se conserva profundidad 3 y se
+adopta `--path-noop-cooldown 8`: dos muestras separadas de 32 y 64 partidas pasan,
+en total, de 61/96 a 64/96 victorias en nivel 2 y conservan 71/96 en nivel 1.
+La segunda muestra intercambia una victoria por una derrota en nivel 1: no hay
+garantía por partida ni significación estadística demostrada. Los bloqueos de
+2/4 acciones no mejoran el resultado global de la muestra de 64. Se rechaza usar
+la probabilidad de éxito futuro como señal de WIN actual: tampoco se separan de
+forma fiable los estados predichos exitosos mediante distancia al objetivo.
+No se habilita poda por éxito imaginado ni reutilización no verificada de rutas.
+La evidencia y semillas están en [`path_budget_evidence.json`](path_budget_evidence.json).
+Ese archivo incluye el nuevo divisor del loss sobre las 211 transiciones reales
+ya analizadas: media visual 5,109 → 2,299 y máximo 114,329 → 17,864.
+Es un cambio de escala, no una mejora demostrada de precisión.
+
+Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como
+métrica histórica, no como criterio de selección ni target de PathValue.
+Un corte administrativo queda censurado, no se etiqueta como fracaso.
+La versión 3 normaliza las features antes de las dos salidas con LayerNorm; la
+versión 4 además usa contraste compartido entre estado y objetivo dentro de la
+máscara, para que el fondo no domine los pequeños cambios relevantes. La versión
+4 es el valor inicial para evaluadores nuevos. La versión se almacena en el
+checkpoint: cargar una versión anterior no cambia su cálculo.
+
+`--path-hindsight` añade un objetivo realmente alcanzado dentro de cada segmento
+muestreado, hasta su primera aparición; conserva el fracaso del objetivo original
+y excluye imágenes de GAME_OVER. `--path-predicted-inputs` empareja los estados
+reales con predicciones de uno a tres pasos usando las acciones que efectivamente
+se ejecutaron. Ambos reciben las mismas etiquetas reales: las predicciones nunca
+aportan objetivos de éxito ni gradientes al modelo del mundo. Las dos opciones
+son explícitas y se heredan al reanudar; por defecto están desactivadas.
+
+**Coherencia de los pesos:** representación, predictor y planner tienen optimizadores
+separados sobre los mismos módulos del agente. Tras actualizar representación se
+invalidan los latentes de inferencia, se recodifican historial y objetivo, y se
+recompone h. El predictor compara ambos extremos con el encoder actualizado y usa
+el decoder sin actualizar sus pesos en ESA llamada; el decoder sí aprende con su
+propio optimizador. Después de modificar dinámica se recompone h otra vez. No
+actualizamos pesos dentro de una búsqueda ni mezclamos predicciones con datos reales.
+
+CUDA usa `torch.compile`, BF16 y momentos AdamW de 8 bits para representación y
+predictor; CPU usa float32 y AdamW normal. Se conserva el límite de GPU a 250 W.
+Por defecto, la partida actual es el único buffer. El experimento opcional
+`--predictor-replay-episodes 16 --predictor-batch-size 4` mantiene hasta 16 partidas
+reales de entrenamiento en RAM, con el límite de bytes de replay del modelo.
+Cada actualización mezcla la transición recién observada con un extremo aleatorio
+de hasta tres partidas anteriores distintas; al arrancar usa las disponibles.
+Conserva el historial real de cada muestra y reconstruye su memoria recurrente con
+los pesos actuales. Los latentes cacheados se invalidan si cambia el encoder.
+Se promedia la misma pérdida por transición, incluido el rollout de tres pasos
+cuando existe historial suficiente. Se acumulan gradientes por muestra y se hace
+un solo paso del optimizador por acción real, con clipping después de promediar.
+El término de rollout ausente aporta cero a esa media; si falta en todo el lote,
+no se registra. Las evaluaciones nunca entran en el buffer. No se guardan
+grabaciones/replay en disco: al reanudar el buffer vuelve a estar vacío.
+Los dos parámetros se heredan del checkpoint, o pueden cambiarse explícitamente
+con `--resume`; el cambio conserva pesos, contadores y permisos, reinicia las
+rachas y se guarda antes de entrenar. Para desactivarlo se usan capacidad 0 y
+lote 1. El dashboard muestra la ocupación y el tamaño real del último minibatch.
+Checkpoint portátil inicial y cada 2.048 acciones, al terminar la partida. Incluye
+pesos y configuración de módulos activos y resumen del currículo. Este comando
+inicia una campaña nueva. Con `--resume` continúa desde `latest.pt` del directorio
+de salida: recupera todos los pesos (incluido PathValue), permisos, niveles y
+contadores, y descarta mediciones posteriores al checkpoint. Los momentos de los
+optimizadores se reinician: no es una continuación numéricamente idéntica. También
+se renuevan los anclajes de deriva en la siguiente evaluación. No cambia los
+hiperparámetros ni el juego al reanudar; permite ampliar el presupuesto de acciones.
+La excepción explícita `--update-representation-threshold --representation-error 0.10`
+permite cambiar únicamente ese umbral con `--resume`.
+`--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
+deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
+reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
+`--prediction-delta-loss recall_focal_capped` permite seleccionar explícitamente la nueva NLL,
+también con `--resume`. Sin esta opción se hereda la pérdida del checkpoint o del
+JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
+Los modos anteriores `balanced`, `union`, `focal` y `recall_focal` siguen disponibles sin cambiar sus fórmulas.
+El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
+el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
+La reconstrucción del encoder/decoder conserva su pérdida anterior.
+`--path-horizon N` cambia sólo la profundidad de búsqueda; el entrenamiento y la
+evaluación del predictor conservan tres pasos. `--path-noop-cooldown N` activa una
+exclusión temporal en la raíz: tras una respuesta real sin cambios dentro de la
+máscara del objetivo, evita la misma acción/datos desde ese mismo tablero durante
+N acciones reales, siempre que queden alternativas. No altera las acciones legales
+ni poda estados imaginados. Caduca, se borra al cambiar de objetivo/episodio y
+permite todas las acciones si no quedan alternativas. Es una heurística falible
+con observación parcial: una acción aparentemente ineficaz podría tener efectos
+ocultos o retardados. Cero conserva el comportamiento anterior. Ambas opciones
+se heredan del checkpoint al reanudar; un cambio explícito conserva pesos y
+permisos, reinicia rachas y guarda la configuración antes de actuar.
+Para convertir un PathValue antiguo se exige `--migrate-path-value`: conserva sus
+features compartidas y todos los pesos del mundo, pero reinicia las dos salidas
+(éxito inicial 0,5; duración inicial 16 acciones) y añade la entrada de presupuesto.
+La migración desde versiones 1/2 produce `objective_version: 3`, con LayerNorm
+antes de las salidas. Los siguientes checkpoints no necesitan migración. La
+versión 2 sigue siendo cargable sin migración para controles congelados; la
+versión 4 de contraste se inicializa con pesos nuevos; no se reinterpretan
+silenciosamente las features de un checkpoint anterior.
+Se mantienen contadores/permisos, se reinician rachas de promoción y se guarda antes
+de actuar. Como en todo resume, los optimizadores y el replay RAM se reinician.
+El reporte registra las transiciones de objetivo; pérdidas anteriores y nuevas no
+son directamente comparables. La trayectoria muestra por separado la estimación
+de la elección y la de la ruta visualizada, que puede ser una alternativa.
+
+`python -m model.path_recovery --source CHECKPOINT --output DIRECTORIO_NUEVO`
+permite aislar el aprendizaje del evaluador con el mundo congelado. Usa semillas
+de entrenamiento y desarrollo disjuntas, compara con azar y comprueba que la
+evaluación no cambie pesos. `--fresh-path-value --path-objective-version 4`
+inicializa el evaluador de contraste; `--hindsight --predicted-inputs` activa sus
+dos aumentos. `--policy planner --epsilon .25` recoge partidas de la política
+actual con exploración; por defecto recoge acciones aleatorias. `--episodes 0`
+solo evalúa. El reporte contabiliza por separado todas las partidas, acciones y
+actualizaciones de esta recuperación. Su checkpoint no sustituye directamente
+al del currículo: no contiene los contadores ni permisos de la campaña original.
+
+La recuperación del 16/10/2026 en `sc01-v1`, nivel 1, pasó de 7/32 a 25/32
+victorias en el mismo conjunto adicional de desarrollo (azar: 10/32), con el
+mundo congelado durante el diagnóstico y entrenamiento del evaluador. Supuso
+1.536 partidas reales adicionales y 29.084 acciones, separadas de las curvas de
+la campaña. Las evaluaciones de ocho partidas siguen oscilando; no son resultados
+de competición ni prueban descubrimiento autónomo de objetivos. Semillas,
+contadores y huellas de los checkpoints: [evidencia](path_recovery_evidence.json).
+Tras reanudar la campaña con el predictor aprendiendo, las primeras 88 partidas
+terminadas dieron 67 victorias y las tres evaluaciones fijas fueron 5/8, 6/8 y
+5/8. Encoder y decoder conservaron sus pesos durante esa verificación.
+`--encoder-learning-rate-after-predictor 3e-6` también admite un cambio explícito
+al reanudar. El valor debe ser positivo y no mayor que el LR de representación.
+Se guarda en el checkpoint y se hereda al omitir la opción; checkpoints antiguos
+sin ella conservan el LR anterior. El cambio preserva pesos, contadores y permisos,
+reinicia las rachas de cualificación y se guarda antes de entrenar. El dashboard
+muestra las tasas efectivas; un encoder congelado sigue excluido del optimizador.
+Los momentos de Adam y el replay en RAM se reinician al reabrir el proceso, como
+en las demás reanudaciones; reducir la tasa dentro del proceso no los reinicia.
+`--freeze-representation-after-planner` se guarda y hereda desde el checkpoint;
+los checkpoints antiguos sin la opción mantienen su comportamiento anterior.
+La fase se selecciona para cada partida: representación, predictor o planner,
+según los permisos de ese nivel. Se restaura el nivel activo al reanudar.
+Los cambios de fase dentro del proceso conservan los momentos del optimizador.
+Sin esta política, la reducción de LR del encoder sigue siendo global tras
+la primera admisión del predictor, como en las versiones anteriores. `--no-freeze-representation-after-planner`
+al reanudar la desactiva explícitamente, respetando después las opciones de LR
+y congelación sólo del encoder. Las pérdidas de reconstrucción no calculadas
+se registran como ausentes, no como ceros.
+`--freeze-encoder` fija sólo el encoder: el decoder y el predictor siguen
+aprendiendo con las mismas pérdidas. No se optimizan ni regularizan los pesos
+del encoder. El modo queda en el checkpoint y se hereda con `--resume`; los
+checkpoints antiguos mantienen el encoder entrenable. `--no-freeze-encoder`
+lo vuelve a activar. Cambiar este modo al reanudar conserva pesos, contadores y
+permisos, reinicia las rachas de evaluación y guarda antes de seguir entrenando.
+El dashboard identifica el encoder congelado; el contador de representación
+pasa a contar actualizaciones del decoder. La primera evaluación tras reanudar
+establece nuevos anclajes de deriva, por lo que no se compara con la anterior.
+Este experimento no cambia la NLL ni demuestra por sí solo una mejora predictiva;
+también se reinician los momentos de los optimizadores al reanudar.
+`--init-config` inicializa todos los módulos aleatoriamente con la semilla indicada.
+La alternativa explícita `--source` transfiere el mundo preentrenado e inicializa
+PathValue; no se utiliza en la campaña actual. El dashboard identifica ambos modos.
+
+En Linux, `SIGUSR1` solicita un checkpoint adicional y el entrenamiento continúa.
+La señal sólo encola la petición: los pesos y contadores se guardan atómicamente
+en `latest.pt` al terminar la partida o la evaluación en curso. Varias señales
+pendientes se agrupan en un guardado; una recibida durante la escritura queda
+pendiente para el siguiente punto seguro. Para el servicio de esta campaña:
+
+```sh
+systemctl --user kill --kill-whom=main --signal=SIGUSR1 arc3-curriculum.service
+```
+
+Para un proceso lanzado desde un shell, usa `kill -USR1 <PID>`. El log confirma
+el guardado con `checkpoint_saved`, `reason: "signal"` y el contador de acciones;
+`report.json` actualiza `checkpoint_action` y `last_checkpoint`. El campo
+`checkpoint_signal: "SIGUSR1"` indica que esta versión tiene instalado el handler.
+También hay dos controles manuales (se aplican al terminar la partida o evaluación):
+
+```sh
+# Una fase: representación -> predictor -> planner, en el nivel de entrenamiento actual.
+systemctl --user kill --kill-whom=main --signal=SIGUSR2 arc3-curriculum.service
+# Abrir el siguiente nivel y practicarlo en la próxima partida.
+systemctl --user kill --kill-whom=main --signal=SIGHUP arc3-curriculum.service
+```
+
+Durante una evaluación, la fase se refiere al último nivel de **entrenamiento**,
+no al nivel que se está evaluando. Un avance de nivel seguido de otro de fase
+actúa sobre el nivel recién abierto. Se conservan las prácticas de niveles previos.
+Estas peticiones saltan los gates explícitamente: no inventan mediciones ni rachas
+aprobadas. Se registran en `manual_controls` (últimas 128), en el dashboard y en
+el checkpoint antes de la siguiente acción; `control_signals` indica disponibilidad.
+La señal sólo encola; si llega durante una escritura se atiende en el siguiente
+punto seguro. Las señales POSIX pueden agruparse: espera la confirmación antes de
+repetir. Si ya está en planner, en el último nivel o sin presupuesto, se registra
+sin avanzar. Una escritura fallida detiene el proceso y conserva el checkpoint anterior.
+No enviar estas señales a procesos antiguos que no tengan los handlers. Se mantiene el formato
+portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador.
+
+```sh
+.venv/bin/python -u -m model.subgoal_training \
+  --game sc01-v1 \
+  --init-config model/subgoal_config.json \
+  --representation-learning-rate 3e-5 \
+  --encoder-learning-rate-after-predictor 3e-6 \
+  --freeze-representation-after-planner \
+  --output model/runs/curriculum/current
+.venv/bin/python -m model.dashboard \
+  --subgoal-report model/runs/curriculum/current/report.json
+```
+
+Para habilitar **Avanzar fase** y **Siguiente nivel** en la pestaña Currículo,
+arranca el dashboard con `--curriculum-service arc3-curriculum.service` además de
+`--subgoal-report`. Sin esa opción continúa siendo de sólo lectura. Los botones
+usan los controles del entrenador activo, muestran la petición pendiente y el
+resultado registrado; se desactivan mientras esperan o cuando el avance no procede.
+Se comprueba que el servicio corresponde al reporte mostrado. No reinician el
+entrenamiento ni cambian pesos desde el servidor web. El backend requiere Linux
+con pidfd y el mismo usuario del servicio. Sólo hay que reiniciar el dashboard
+para habilitarlos; no es necesario reiniciar el entrenador que ya admite señales.
+
+LMEX sigue `model/runs/curriculum/current/latest.pt`; el sincronizador reutiliza el
+`architecture.json` del repositorio. El checkpoint `path_mpc` necesita que su
+llamador proporcione el objetivo con `Agent.set_goal`: no descubre objetivos.
+El profesor sintético está fuera del agente y se rechaza para juegos SDK ajenos
+al repositorio. Los resultados no prueban descubrimiento autónomo de reglas/objetivos.
+
+**Dashboard:** una ejecución de un solo juego, una tabla de niveles, componentes habilitados,
+mediciones y evaluaciones consecutivas para avanzar. La cabecera muestra el uso
+de GPU (%) y su temperatura (°C), consultados cada dos segundos con `nvidia-smi`
+desde el servidor HTTP. Son lecturas actuales de toda la GPU, incluidos otros
+procesos; no se guardan históricos ni se modifica el entrenador. Si no hay lectura,
+se indica como no disponible, sin conservar un valor antiguo ni inventar un cero.
+Curvas fijas de reconstrucción
+y predicción a uno/tres pasos, agregadas con igual peso por nivel; se dejan cortes
+al cambiar la cobertura del currículo. Cada leyenda muestra el último valor
+medido, con su acción en la ayuda. Al pasar el cursor, tocar o enfocar una leyenda,
+se destaca su curva y aparece una guía horizontal punteada en el último valor
+medido, con un círculo en su posición. La selección persiste entre consultas;
+no se inventa una referencia para series sin datos. La gráfica de calidad marca los umbrales
+configurados con líneas finas punteadas; los límites coincidentes comparten línea.
+Son referencias: el avance requiere cumplir todos los criterios por nivel, no
+solo que una media cruce una línea. Las curvas de interacción conservan las
+últimas 4.096 acciones: bloques de 32 y tendencia de 512. El error suma errores y
+uniones de deltas; el desglose usa píxeles por acción medida. La pérdida de
+representación y las métricas del planner también muestran medias
+móviles de hasta 512 acciones, con los valores individuales atenuados. Las pérdidas
+solo cuentan actualizaciones registradas; la eficiencia promedia por objetivo
+alcanzado y el reward incluye fracasos. Los subobjetivos se sitúan en la acción
+de cierre de su partida, cuando se publican. Datos ausentes no son
+ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
+contadores, nunca suman acciones de aprendizaje.
+
+Junto a **Eficiencia por subobjetivo**, **Resultado por subobjetivo** muestra los
+éxitos y fracasos reales de entrenamiento como puntos en 100/0 y su porcentaje de
+éxito en una ventana de 512 acciones. Los detalles indican juego, nivel, acciones
+gastadas y mínimo inicial; el resumen muestra éxitos, fracasos y denominador.
+Se agrupan todos los subobjetivos publicados en la misma acción antes de calcular
+el porcentaje. Cada segmento terminado cuenta una vez, incluidos éxitos de cero
+acciones; registros sin resultado booleano o reward terminal quedan fuera. Esta
+curva incluye la exploración y los niveles registrados: no representa éxito
+imaginado ni sustituye las evaluaciones fijas por nivel del planner. La eficiencia
+sigue midiendo únicamente subobjetivos alcanzados.
+
+La cabecera y la gráfica de velocidad muestran acciones de entrenamiento por
+segundo en los **últimos 60 segundos** de reloj (ventana menor al arrancar).
+Incluyen el tiempo de evaluación, guardado y pausas; excluyen la compilación
+inicial anterior a la primera acción. El contador se reinicia al reanudar el
+proceso y llega a cero tras 60 segundos sin acciones. El campo `recent_tps`
+identifica esta métrica: el dashboard no reutiliza como recientes los valores
+acumulados de informes antiguos.
+
+Para atribuir costes sin alterar la campaña, `model.profile_training` copia
+`latest.pt`, el informe y las grabaciones de evaluación a un directorio nuevo.
+La copia sigue las reglas normales de reanudación: mismos pesos/progreso, pero
+optimizadores y replay de entrenamiento nuevos. Pausa antes las cargas que
+compitan por la GPU. Tras `--`, pasa los argumentos originales del entrenador
+excepto `--output` y `--actions`; por ejemplo, para la configuración anterior:
+
+```sh
+.venv/bin/python -m model.profile_training \
+  --source-run model/runs/curriculum/current \
+  --output model/runs/profile/example --actions 256 --warmup 64 -- \
+  --game sc01-v1 --init-config model/subgoal_config.json \
+  --representation-learning-rate 3e-5 \
+  --encoder-learning-rate-after-predictor 3e-6 \
+  --freeze-representation-after-planner
+```
+
+`timing.json` separa las categorías por tiempo de pared exclusivo, incluidas sus
+esperas. La ventana empieza después del calentamiento y termina al completar el
+presupuesto; incluye evaluaciones periódicas, pero excluye la evaluación final
+posterior. Compara mismos pesos, semillas y opciones, comprobando que no queden
+compilaciones tardías. `--cpu-profile` guarda `cpu.prof`; `--trace-actions 8`
+captura CPU/kernels CUDA antes de la ventana, y `--synchronize` espera en los
+límites de las categorías externas. Estas opciones alteran los tiempos: confirma
+las ganancias sin ellas y no sumes anotaciones GPU anidadas como utilización.
+También admite `--device cpu` entre los argumentos del entrenador.
+
+El entrenamiento publica JSON compacto con el mismo contenido y frecuencia.
+La memoria del replay se reconstruye con pesos actuales, transfiriendo sus
+acciones juntas; se omite una reconstrucción previa que ese replay no utilizaba.
+Las pérdidas del predictor se copian a CPU una vez por lote, sin cambiar sus
+gradientes, pesos relativos ni la acumulación numérica de las métricas.
+
+**Subobjetivos y Path Planner → Éxito del planner** compara el porcentaje de
+niveles resueltos (`100 × victorias / partidas`) del planner y del azar en las
+evaluaciones fijas de desarrollo. El selector separa cada juego/nivel; el eje
+horizontal cuenta acciones de entrenamiento. Cuando hay mediciones del planner,
+la gráfica empieza en la primera para que su evolución sea legible. Las leyendas
+y los puntos muestran los denominadores y la acción de cada medición; un cero
+medido se conserva y una evaluación ausente no se rellena. Las evaluaciones
+finales y las partidas de entrenamiento no se mezclan en estas curvas. La línea
+del umbral de éxito no sustituye los demás requisitos de promoción del currículo.
+
+**Subobjetivos y Path Planner → Trayectoria real e imaginación** aparece debajo
+de la observación y el subobjetivo de la muestra seleccionada. El tiempo avanza
+hacia la derecha: la fila real contiene el estado final de cada acción y su
+etiqueta; cada fila inferior parte de un origen `t` y alinea sus predicciones
+en las columnas `t+1`, `t+2`, `t+3`. Son reconstrucciones de los latentes de una
+ruta explorada hasta el horizonte disponible, capturados antes de ejecutar la
+acción o aprender de su resultado. La ruta que decide la acción puede ser más
+corta: el visor prioriza una continuación de ese prefijo dentro de las ramas
+que sobrevivieron a la búsqueda. Si no queda ninguna, prioriza la misma primera
+acción y, en último caso, muestra la mejor alternativa de ese horizonte. Las
+filas distinguen «Ruta elegida», «Continuación explorada» y «Alternativa explorada»;
+esta selección para inspección no cambia la decisión ni las puntuaciones.
+Se decodifican hasta tres estados ya calculados, sin repetir la
+búsqueda ni ejecutar nuevas predicciones, sin gradientes y sin cambiar pesos.
+La captura añade ese coste de lectura/decodificación sólo a las partidas elegibles.
+El presupuesto restante puede acortar el horizonte; no se rellena. Las secuencias que difieren de las acciones
+finalmente ejecutadas se marcan «Ruta distinta»; no son medidas de error de
+predicción sobre la trayectoria real. Los destinos posteriores al final real
+se muestran sin observación de referencia.
+
+Seleccionar un estado fija la muestra y sincroniza las dos tarjetas superiores.
+La reproducción y la barra recorren además todos los frames de animación reales.
+Se distinguen entrenamiento/evaluación y exploración aleatoria; esta última no
+reutiliza rutas anteriores del planner. Las evaluaciones de la política aleatoria
+no se capturan. La casilla de actualización automática permite recibir otra
+muestra, sin reconstruir miniaturas cuando su identificador no cambia. Las
+muestras antiguas siguen funcionando con avisos de subobjetivos/predicciones
+ausentes. Se conserva una sola trayectoria completa en
+`planner_trajectory.json`, sustituida como máximo cada dos segundos al finalizar
+una partida, sin guardar un archivo histórico ni añadir datos al checkpoint.
+El reporte incluye solo su identificador/contexto y `/api/trajectory` sirve
+exclusivamente la muestra que coincide con ese identificador. Los frames se
+guardan como bytes de paleta en base64; una trayectoria que exceda 4 MiB entre
+frames reales, predicciones y subobjetivos, o 128 acciones, se omite entera con
+un aviso, sin truncarla. Un error de captura o escritura conserva la muestra
+anterior y no detiene el entrenamiento. Al
+reanudar se descarta la referencia a la muestra del proceso anterior.
+
+Cada gráfica de pérdida permite desplegar los componentes de la última
+actualización, con sus pesos ya aplicados: su suma coincide con el total. La
+representación distingue CE, delta, overlap, reconstrucción local y regularizadores
+cuando se calculan. El predictor distingue MSE latente, delta visual y rollout
+cuando existe un prefijo suficiente. Un término ausente no se presenta como cero.
+El panel muestra también si SIGReg sigue activo en la fase inicial o está apagado.
+La gráfica **Pérdida por componente** muestra además el histórico del predictor:
+MSE latente, NLL visual y total del rollout. Los registros anteriores conservan
+el error de solapamiento que sí usaron; las nuevas actualizaciones lo omiten.
+Reutiliza `curves[].predictor_terms` de `report.json`; esos términos también están presentes
+en los eventos del log. Cada curva conserva las actualizaciones individuales y
+su media sobre hasta 512 acciones, contando sólo valores calculados. El rollout
+no existe en todas las actualizaciones, por lo que las medias por componente
+pueden no sumar la media de la pérdida total. Se indica el modo activo de NLL;
+un reporte antiguo sin ese campo no recibe un modo inventado. Estas pérdidas
+no son porcentajes de acierto ni recompensas; los aciertos aparecen en el desglose
+de deltas. No hace falta reiniciar el entrenamiento para mostrar este histórico.
+
+El panel del predictor muestra cada dos segundos una muestra aleatoria de las
+últimas 64 transiciones medidas: tablero previo real, reconstrucción del previo,
+delta real, delta predicho y una máscara de su unión. La máscara clasifica cada
+píxel cambiado como inventado, omitido, color incorrecto o acertado, con los mismos
+colores del desglose y un recuento por categoría; los píxeles sin cambios en ambos
+deltas conservan la cuadrícula. La reconstrucción decodifica el latente de esa misma
+observación, con los pesos anteriores a la actualización: durante el aprendizaje
+reutiliza la salida del decoder ya calculada; en evaluación se decodifica sin
+gradientes. No es una visualización directa de los valores del vector latente. Se
+reutiliza la predicción causal obtenida antes de observar el resultado y actualizar
+pesos; no se vuelve a inferir para dibujarla. Ambos deltas comparan el resultado
+final de la acción con el mismo tablero previo, con código 16/cuadrícula para
+«sin cambios». La muestra identifica juego, nivel, partida, acción y fase; no
+confunde evaluación con entrenamiento ni convierte ausencia de cambios en error
+cero. Este pequeño buffer visual es efímero, usa un RNG independiente y no es replay
+de aprendizaje. El informe conserva únicamente la muestra que se está mostrando.
+
+El diagnóstico del latente se registra en `quality.latent` durante la misma
+evaluación aleatoria fija, sin optimizar ni hacer nuevas pasadas por el encoder.
+Reutiliza los estados reales con pesos congelados; no consume RNG de entrenamiento
+ni incorpora trayectorias imaginadas. No cambia las activaciones del currículo.
+
+- **Diversidad** (`std_mean`): desviación típica poblacional entre observaciones,
+  promediada sobre las coordenadas del latente. Compara las mismas posiciones;
+  nunca mezcla geometrías para aparentar variación. `within_episode_std` mide
+  lo mismo dentro de cada partida antes de agregar, para distinguir cambios
+  temporales de diferencias de fondo/color entre escenarios.
+- **Coordenadas casi constantes** (`inactive_fraction`): fracción con desviación
+  menor que 0,01. Es un umbral diagnóstico en unidades del latente, no una puerta
+  de entrenamiento ni una garantía universal de colapso.
+- **Rango efectivo** (`effective_rank`): `exp(-sum(p * log(p)))`, con `p` igual a
+  los autovalores normalizados de la covarianza de los vectores centrados. Se
+  calcula mediante la matriz de Gram, sin normalizar/reescalar los latentes.
+  El máximo `max_rank` es `min(observaciones - 1, coordenadas)`. Un latente
+  exactamente constante tiene rango cero por convenio; menos de dos observaciones
+  deja el diagnóstico sin datos. Un rango bajo también puede reflejar una tarea
+  simple o pocas observaciones; no es el porcentaje de capacidad usado.
+- **Respuesta a cambios reales** (`changed_rms`, `unchanged_rms`): RMS de
+  `z_después - z_antes`, separando bloques que contienen algún píxel realmente
+  cambiado y bloques estáticos. Usa todas las transiciones evaluables de la partida,
+  con los mismos pesos para ambos estados. Respeta el tamaño de patch del encoder
+  y los bordes parciales. El contexto puede cambiar un bloque estático: esta medida
+  no es un error de predicción. Sin bloques de una clase, su valor es `null`.
+
+Para acotar el coste, diversidad/rango usan las primeras ocho observaciones reales
+por partida, incluida la inicial, guardadas temporalmente en CPU; el rango usa
+como máximo 64 por geometría, seleccionadas a intervalos deterministas. Las medias
+por geometría ponderan observaciones, y el dashboard agrega niveles con igual peso.
+Los recuentos de observaciones, partidas, geometrías, transiciones y bloques se
+registran junto a los valores. Los tensores de diagnóstico no se guardan en pesos
+ni informes. Las curvas empiezan cuando existe medición y se cortan al cambiar la
+cobertura del currículo; los informes anteriores mantienen sus datos ausentes.
+
+Quedan fuera: Goal Planner aprendido, actor por imitación, Double-DQN, barrido de
+arquitecturas y etiquetas de distancia privilegiadas para PathValue. Se observa
+primero si las activaciones progresivas y el repaso de niveles estabilizan el
+aprendizaje, antes de introducir otra variante.
+
+Validación proporcional: contratos CPU de activación acumulativa, cobertura,
+promoción, ownership de gradientes, renovación de latentes y rollout autónomo;
+contratos existentes de múltiples subobjetivos y API SDK; checkpoint del mismo
+agente; HTTP/JS del dashboard; prueba corta CUDA compilada. Sin pruebas visuales.
+
+## Protocolos anteriores — fuera de la campaña activa
+
+Los apartados de comparaciones y probes que siguen documentan comandos existentes.
+Sus resultados y criterios de promoción no se aplican al plan activo anterior.
 
 El objetivo de esta iteración es **entrenar, guardar y ejecutar el mismo agente**,
 con `z_next = z + delta` y planificación en latentes. El planner conserva la
@@ -96,7 +724,17 @@ La campaña ejecuta secuencialmente referencias y variantes con tres semillas,
 16.384 acciones por celda y diez pares sintéticos, sin leer reglas internas para
 decidir acciones. Las variantes del mundo arrancan de los mismos pesos y comparten
 recogida equilibrada/replay acotado; cada una recalibra las cabezas con experiencias
-reales conservadas en RAM y recodificadas con sus pesos finales. `local_decoder`
+reales conservadas en RAM y recodificadas con sus pesos finales. El archivo de
+calibración conserva todas las partidas recogidas, sin sobrescribir los éxitos
+antiguos ni sobremuestrearlos; el replay del predictor sigue acotado por separado.
+`--calibration-bytes` limita los bytes de observaciones originales (512 MiB por
+defecto); si se supera, la ejecución falla explícitamente. Los latentes para V/Q
+se crean después en CPU y consumen memoria adicional. El informe registra partidas,
+acciones, progresos, fracasos, finales por presupuesto y targets censurados.
+`rollout2_visual` añade `rollout_visual_weight=0.5` y se compara con `rollout2`:
+decodifica el segundo latente predicho y supervisa su delta neto respecto al frame
+real de inicio de ambos pasos. La memoria y el latente intermedios son predichos;
+ninguna observación real intermedia entra en ese rollout. `local_decoder`
 y `staged_freeze` se comparan con `rollout2`. `sigreg_only` se compara después con
 `staged_freeze`: ambas entrenan encoder/predictor/decoder durante la primera
 mitad de las acciones y congelan la representación en la segunda; sólo cambia
@@ -116,7 +754,12 @@ no combina automáticamente ganadores de comparaciones distintas sin evaluarlos 
 
 `report.json` distingue celdas terminadas, comparaciones inconclusas y confirmación
 final. Volver a ejecutar el mismo comando omite celdas completas; una celda
-interrumpida vuelve a empezar desde su fuente, sin fingir una restauración de replay.
+interrumpida durante el aprendizaje vuelve a empezar desde su fuente, sin fingir
+una restauración de replay. Al terminar el aprendizaje y la calibración, guarda
+`pending-agent.pt` antes de evaluar. Si falla la evaluación, el mismo comando carga
+ese agente y repite sólo la evaluación pendiente. No marca la celda como terminada
+hasta completarla. Al incorporar este cambio de recogida hay que usar un directorio
+nuevo: no se mezclan resultados de protocolos de calibración distintos.
 Los enlaces duros `source-world.pt`/`source-heads.pt` conservan las fuentes sin
 duplicar su almacenamiento. Sólo se retienen pesos representativos de la semilla
 cero, candidata y seleccionada; no se elige la semilla con mejores resultados.
@@ -132,7 +775,8 @@ posterior, justificada por los resultados. Burn-in es una aproximación optativa
 el backward ordinario/fragmentado y la caché congelada disponen de comprobaciones
 numéricas. Una prueba piloto no demuestra generalización a otros juegos.
 Las entradas compiladas de dinámica separan entrenamiento diferenciable e
-inferencia, compartiendo los mismos parámetros y conservando el límite normal
+inferencia; el decoder separa también readout local/contextual y gradientes activos
+o desactivados. Comparten los mismos parámetros y conservan el límite normal
 de caché. No se sustituye silenciosamente la compilación por ejecución eager.
 El historial recurrente recalcula sus activaciones durante backward mediante
 checkpointing, incluido el camino compilado. Así evita conservar una copia BF16
@@ -144,8 +788,103 @@ El dashboard admite `--campaign-log model/runs/architecture-evolution/campaign.l
 además de sus logs existentes. Muestra el progreso por variante/semilla, presupuesto,
 velocidad, errores a uno/dos/cuatro pasos, comparación identidad y éxito real,
 separados de las pérdidas de actor/crítico. No hay inspecciones visuales automáticas.
+La evaluación de comportamiento publica progreso al empezar y terminar cada partida
+y aproximadamente cada dos segundos al completar acciones. La web muestra el bloque
+juego/nivel, la partida actual, su presupuesto de acciones, partidas completadas,
+victorias y tiempo registrado. Estos contadores no se suman al aprendizaje ni tratan
+una partida en curso como derrota. Una decisión individual lenta puede retrasar el
+siguiente aviso: la antigüedad del log sigue visible y no simula actividad.
+
+La página `campaign.html`, enlazada desde el entrenamiento, compara toda la campaña
+sin cambiar el selector de la ejecución individual. Añadir
+`--campaign-report model/runs/architecture-evolution/full/report.json` al dashboard
+permite recuperar los resultados completados incluso tras reiniciar la web o
+descartar el tramo antiguo del log. Se lee el informe existente, sin crear otro
+historial ni exponer trazas de episodios. La tabla muestra medias entre semillas
+terminadas, avance de cada semilla, comparaciones controladas e intervalos del
+95 %, candidata provisional y confirmación final separada. Las semillas pendientes
+no cuentan como ceros y las evaluaciones intermedias no sustituyen resultados de
+desarrollo completos. El informe se limita a 32 MiB y se relee sólo cuando cambia;
+si no está disponible, la página lo indica sin reutilizar silenciosamente datos
+anteriores. El servicio web puede reiniciarse sin reiniciar el entrenamiento.
+
+El ensayo pequeño `python -m model.learning_probe --agent agente.pt --output
+model/runs/architecture-evolution/full/learning-probe` compara pérdida latente a dos
+pasos frente a añadir supervisión visual a dos pasos. Ambas ramas conservan la
+supervisión visual original a un paso. Usa el `Learner` de producción,
+los mismos pesos iniciales, datos, orden de muestreo y 120 actualizaciones por rama.
+Encoder/decoder permanecen congelados, verificados al finalizar. Por defecto recoge
+dos prefijos reales de hasta ocho acciones por juego/nivel para aprender y otros
+dos con semillas disjuntas para desarrollo. Mide ambos conjuntos cada veinte
+actualizaciones: mejorar sólo en los ejemplos de entrenamiento no acredita mejora
+en partidas nuevas. No entrena V/Q ni el actor y no promueve pesos automáticamente.
+CUDA conserva `torch.compile`; `--device cpu` permite un ensayo pequeño. Guarda los
+pesos de cada rama antes de su evaluación final, sin exportar replay. La página de
+comparación muestra sus curvas y cobertura aparte de la campaña y del diagnóstico
+congelado; la página de entrenamiento enlaza la actividad en curso sin mezclarla con
+los contadores de la ejecución seleccionada.
+
+El ensayo siguiente usa `python -m model.streaming_probe --agent agente.pt --output
+model/runs/architecture-evolution/full/streaming-probe`. Recoge 4.096 acciones
+reales nuevas, repartidas por igual entre los diez pares sintéticos juego/nivel.
+La primera receta incorpora partidas nuevas durante el aprendizaje; la segunda
+recibe esos mismos prefijos en el mismo orden, desde RAM, sin acceso anticipado a
+sus observaciones futuras. Se comprueban los pesos iniciales, el hash de los datos
+y el número de actualizaciones de ambas ramas. Encoder y decoder siguen congelados.
+
+Actualiza cada ocho acciones y al cerrar cada partida, con dos prefijos por lote
+y ocho endpoints supervisados. Conserva la configuración y la tasa de aprendizaje
+del checkpoint; sólo cambia la pérdida visual del segundo paso entre recetas.
+La colección termina en el primer progreso, GAME_OVER o 128 acciones. Un corte por
+cuota incompleta se censura; el progreso que entra en otro nivel se conserva como
+etiqueta de valor, pero no como target visual del mundo.
+
+Evalúa aproximadamente cada 1.024 acciones, al final de una partida, con dos
+partidas distintas de hasta 32 acciones por par. El criterio de selección fijado
+antes del ensayo es la media del error de delta visual de cada par y horizonte
+(uno y dos pasos), incluyendo el checkpoint inicial. Guarda separadamente los
+mejores y últimos pesos de cada rama; sólo la validación selecciona. Las gráficas
+agregadas siguen ponderadas por la unión de píxeles. Se muestran además los casos
+con cambios reales y los píxeles inventados por imagen cuando no hubo cambios.
+La ausencia de cambios no acredita haber aprendido la dinámica.
+
+Compara los pesos seleccionados con los iniciales en otras semillas de confirmación.
+Después recalibra V/Q durante doce épocas con todas las experiencias nuevas,
+reencodificadas con el mundo seleccionado y congelado, incluidos los éxitos tempranos.
+Finalmente compara azar, Q directa y MPC con cuatro partidas por par, las mismas
+semillas y 128 acciones por partida. Es un diagnóstico desde un único checkpoint,
+no una demostración de generalización ni una promoción automática al agente activo.
+El dashboard prefiere este ensayo cuando existe, muestra selección, confirmación,
+cobertura y progreso dentro de cada partida. No mezcla sus curvas con el ensayo
+anterior. Los artefactos quedan en directorios ignorados y no se guarda replay.
 
 ### Agente portable y contratos
+
+La campaña puede pausarse entre ejecuciones completadas y conservar su `report.json`
+para reanudar las pendientes. Para diagnosticar un predictor antes de ampliar el
+entrenamiento, `python -m model.diagnostics --agents referencia.pt candidato.pt
+--labels referencia candidato --output model/runs/architecture-evolution/full/diagnostics`
+evalúa ambos agentes congelados; CUDA mantiene `torch.compile` y `--device cpu`
+permite la comprobación pequeña. No actualiza pesos ni escribe replay.
+
+El protocolo de diagnóstico usa los diez pares sintéticos juego/nivel. Por defecto
+compara azar, Q directa y MPC con ocho episodios por par, las mismas semillas de
+desarrollo nuevas y 128 acciones máximas. El coste temporal observado puede incluir
+compilación: no se usa para promover una arquitectura. Otras dos sondas comparan
+el delta visual predicho con conservar el tablero y con predecir otra acción.
+Cada alternativa se ejecuta realmente desde la misma semilla y prefijo de acciones;
+se comprueba la igualdad de todas las observaciones del prefijo y se repite el
+sucesor para detectar falta de reproducibilidad. No se inspeccionan reglas ni estado
+privado del juego. Los resultados de acciones equivalentes se separan de los pares
+con sucesores visuales distintos. La sonda cubre dos semillas y cuatro estados
+iniciales por par: es diagnóstico limitado, no confirmación ni generalización.
+
+El informe se guarda atómicamente en el directorio indicado, que debe estar libre
+de informes anteriores. Si está en `diagnostics/report.json` junto al informe de
+campaña, la página de comparación muestra su progreso y tablas aparte. La web lee
+como máximo 1 MiB y sólo publica resúmenes, sin pesos, rutas de checkpoints ni trazas.
+Una nueva variante de entrenamiento se decide después de interpretar estas sondas;
+el diagnóstico no selecciona ni promueve automáticamente ningún modelo.
 
 ```sh
 .venv/bin/python -m model.agent_checkpoint \
@@ -610,8 +1349,37 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    `extra_changes`, `missed_changes`, `wrong_replacement_colors` y `correct_changes`.
    Esa asignación es biyectiva: la NLL equivale a CE de color;
    cambiar las etiquetas por sí solo no evita el colapso.
-   Añade un término diferenciable de error sobre la unión de deltas: si `c` es
-   el número de celdas realmente cambiadas, `f` la suma de probabilidades de
+   Lo anterior describe el modo histórico `prediction_delta_loss: "balanced"`.
+   El modo anterior `"union"`, aún disponible, se aplica a las ramas predictivas
+   de uno y tres pasos. Con `x` anterior, `y` real y `yhat=argmax(logits)`:
+   `U = (y != x) OR (yhat != x)` y
+   `L_union = sum(where(U, -log softmax(logits)[y], 0)) / max(1, |U|)`.
+   Se normaliza por imagen y después se promedian las imágenes. La máscara es
+   discreta, sin gradiente a través de argmax; la NLL sí propaga gradiente.
+   Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
+   ni `false_change_weight`: todos los píxeles de la unión pesan igual.
+   Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
+   La receta incremental actual selecciona `"recall_focal_capped"`: suma el doble de la NLL de cambios
+   reales y la NLL estática ponderada por `false_change_weight*(1-q)^2`, dividida
+   por `max(32, número de cambios reales)`, con `q=softmax(logits)[y]` y T=1.
+   El modo histórico `recall_focal` conserva el divisor `max(1, cambios reales)`.
+   El suelo 32 atenúa por igual todos los términos de una imagen con pocos cambios;
+   no altera su preferencia relativa entre omisiones, colores erróneos e invenciones.
+   El loss latente mantiene su escala, por lo que aumenta su peso relativo en esas imágenes.
+   No selecciona píxeles mediante argmax ni diferencia el divisor; sí diferencia
+   los pesos suaves. Su contribución estática disminuye de forma continua al
+   acertar con más confianza. No es estrictamente invariante a añadir fondo con
+   incertidumbre, y no altera la métrica de evaluación basada en colores argmax.
+   El modo `focal` anterior conserva peso 1 para cambios reales; `recall_focal`
+   usa peso 2. Esta preferencia por recuperar cambios es experimental: no identifica
+   objetos ni garantiza preservar piezas. A confianza 0,9/0,1 y 56 cambios reales,
+   omitir 25 cambios aporta más pérdida que acertarlos e inventar 30 estáticos;
+   acertar todo sin inventar sigue siendo mejor. Los errores de color en cambios
+   reales reciben también peso 2. El MSE latente mantiene su peso anterior.
+   El aprendiz conjunto histórico y la reconstrucción añaden un término
+   diferenciable de error sobre la unión de deltas. El predictor de la campaña
+   incremental (`OnlinePredictor`) no lo utiliza, ni a uno ni a tres pasos.
+   Si `c` es el número de celdas realmente cambiadas, `f` la suma de probabilidades de
    cambio falso en celdas estáticas y `m` la suma de probabilidades de error en
    celdas cambiadas, usa `(m+f)/(c+f)`. Así los cambios inventados pesan según
    el tamaño del delta. En frames sin cambios reales usa la probabilidad media

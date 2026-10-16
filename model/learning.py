@@ -48,6 +48,33 @@ class _CompiledDynamics:
         return function(z.contiguous(), h.contiguous(), action.contiguous(), height, width)
 
 
+class _CompiledDecoder:
+    """Separate legitimate readout/gradient modes without raising cache limits."""
+    def __init__(self, decoder, local=False):
+        self.decoder, self.local = decoder, local
+        self.functions = {key: torch.compile(function, fullgraph=True, dynamic=True)
+            for key, function in (( (True, False), self._context_grad),
+                                  ( (False, False), self._context_eval),
+                                  ( (True, True), self._local_grad),
+                                  ( (False, True), self._local_eval))}
+
+    def _context_grad(self, z, height, width, checkpoint_blocks):
+        return self.decoder(z, height, width, checkpoint_blocks=checkpoint_blocks, local=False)
+
+    def _context_eval(self, z, height, width, checkpoint_blocks):
+        return self.decoder(z, height, width, checkpoint_blocks=checkpoint_blocks, local=False)
+
+    def _local_grad(self, z, height, width, checkpoint_blocks):
+        return self.decoder(z, height, width, checkpoint_blocks=checkpoint_blocks, local=True)
+
+    def _local_eval(self, z, height, width, checkpoint_blocks):
+        return self.decoder(z, height, width, checkpoint_blocks=checkpoint_blocks, local=True)
+
+    def __call__(self, z, height, width, checkpoint_blocks=False, local=None):
+        function = self.functions[torch.is_grad_enabled(), self.local if local is None else local]
+        return function(z.contiguous(), height, width, checkpoint_blocks)
+
+
 class Engine:
     def __init__(self, model, config, compile_model=False, *, fp8=False, optimizer_bits=32):
         self.model, self.config = model, config
@@ -83,10 +110,11 @@ class Engine:
         if compile_model:
             # Keep original parameter names and checkpoint objects. Compilation
             # failure is an error, never an unreported eager fallback.
-            self.spatial, self.aggregate, self.advance, self.decode = [
+            self.spatial, self.aggregate, self.advance = [
                 torch.compile(f, fullgraph=True, dynamic=True) for f in
-                (self.spatial, self.aggregate, self.advance, self.decode)]
+                (self.spatial, self.aggregate, self.advance)]
             self.predict = _CompiledDynamics(model.dynamics)
+            self.decode = _CompiledDecoder(model.decoder, config.decoder_readout == 'local')
 
     def autocast(self):
         return torch.autocast('cuda', dtype=torch.bfloat16) if self.amp else nullcontext()
@@ -109,6 +137,15 @@ class Engine:
         """Cache z only. Recurrent h is always recomputed with current dynamics."""
         if not self.config.freeze_representation:
             raise ValueError('Learned latent caches require a frozen encoder')
+        return self.encode_detached_episode(episode)
+
+    @torch.no_grad()
+    def encode_detached_episode(self, episode):
+        """Inference cache, invalidated by ANY encoder parameter update.
+
+        Online training may update the encoder between calls. Cached tensors
+        are detached and must never be used as a differentiable encoder pass.
+        """
         if not self.config.cache_frozen_latents or self.config.burn_in_steps:
             return self.encode(episode.observations, prepared=episode.prepared)
         cache = episode.latent_cache
@@ -181,10 +218,13 @@ class Engine:
 
 def optimizer(parameters, learning_rate, cuda, bits=32):
     parameters = list(parameters)
-    groups = [
-        {'params': [p for p in parameters if p.ndim >= 2], 'weight_decay': .01},
-        {'params': [p for p in parameters if p.ndim < 2], 'weight_decay': 0.},
-    ]
+    sources = parameters if parameters and isinstance(parameters[0], dict) else [{'params': parameters}]
+    groups = []
+    for source in sources:
+        params = list(source['params'])
+        for decay in (True, False):
+            groups.append(dict(source, params=[p for p in params if (p.ndim >= 2) == decay],
+                               weight_decay=.01 if decay else 0.))
     if bits == 8:
         if not cuda:
             raise ValueError('8-bit AdamW requires CUDA; use --optimizer-bits 32 on CPU')
@@ -206,8 +246,36 @@ def delta_log_probabilities(color_logits, reference):
     return torch.cat((replacements, keep), -1)
 
 
-def visual_delta_loss(color_logits, reference, actual, false_change_weight=1.):
-    """Scale static NLL without reducing changed NLL or weighting colors."""
+def change_union_delta_loss(color_logits, reference, actual):
+    """Per-image target NLL over real OR predicted changes, with no background dilution.
+
+    The argmax mask is discrete supervision selection; gradients flow through
+    target log probabilities only. Correctly retained pixels contribute zero,
+    including a differentiable zero for images whose union is empty.
+    """
+    union = (actual != reference) | (color_logits.detach().argmax(-1) != reference)
+    nll = -color_logits.float().log_softmax(-1).gather(-1, actual[..., None]).squeeze(-1)
+    return torch.where(union, nll, 0.).sum((1, 2)) / union.sum((1, 2)).clamp_min(1)
+
+
+def visual_delta_loss(color_logits, reference, actual, false_change_weight=1., *, mode='balanced'):
+    """Per-image NLL with balanced, hard-union or smooth static focal weights."""
+    if mode == 'union':
+        # This objective weights every union pixel equally, including false changes.
+        return change_union_delta_loss(color_logits, reference, actual)
+    if mode in {'focal', 'recall_focal', 'recall_focal_capped'}:
+        # T=1, gamma=2. Both the mask and denominator depend only on real
+        # changes. Keep gradients through the static weights: no argmax/detach.
+        logp = color_logits.float().log_softmax(-1).gather(-1, actual[..., None]).squeeze(-1)
+        changed = actual != reference
+        static_weight = false_change_weight * (-logp.expm1()).square()
+        weights = torch.where(changed, 1. if mode == 'focal' else 2., static_weight)
+        # Sparse timer-only changes must not amplify the entire image's errors
+        # by an arbitrarily small denominator. Keep old objectives unchanged.
+        floor = 32 if mode == 'recall_focal_capped' else 1
+        return (-weights * logp).sum((1, 2)) / changed.sum((1, 2)).clamp_min(floor)
+    if mode != 'balanced':
+        raise ValueError(f'Invalid delta NLL mode: {mode}')
     changed = actual != reference
     target = torch.where(changed, actual, 16)
     logp = delta_log_probabilities(color_logits, reference)
@@ -278,6 +346,9 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                 readouts = {name: {'prediction_wrong': 0, 'prediction_union': 0,
                                    'reconstruction_wrong': 0, 'reconstruction_union': 0}
                             for name in ('contextual', 'local')}
+                strata = {kind: {'samples': 0, 'readouts': {
+                    name: dict(counts) for name, counts in readouts.items()}}
+                    for kind in ('changed', 'unchanged')}
                 for start in range(len(episode.actions) - horizon + 1):
                     window = episode.observations[start:start + horizon + 1]
                     if any(obs.final is None for obs in window):
@@ -298,6 +369,8 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                     shuffled_mse += float(F.mse_loss(counterfactual.float(), actual_z.float()))
                     sensitivity += float(F.mse_loss(counterfactual.float(), predicted.float()))
                     reference, actual = window[0].final, window[-1].final
+                    stratum = strata['changed' if np.any(reference != actual) else 'unchanged']
+                    stratum['samples'] += 1
                     for name, counts in readouts.items():
                         decoded = engine.decode(torch.cat((predicted, actual_z)), *shape,
                                                 local=name == 'local').argmax(-1).cpu().numpy()
@@ -305,6 +378,8 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                             wrong, union, _ = delta_counts(reference, actual, board)
                             counts[branch + '_wrong'] += wrong
                             counts[branch + '_union'] += union
+                            stratum['readouts'][name][branch + '_wrong'] += wrong
+                            stratum['readouts'][name][branch + '_union'] += union
                     samples += 1
                 result[str(horizon)] = {'samples': samples,
                     'latent_mse': latent / samples if samples else None,
@@ -315,6 +390,9 @@ def evaluate_rollouts(engine, episode, horizons=(1, 2, 4), seed=0):
                         branch + '_delta_error': counts[branch + '_wrong'] / max(1, counts[branch + '_union'])
                         if samples else None for branch in ('prediction', 'reconstruction')}
                         for name, counts in readouts.items()}}
+                # A zero-error unchanged image is useful consistency evidence,
+                # but is not evidence of predicting an actual visual change.
+                result[str(horizon)]['strata'] = strata
             return result
     finally:
         engine.model.train(was_training)
@@ -361,7 +439,7 @@ class Learner:
                     # Optional truncated history, explicitly approximate: start
                     # memory at zero, warm it on real inputs without gradients,
                     # then retain the graph for the supervised anchors only.
-                    anchor = max(0, len(episode.actions) - c.loss_steps - int(c.rollout_weight > 0))
+                    anchor = max(0, len(episode.actions) - c.loss_steps - int(c.rollout_weight > 0 or c.rollout_visual_weight > 0))
                     start = max(0, anchor - c.burn_in_steps)
                     burn_in = anchor - start
                     episode = replace(episode, observations=episode.observations[start:],
@@ -407,11 +485,13 @@ class Learner:
                                           torch.tensor(np.array(before, copy=True), device=e.device, dtype=torch.long))
                         # loss_steps counts supervised ENDPOINTS. The last one
                         # still has a two-step rollout when loss_steps == 1.
-                        if c.rollout_weight and t >= 1:
+                        if (c.rollout_weight or c.rollout_visual_weight) and t >= 1:
                             anchor = episode.observations[t - 1].final
                             if anchor is not None and anchor.shape == before.shape and zs[t - 1] is not None:
                                 rollout_pairs.append((zs[t - 1], history_h[t - 1][0],
-                                    episode_actions[t - 1], episode_actions[t], next_z, before.shape))
+                                    episode_actions[t - 1], episode_actions[t], next_z,
+                                    torch.tensor(np.array(anchor, copy=True), device=e.device, dtype=torch.long),
+                                    boards[-1], before.shape))
                     if current is not None:
                         if t < burn_in:
                             with torch.no_grad():
@@ -434,6 +514,9 @@ class Learner:
             buckets.setdefault(board.shape, []).append(i)
         prediction_loss = torch.zeros((), device=e.device)
         rollout_loss = torch.zeros((), device=e.device)
+        rollout_visual_loss = 0.
+        rollout_backward_values, rollout_backward_gradients = [], []
+        ordinary_rollout_visual = torch.zeros((), device=e.device)
         rollout_buckets = {}
         for pair in rollout_pairs:
             rollout_buckets.setdefault(pair[-1], []).append(pair)
@@ -446,10 +529,31 @@ class Learner:
                 z2, _, _ = e.predict(z1, h1, torch.stack([p[3] for p in pairs]), *shape)
             rollout_loss = rollout_loss + len(pairs) / len(rollout_pairs) * F.mse_loss(
                 z2.float(), torch.stack([p[4] for p in pairs]).float())
+            if c.rollout_visual_weight:
+                decoder_input = z2.detach().requires_grad_(True) if c.backward_mode == 'fragmented' else z2
+                for start in range(0, len(pairs), c.frame_chunk):
+                    selected = pairs[start:start + c.frame_chunk]
+                    with e.autocast():
+                        logits = e.decode(decoder_input[start:start + len(selected)], *shape,
+                                          checkpoint_blocks=True)
+                    # Net delta from the REAL rollout anchor to its REAL endpoint.
+                    # No intermediate observation enters the imagined dynamics.
+                    before, actual = (torch.stack([p[i] for p in selected]) for i in (5, 6))
+                    part = c.rollout_visual_weight * (visual_delta_loss(
+                        logits, before, actual, c.false_change_weight, mode=c.prediction_delta_loss)
+                        + c.delta_overlap_weight * soft_delta_error(logits, before, actual)).sum() / len(rollout_pairs)
+                    if c.backward_mode == 'fragmented':
+                        part.backward()
+                    else:
+                        ordinary_rollout_visual = ordinary_rollout_visual + part
+                    rollout_visual_loss += float(part.detach())
+                if c.backward_mode == 'fragmented':
+                    rollout_backward_values.append(z2)
+                    rollout_backward_gradients.append(decoder_input.grad)
         visual_losses = [0., 0., 0.]
         overlap_losses = [0., 0., 0.]
-        backward_values, backward_gradients = [], []
-        ordinary_visual_loss = torch.zeros((), device=e.device)
+        backward_values, backward_gradients = rollout_backward_values, rollout_backward_gradients
+        ordinary_visual_loss = ordinary_rollout_visual
         for shape, indices in buckets.items():
             with e.autocast():
                 predicted_z, _, delta = e.predict(torch.stack([states[i] for i in indices]),
@@ -473,7 +577,8 @@ class Learner:
                         logits = e.decode(decoder_inputs[offset:offset + len(selected)], *shape,
                                           checkpoint_blocks=True)
                     part_loss = visual_delta_loss(logits, before, actual,
-                        c.false_change_weight if branch == 0 else 1.).sum() / len(boards)
+                        c.false_change_weight if branch == 0 else 1.,
+                        mode=c.prediction_delta_loss if branch == 0 else 'balanced').sum() / len(boards)
                     overlap = c.delta_overlap_weight * soft_delta_error(logits, before, actual).sum() / len(boards)
                     if c.backward_mode == 'fragmented':
                         (part_loss + overlap).backward()
@@ -512,7 +617,7 @@ class Learner:
                  for p in (self.primary, self.visual)]
         for opt in self.optimizers[:1] if c.freeze_representation else self.optimizers:
             opt.step()
-        return {'loss': float(loss.detach()) + sum(visual_losses) + sum(overlap_losses), 'latent_mse': float(prediction_loss.detach()),
+        return {'loss': float(loss.detach()) + sum(visual_losses) + sum(overlap_losses) + rollout_visual_loss, 'latent_mse': float(prediction_loss.detach()),
                 'sigreg': float(regularization.detach()), 'decoder_ce': visual_losses[0],
                 'variance_floor': float(variance.detach()),
                 'reconstruction_ce': None if c.freeze_representation else visual_losses[1],
@@ -520,5 +625,6 @@ class Learner:
                 'decoder_overlap': overlap_losses[0],
                 'reconstruction_overlap': None if c.freeze_representation else overlap_losses[1],
                 'local_reconstruction_overlap': None if c.freeze_representation else overlap_losses[2],
-                'rollout_mse': float(rollout_loss.detach()), 'rollout_samples': len(rollout_pairs),
+                'rollout_mse': float(rollout_loss.detach()), 'rollout_visual': rollout_visual_loss,
+                'rollout_samples': len(rollout_pairs),
                 'gradient_norm': float(norms[0]), 'samples': len(states)}

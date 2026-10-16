@@ -1,0 +1,226 @@
+{
+  "checkpoint_action": 140330,
+  "source_sha256": "88bd34d7112834ba7c7766a26e9778c76239a748bd70a87a7ced111440e5ed77",
+  "conclusion": "Keep horizon 3 and success-first margin .02; adopt observed no-op cooldown 8. Reject H6, frontier-only ranking, uncalibrated latent terminal detection and unverified continuation reuse.",
+  "protocol": {
+    "game": "sc01-v1",
+    "device": "cuda",
+    "compiled": false,
+    "epsilon": 0,
+    "weights_unchanged": true,
+    "training": false,
+    "reserved_data_used": false,
+    "seed_source": "model.behavior_experiment.episode_seeds(dev, offset)",
+    "precision": "CUDA autocast BF16; eager (uncompiled)"
+  },
+  "reproduce": ".venv/bin/python -m model.path_tuning --source PINNED.pt --output NEW_DIR --levels 2 1 --margins .02 --horizons 3 --noop-cooldowns 0 8 --episodes 64 --dev-offset 900000",
+  "cohorts": {
+    "screen": 880000,
+    "leaf-screen": 880000,
+    "noop32-screen": 880000,
+    "noop-confirm": 890000,
+    "confirmation64": 900000,
+    "short-cooldown64": 900000
+  },
+  "limitations": [
+    "Synthetic development only; small paired samples do not establish statistical significance or held-out performance.",
+    "Cooldown is fallible under partial observation; one prior level-1 win is lost and one gained in the 64-game cohort.",
+    "Frozen uncompiled decision times exclude training and do not predict live TPS.",
+    "The first noop-screen consumed extra tie RNG and is excluded. All confirmation runs use the corrected ranking.",
+    "Future success estimates and predicted-latent goal proximity do not reliably identify current completion. No early imagined WIN pruning is enabled.",
+    "Short cooldown comparisons reuse the 64-game cohort and are sensitivity checks, not independent confirmation."
+  ],
+  "sparse_loss": {
+    "mode": "recall_focal_capped",
+    "denominator": "max(32, real_changed_pixels)",
+    "numerator": "2 * sum_changed(-log(q)) + false_change_weight * sum_static((1-q)^2 * -log(q))",
+    "temperature": 1,
+    "false_change_weight": 1,
+    "source_action": 137229,
+    "transitions": 211,
+    "source_sha256": "9d5a20e4731e6815b427c5942fbada07d40833dfd77531d9a2058ff4919adc8f",
+    "old_mean": 5.108965,
+    "new_mean": 2.29861,
+    "old_max": 114.328873,
+    "new_max": 17.863886,
+    "per_game_means": [
+      [
+        2.914099,
+        2.914099
+      ],
+      [
+        4.434545,
+        3.093868
+      ],
+      [
+        3.583813,
+        2.184001
+      ],
+      [
+        1.65224,
+        1.321977
+      ],
+      [
+        2.479037,
+        1.474045
+      ],
+      [
+        18.45552,
+        4.553257
+      ],
+      [
+        1.728713,
+        1.728713
+      ],
+      [
+        0.842571,
+        0.842571
+      ]
+    ],
+    "interpretation": "Exact denominator rescaling on fixed predictions, not evidence of improved prediction accuracy. Relative pixel penalties unchanged; latent weight unchanged."
+  },
+  "deployment": {
+    "actions": 140468,
+    "tensors": 539,
+    "weights_bitwise_identical": true,
+    "counters_preserved": true,
+    "permissions_preserved": true,
+    "noop_cooldown": 8,
+    "path_horizon": 3,
+    "predictor_horizon": 3,
+    "loss": "recall_focal_capped",
+    "optimizer_moments": "reset",
+    "ram_replay": "empty",
+    "checkpoint": {
+      "actions": 140468,
+      "reason": "resume",
+      "saved_at": 1792164006.9579475
+    },
+    "observed_actions": 141471,
+    "live_evaluations": [
+      {
+        "actions": 140317,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.38170254403131115,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 140317,
+        "policy": "path_mpc",
+        "successes": 4,
+        "episodes": 8,
+        "delta_error": 0.6297278190173206,
+        "real_actions": 155,
+        "analyzed_actions": null
+      },
+      {
+        "actions": 140564,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.48858215771846136,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 140564,
+        "policy": "path_mpc",
+        "successes": 6,
+        "episodes": 8,
+        "delta_error": 0.5813157251161654,
+        "real_actions": 100,
+        "analyzed_actions": null
+      },
+      {
+        "actions": 140802,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.2803473848555816,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 140802,
+        "policy": "path_mpc",
+        "successes": 7,
+        "episodes": 8,
+        "delta_error": 0.3353964043619216,
+        "real_actions": 68,
+        "analyzed_actions": null
+      },
+      {
+        "actions": 141058,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.29406865920236885,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 141058,
+        "policy": "path_mpc",
+        "successes": 6,
+        "episodes": 8,
+        "delta_error": 0.30708483754512633,
+        "real_actions": 97,
+        "analyzed_actions": null
+      },
+      {
+        "actions": 141312,
+        "policy": "quality_probe",
+        "successes": null,
+        "episodes": 8,
+        "delta_error": 0.275,
+        "real_actions": 0,
+        "analyzed_actions": 211
+      },
+      {
+        "actions": 141312,
+        "policy": "path_mpc",
+        "successes": 7,
+        "episodes": 8,
+        "delta_error": 0.37285012285012287,
+        "real_actions": 79,
+        "analyzed_actions": null
+      }
+    ],
+    "interpretation": "Early repeated checks on the same eight fixed scenarios, not independent confirmation or a causal loss-vs-planner ablation."
+  },
+  "validation": {
+    "cpu_tests": 82,
+    "command": ".venv/bin/python -m unittest model.tests.test_subgoals model.tests.test_online_learning model.tests.test_curriculum model.tests.test_agent model.tests.test_online_replay -q",
+    "node": "model/tests/subgoals_runtime.cjs",
+    "python_compilation": true,
+    "diff_check": true,
+    "visual_tests": false
+  },
+  "comparisons": [
+    {"cohort":"screen","first_seed":7760001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":16,"successes":11,"total_actions":159,"successful_actions":39,"mean_successful_actions":3.5454545454545454,"common_successes":11,"common_actions":39,"baseline_common_actions":39,"gained":[],"lost":[],"mean_decision_ms":37.44078131453735,"outcomes":[[1,8],[1,2],[1,2],[0,24],[1,2],[1,2],[0,24],[1,1],[0,24],[1,3],[1,2],[1,1],[1,2],[1,14],[0,24],[0,24]]},
+    {"cohort":"screen","first_seed":7760001,"seed_stride":2,"level":2,"horizon":6,"leaf_only":false,"noop_cooldown":0,"episodes":16,"successes":11,"total_actions":159,"successful_actions":39,"mean_successful_actions":3.5454545454545454,"common_successes":11,"common_actions":39,"baseline_common_actions":39,"gained":[],"lost":[],"mean_decision_ms":82.05516264712037,"outcomes":[[1,8],[1,2],[1,2],[0,24],[1,2],[1,2],[0,24],[1,1],[0,24],[1,3],[1,2],[1,1],[1,2],[1,14],[0,24],[0,24]]},
+    {"cohort":"screen","first_seed":7760001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":16,"successes":9,"total_actions":250,"successful_actions":33,"mean_successful_actions":3.6666666666666665,"common_successes":9,"common_actions":33,"baseline_common_actions":33,"gained":[],"lost":[],"mean_decision_ms":36.270318667870015,"outcomes":[[1,7],[1,4],[1,4],[0,33],[1,5],[1,1],[0,33],[0,33],[0,24],[1,1],[1,2],[1,5],[1,4],[0,28],[0,28],[0,38]]},
+    {"cohort":"screen","first_seed":7760001,"seed_stride":2,"level":1,"horizon":6,"leaf_only":false,"noop_cooldown":0,"episodes":16,"successes":9,"total_actions":250,"successful_actions":33,"mean_successful_actions":3.6666666666666665,"common_successes":9,"common_actions":33,"baseline_common_actions":33,"gained":[],"lost":[],"mean_decision_ms":82.55248454032699,"outcomes":[[1,7],[1,4],[1,4],[0,33],[1,5],[1,1],[0,33],[0,33],[0,24],[1,1],[1,2],[1,5],[1,4],[0,28],[0,28],[0,38]]},
+    {"cohort":"leaf-screen","first_seed":7760001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":true,"noop_cooldown":0,"episodes":16,"successes":9,"total_actions":232,"successful_actions":64,"mean_successful_actions":7.111111111111111,"common_successes":9,"common_actions":64,"baseline_common_actions":36,"gained":[],"lost":[7760015,7760021],"mean_decision_ms":36.95991398283162,"outcomes":[[1,8],[1,2],[1,2],[0,24],[1,2],[1,2],[0,24],[0,24],[0,24],[1,3],[0,24],[1,1],[1,22],[1,22],[0,24],[0,24]]},
+    {"cohort":"leaf-screen","first_seed":7760001,"seed_stride":2,"level":2,"horizon":6,"leaf_only":true,"noop_cooldown":0,"episodes":16,"successes":8,"total_actions":228,"successful_actions":32,"mean_successful_actions":4.0,"common_successes":8,"common_actions":32,"baseline_common_actions":28,"gained":[],"lost":[7760001,7760015,7760021],"mean_decision_ms":81.7574360835511,"outcomes":[[0,28],[1,2],[1,2],[0,24],[1,2],[1,2],[0,24],[0,24],[0,24],[1,3],[0,24],[1,1],[1,2],[1,18],[0,24],[0,24]]},
+    {"cohort":"leaf-screen","first_seed":7760001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":true,"noop_cooldown":0,"episodes":16,"successes":6,"total_actions":368,"successful_actions":61,"mean_successful_actions":10.166666666666666,"common_successes":6,"common_actions":61,"baseline_common_actions":16,"gained":[],"lost":[7760001,7760009,7760023],"mean_decision_ms":36.27745572564732,"outcomes":[[0,24],[1,17],[1,26],[0,33],[0,33],[1,1],[0,33],[0,33],[0,24],[1,1],[1,4],[0,33],[1,12],[0,28],[0,28],[0,38]]},
+    {"cohort":"leaf-screen","first_seed":7760001,"seed_stride":2,"level":1,"horizon":6,"leaf_only":true,"noop_cooldown":0,"episodes":16,"successes":4,"total_actions":375,"successful_actions":16,"mean_successful_actions":4.0,"common_successes":4,"common_actions":16,"baseline_common_actions":10,"gained":[],"lost":[7760001,7760005,7760009,7760021,7760023],"mean_decision_ms":82.28664086122687,"outcomes":[[0,24],[1,4],[0,28],[0,33],[0,33],[1,1],[0,33],[0,33],[0,24],[1,1],[0,24],[0,33],[1,10],[0,28],[0,28],[0,38]]},
+    {"cohort":"noop-confirm","first_seed":7780001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":32,"successes":18,"total_actions":544,"successful_actions":92,"mean_successful_actions":5.111111111111111,"common_successes":18,"common_actions":92,"baseline_common_actions":92,"gained":[],"lost":[],"mean_decision_ms":36.607006441419585,"outcomes":[[0,24],[1,2],[0,28],[1,1],[1,6],[1,3],[0,48],[1,3],[1,1],[1,2],[0,33],[0,28],[0,24],[0,38],[1,43],[1,1],[1,2],[0,24],[1,1],[1,2],[0,33],[1,3],[1,1],[1,2],[0,58],[0,38],[0,24],[0,28],[1,15],[1,3],[1,1],[0,24]]},
+    {"cohort":"noop-confirm","first_seed":7780001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":8,"episodes":32,"successes":19,"total_actions":535,"successful_actions":111,"mean_successful_actions":5.842105263157895,"common_successes":18,"common_actions":97,"baseline_common_actions":92,"gained":[7780005],"lost":[],"mean_decision_ms":35.1820306152064,"outcomes":[[0,24],[1,2],[1,14],[1,1],[1,11],[1,3],[0,48],[1,3],[1,1],[1,2],[0,33],[0,28],[0,24],[0,38],[1,43],[1,1],[1,2],[0,24],[1,1],[1,2],[0,33],[1,3],[1,1],[1,2],[0,58],[0,38],[0,24],[0,28],[1,15],[1,3],[1,1],[0,24]]},
+    {"cohort":"noop-confirm","first_seed":7780001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":32,"successes":19,"total_actions":441,"successful_actions":78,"mean_successful_actions":4.105263157894737,"common_successes":19,"common_actions":78,"baseline_common_actions":78,"gained":[],"lost":[],"mean_decision_ms":36.301051850514874,"outcomes":[[0,28],[0,28],[0,24],[1,2],[1,2],[1,7],[0,33],[1,6],[1,5],[0,28],[1,4],[0,24],[1,3],[1,1],[0,33],[1,4],[0,28],[1,4],[1,1],[0,28],[0,28],[1,20],[1,2],[1,3],[1,4],[1,4],[1,1],[1,3],[0,33],[1,2],[0,24],[0,24]]},
+    {"cohort":"noop-confirm","first_seed":7780001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":8,"episodes":32,"successes":19,"total_actions":441,"successful_actions":78,"mean_successful_actions":4.105263157894737,"common_successes":19,"common_actions":78,"baseline_common_actions":78,"gained":[],"lost":[],"mean_decision_ms":35.020214868829555,"outcomes":[[0,28],[0,28],[0,24],[1,2],[1,2],[1,7],[0,33],[1,6],[1,5],[0,28],[1,4],[0,24],[1,3],[1,1],[0,33],[1,4],[0,28],[1,4],[1,1],[0,28],[0,28],[1,20],[1,2],[1,3],[1,4],[1,4],[1,1],[1,3],[0,33],[1,2],[0,24],[0,24]]},
+    {"cohort":"confirmation64","first_seed":7800001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":64,"successes":43,"total_actions":826,"successful_actions":186,"mean_successful_actions":4.325581395348837,"common_successes":43,"common_actions":186,"baseline_common_actions":186,"gained":[],"lost":[],"mean_decision_ms":36.42340688643113,"outcomes":[[0,28],[1,5],[1,4],[1,1],[1,1],[1,12],[1,3],[0,24],[1,2],[0,33],[0,33],[0,38],[1,3],[1,1],[1,2],[1,3],[0,33],[1,3],[1,15],[1,3],[0,24],[1,24],[0,43],[1,1],[1,3],[1,1],[0,24],[1,5],[1,5],[0,33],[0,53],[1,2],[1,1],[1,4],[0,28],[1,3],[0,28],[0,24],[0,24],[1,1],[1,3],[1,2],[1,2],[1,7],[1,1],[1,1],[1,1],[1,13],[0,28],[0,28],[1,1],[1,9],[1,1],[1,12],[1,3],[0,38],[0,28],[1,1],[1,5],[1,2],[0,24],[1,11],[1,3],[0,24]]},
+    {"cohort":"confirmation64","first_seed":7800001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":8,"episodes":64,"successes":45,"total_actions":800,"successful_actions":217,"mean_successful_actions":4.822222222222222,"common_successes":43,"common_actions":186,"baseline_common_actions":186,"gained":[7800059,7800121],"lost":[],"mean_decision_ms":35.05065155341072,"outcomes":[[0,28],[1,5],[1,4],[1,1],[1,1],[1,12],[1,3],[0,24],[1,2],[0,33],[0,33],[0,38],[1,3],[1,1],[1,2],[1,3],[0,33],[1,3],[1,15],[1,3],[0,24],[1,24],[0,43],[1,1],[1,3],[1,1],[0,24],[1,5],[1,5],[1,28],[0,53],[1,2],[1,1],[1,4],[0,28],[1,3],[0,28],[0,24],[0,24],[1,1],[1,3],[1,2],[1,2],[1,7],[1,1],[1,1],[1,1],[1,13],[0,28],[0,28],[1,1],[1,9],[1,1],[1,12],[1,3],[0,38],[0,28],[1,1],[1,5],[1,2],[1,3],[1,11],[1,3],[0,24]]},
+    {"cohort":"confirmation64","first_seed":7800001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":0,"episodes":64,"successes":52,"total_actions":645,"successful_actions":289,"mean_successful_actions":5.5576923076923075,"common_successes":52,"common_actions":289,"baseline_common_actions":289,"gained":[],"lost":[],"mean_decision_ms":36.355021251469324,"outcomes":[[1,2],[1,4],[0,24],[1,3],[1,5],[1,23],[1,3],[1,2],[1,5],[1,4],[1,24],[1,2],[1,1],[1,30],[1,4],[1,4],[1,3],[1,2],[1,2],[1,3],[1,23],[1,3],[1,8],[1,2],[1,24],[0,24],[1,2],[1,12],[1,3],[1,7],[1,3],[0,24],[1,4],[0,38],[1,1],[0,33],[0,38],[1,4],[1,1],[1,25],[1,5],[0,24],[1,2],[1,2],[1,1],[0,33],[1,1],[1,3],[1,2],[1,1],[1,2],[1,3],[1,1],[1,1],[1,2],[1,3],[1,2],[1,5],[0,24],[1,2],[0,33],[0,33],[1,3],[0,28]]},
+    {"cohort":"confirmation64","first_seed":7800001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":8,"episodes":64,"successes":52,"total_actions":613,"successful_actions":248,"mean_successful_actions":4.769230769230769,"common_successes":51,"common_actions":228,"baseline_common_actions":259,"gained":[7800083],"lost":[7800027],"mean_decision_ms":35.27361361494954,"outcomes":[[1,2],[1,4],[0,24],[1,3],[1,5],[1,17],[1,3],[1,2],[1,5],[1,4],[1,22],[1,2],[1,1],[0,33],[1,4],[1,4],[1,3],[1,2],[1,2],[1,3],[1,2],[1,3],[1,8],[1,2],[1,24],[0,24],[1,2],[1,12],[1,3],[1,7],[1,3],[0,24],[1,4],[0,38],[1,1],[0,33],[0,38],[1,4],[1,1],[1,23],[1,5],[1,20],[1,2],[1,2],[1,1],[0,33],[1,1],[1,3],[1,2],[1,1],[1,2],[1,3],[1,1],[1,1],[1,2],[1,3],[1,2],[1,5],[0,24],[1,2],[0,33],[0,33],[1,3],[0,28]]},
+    {"cohort":"short-cooldown64","first_seed":7800001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":2,"episodes":64,"successes":46,"total_actions":800,"successful_actions":260,"mean_successful_actions":5.6521739130434785,"common_successes":43,"common_actions":186,"baseline_common_actions":186,"gained":[7800045,7800059,7800121],"lost":[],"mean_decision_ms":35.45942612146973,"outcomes":[[0,28],[1,5],[1,4],[1,1],[1,1],[1,12],[1,3],[0,24],[1,2],[0,33],[0,33],[0,38],[1,3],[1,1],[1,2],[1,3],[0,33],[1,3],[1,15],[1,3],[0,24],[1,24],[1,43],[1,1],[1,3],[1,1],[0,24],[1,5],[1,5],[1,28],[0,53],[1,2],[1,1],[1,4],[0,28],[1,3],[0,28],[0,24],[0,24],[1,1],[1,3],[1,2],[1,2],[1,7],[1,1],[1,1],[1,1],[1,13],[0,28],[0,28],[1,1],[1,9],[1,1],[1,12],[1,3],[0,38],[0,28],[1,1],[1,5],[1,2],[1,3],[1,11],[1,3],[0,24]]},
+    {"cohort":"short-cooldown64","first_seed":7800001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":4,"episodes":64,"successes":45,"total_actions":795,"successful_actions":212,"mean_successful_actions":4.711111111111111,"common_successes":43,"common_actions":186,"baseline_common_actions":186,"gained":[7800059,7800121],"lost":[],"mean_decision_ms":34.92449107287018,"outcomes":[[0,28],[1,5],[1,4],[1,1],[1,1],[1,12],[1,3],[0,24],[1,2],[0,33],[0,33],[0,38],[1,3],[1,1],[1,2],[1,3],[0,33],[1,3],[1,15],[1,3],[0,24],[1,24],[0,43],[1,1],[1,3],[1,1],[0,24],[1,5],[1,5],[1,23],[0,53],[1,2],[1,1],[1,4],[0,28],[1,3],[0,28],[0,24],[0,24],[1,1],[1,3],[1,2],[1,2],[1,7],[1,1],[1,1],[1,1],[1,13],[0,28],[0,28],[1,1],[1,9],[1,1],[1,12],[1,3],[0,38],[0,28],[1,1],[1,5],[1,2],[1,3],[1,11],[1,3],[0,24]]},
+    {"cohort":"short-cooldown64","first_seed":7800001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":2,"episodes":64,"successes":51,"total_actions":626,"successful_actions":228,"mean_successful_actions":4.470588235294118,"common_successes":50,"common_actions":206,"baseline_common_actions":234,"gained":[7800083],"lost":[7800027,7800079],"mean_decision_ms":35.48988700803342,"outcomes":[[1,2],[1,4],[0,24],[1,3],[1,5],[1,18],[1,3],[1,2],[1,5],[1,4],[1,22],[1,2],[1,1],[0,33],[1,4],[1,4],[1,3],[1,2],[1,2],[1,3],[1,2],[1,3],[1,8],[1,2],[1,24],[0,24],[1,2],[1,12],[1,3],[1,7],[1,3],[0,24],[1,4],[0,38],[1,1],[0,33],[0,38],[1,4],[1,1],[0,33],[1,5],[1,22],[1,2],[1,2],[1,1],[0,33],[1,1],[1,3],[1,2],[1,1],[1,2],[1,3],[1,1],[1,1],[1,2],[1,3],[1,2],[1,5],[0,24],[1,2],[0,33],[0,33],[1,3],[0,28]]},
+    {"cohort":"short-cooldown64","first_seed":7800001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":4,"episodes":64,"successes":52,"total_actions":612,"successful_actions":247,"mean_successful_actions":4.75,"common_successes":51,"common_actions":228,"baseline_common_actions":259,"gained":[7800083],"lost":[7800027],"mean_decision_ms":35.62520931915607,"outcomes":[[1,2],[1,4],[0,24],[1,3],[1,5],[1,17],[1,3],[1,2],[1,5],[1,4],[1,22],[1,2],[1,1],[0,33],[1,4],[1,4],[1,3],[1,2],[1,2],[1,3],[1,2],[1,3],[1,8],[1,2],[1,24],[0,24],[1,2],[1,12],[1,3],[1,7],[1,3],[0,24],[1,4],[0,38],[1,1],[0,33],[0,38],[1,4],[1,1],[1,23],[1,5],[1,19],[1,2],[1,2],[1,1],[0,33],[1,1],[1,3],[1,2],[1,1],[1,2],[1,3],[1,1],[1,1],[1,2],[1,3],[1,2],[1,5],[0,24],[1,2],[0,33],[0,33],[1,3],[0,28]]},
+    {"cohort":"noop32-screen","first_seed":7760001,"seed_stride":2,"level":2,"horizon":3,"leaf_only":false,"noop_cooldown":32,"episodes":16,"successes":12,"total_actions":140,"successful_actions":44,"mean_successful_actions":3.6666666666666665,"common_successes":11,"common_actions":39,"baseline_common_actions":39,"gained":[7760007],"lost":[],"mean_decision_ms":36.215433986321194,"outcomes":[[1,8],[1,2],[1,2],[1,5],[1,2],[1,2],[0,24],[1,1],[0,24],[1,3],[1,2],[1,1],[1,2],[1,14],[0,24],[0,24]]},
+    {"cohort":"noop32-screen","first_seed":7760001,"seed_stride":2,"level":1,"horizon":3,"leaf_only":false,"noop_cooldown":32,"episodes":16,"successes":9,"total_actions":250,"successful_actions":33,"mean_successful_actions":3.6666666666666665,"common_successes":9,"common_actions":33,"baseline_common_actions":33,"gained":[],"lost":[],"mean_decision_ms":34.05376350344159,"outcomes":[[1,7],[1,4],[1,4],[0,33],[1,5],[1,1],[0,33],[0,33],[0,24],[1,1],[1,2],[1,5],[1,4],[0,28],[0,28],[0,38]]}
+  ]
+}

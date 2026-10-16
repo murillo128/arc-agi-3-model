@@ -50,6 +50,7 @@ class TrainConfig:
     local_reconstruction_weight: float = 1.
     delta_overlap_weight: float = 1.
     false_change_weight: float = 1.
+    prediction_delta_loss: str = 'balanced'
     freeze_representation: bool = False
     auto_representation: bool = False
     representation_unfreeze_error: float = .02
@@ -61,6 +62,7 @@ class TrainConfig:
     frame_chunk: int = 4
     loss_steps: int = 1
     rollout_weight: float = 0.
+    rollout_visual_weight: float = 0.
     decoder_readout: str = 'contextual'
     backward_mode: str = 'fragmented'
     rollout_diagnostics: bool = False
@@ -91,8 +93,10 @@ class TrainConfig:
 
     def __post_init__(self):
         for k, v in asdict(self).items():
-            if k in {'decoder_readout', 'backward_mode'}:
-                allowed = {'contextual', 'local'} if k == 'decoder_readout' else {'fragmented', 'ordinary'}
+            if k in {'decoder_readout', 'backward_mode', 'prediction_delta_loss'}:
+                allowed = {'decoder_readout': {'contextual', 'local'},
+                           'backward_mode': {'fragmented', 'ordinary'},
+                           'prediction_delta_loss': {'balanced', 'union', 'focal', 'recall_focal', 'recall_focal_capped'}}[k]
                 if v not in allowed:
                     raise ValueError(f'Invalid {k}: {v}')
                 continue
@@ -104,7 +108,7 @@ class TrainConfig:
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise ValueError(f'Invalid {k}')
             if k in {'representation_freeze_error', 'delta_error', 'latent_delta_mse', 'min_latent_std', 'max_steps', 'max_level_steps', 'sigreg_weight', 'local_reconstruction_weight', 'delta_overlap_weight', 'variance_weight',
-                     'rollout_weight', 'representation_joint_steps', 'burn_in_steps'}:
+                     'rollout_weight', 'rollout_visual_weight', 'representation_joint_steps', 'burn_in_steps'}:
                 if v < 0:
                     raise ValueError(f'{k} must be nonnegative')
             elif v <= 0:

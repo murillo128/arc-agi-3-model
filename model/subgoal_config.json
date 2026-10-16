@@ -1,0 +1,32 @@
+{
+  "network": {
+    "width": 768,
+    "heads": 12,
+    "encoder_depth": 12,
+    "predictor_depth": 6,
+    "decoder_depth": 8,
+    "latent": 1024,
+    "memory": 2048,
+    "animation_memory": 1024,
+    "action_embedding": 128,
+    "patch": 4,
+    "sigreg_slices": 1024,
+    "residual_scale": 0.1,
+    "position_scale": 0.1,
+    "pixel_latent": true,
+    "broadcast_conditioning": true,
+    "local_dynamics": true
+  },
+  "training": {
+    "sigreg_weight": 0.002,
+    "local_reconstruction_weight": 1.0,
+    "delta_overlap_weight": 1.0,
+    "false_change_weight": 1.0,
+    "prediction_delta_loss": "recall_focal_capped",
+    "variance_weight": 0.0,
+    "frame_chunk": 4,
+    "decoder_readout": "contextual",
+    "max_episode_steps": 128
+  },
+  "outcome_width": 64
+}

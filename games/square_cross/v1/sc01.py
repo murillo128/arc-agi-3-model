@@ -7,6 +7,7 @@ from arcengine import ARCBaseGame, Camera, Level, Sprite
 
 from games.pixel_grid import (BOUNDS, DIRECTIONS, Scene, draw_scene, fits,
                               render_hud, shortest_distance, sweep_fits)
+from games.subgoals import SyntheticSubgoals
 
 SIZES = (3, 5, 7)
 
@@ -101,7 +102,7 @@ def generate_scene(seed, level):
                  max(24, 5 * distance + 8), *colors)
 
 
-class Sc01(ARCBaseGame):
+class Sc01(SyntheticSubgoals, ARCBaseGame):
     def __init__(self, seed=0):
         self.instance_seed = seed  # Base constructor calls on_set_level before setting _seed.
         self.palette = palette_for_seed(seed)
@@ -112,6 +113,7 @@ class Sc01(ARCBaseGame):
         )
 
     def on_set_level(self, level):
+        self._teacher_level = None
         self.number = number = level.get_data("number")
         self.scene = scene = generate_scene(self.instance_seed, number)
         self.remaining = scene.budget

@@ -14,6 +14,7 @@ from .data import Action, Observation, random_action
 from .learning import State
 from .planning import PlanConfig, Planner
 from .goal_planning import GoalConfig, GoalPlanner
+from .path_planning import PathConfig, PathPlanner
 
 
 @dataclass(frozen=True)
@@ -22,9 +23,10 @@ class AgentConfig:
     max_actions: int = 128
     planner: PlanConfig = field(default_factory=PlanConfig)
     goal: GoalConfig = field(default_factory=GoalConfig)
+    path: PathConfig = field(default_factory=PathConfig)
 
     def __post_init__(self):
-        if self.mode not in {'random', 'q', 'mpc', 'value_mpc', 'goal_mpc', 'goal_value_mpc'}:
+        if self.mode not in {'random', 'q', 'mpc', 'value_mpc', 'goal_mpc', 'goal_value_mpc', 'path_mpc'}:
             raise ValueError('Unknown agent policy mode')
         if type(self.max_actions) is not int or self.max_actions < 1:
             raise ValueError('max_actions must be a positive integer')
@@ -49,19 +51,25 @@ def public_observation(raw, action=None):
 
 class Agent:
     def __init__(self, engine, heads, config=AgentConfig(), *, seed=0,
-                 frozen=True, compile_heads=False, proposal_policy=None):
+                 frozen=True, compile_heads=False, proposal_policy=None, path_evaluator=None):
         self.engine, self.heads, self.config = engine, heads, config
         self.proposal_policy = proposal_policy
+        self.path_evaluator = path_evaluator
         # Planner construction freezes parameters for inference. An externally
         # trained agent explicitly preserves the existing optimizer ownership.
         parameters = list(engine.model.parameters()) + list(heads.parameters())
         flags = [p.requires_grad for p in parameters]
         cls = GoalPlanner if config.mode in {'goal_mpc', 'goal_value_mpc'} else Planner
         planner_config = config.goal if cls is GoalPlanner else config.planner
-        self.planner = cls(engine, heads, planner_config, compile_heads=compile_heads)
+        if config.mode == 'path_mpc':
+            if path_evaluator is None:
+                raise ValueError('Path planning requires its goal-conditioned evaluator')
+            self.planner = PathPlanner(engine, path_evaluator, config.path, compile_model=compile_heads)
+        else:
+            self.planner = cls(engine, heads, planner_config, compile_heads=compile_heads)
         self.planner.proposal_policy = proposal_policy
         if frozen:
-            for module in (engine.model, heads, proposal_policy):
+            for module in (engine.model, heads, proposal_policy, path_evaluator):
                 if module is not None:
                     module.eval().requires_grad_(False)
         else:
@@ -144,6 +152,12 @@ class Agent:
         self.observe(observation)
         action = self.act()
         return PublicAction(action.id, dict(action.data))
+
+    def set_goal(self, frame, mask):
+        """Install one externally supplied visual subgoal, never a solved route."""
+        if self.config.mode != 'path_mpc':
+            raise ValueError('Explicit external subgoals require path_mpc')
+        self.planner.set_goal(frame, mask)
 
     @torch.no_grad()
     def imagine(self, actions, *, state=None):

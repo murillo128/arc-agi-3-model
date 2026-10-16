@@ -198,10 +198,15 @@ function statusFor(view, archived) {
   if (archived) return 'Registro anterior · consulta';
   if (view.phase === 'campaign_error') return 'Ejecución detenida por error';
   if (view.phase === 'campaign_finished') return 'Campaña terminada';
+  if (view.phase === 'campaign_paused') return 'Campaña pausada · diagnósticos en Comparación de variantes';
   if (view.phase === 'behavior_finished') return 'Experimento terminado';
   if (view.phase === 'stopped') return 'Entrenamiento detenido';
   const status = view.kind === 'campaign' ? stages[view.progress.stage] || 'Ejecución en curso según el log'
     : behaviorPhases[view.phase] || phases[view.phase] || 'Esperando datos';
+  if (view.kind === 'campaign' && view.progress.stage?.endsWith('_evaluation')) {
+    const granular = finite(view.progress.evaluation?.current_episode);
+    return `${status} · ${granular && view.source.age_seconds > 60 ? 'sin datos recientes' : granular ? 'progreso por acciones' : 'progreso por bloques de partidas'}`;
+  }
   return view.source.age_seconds > 60 ? `${status} · sin datos recientes` : status;
 }
 function setTable(id, rows, columns) {
@@ -252,6 +257,12 @@ function evaluationDiagnostics(rows) {
     : {actions: group[0].actions, split: group[0].split, per_pair: group}));
 }
 function render(data) {
+  const report = data.campaign?.report;
+  const probe = report?.learning_probe, diagnostic = report?.diagnostics;
+  const activity = [probe, diagnostic].find(a => a?.available && a.status === 'running');
+  $('experiment-notice').hidden = !activity;
+  $('experiment-summary').textContent = activity
+    ? `${activity === probe ? 'Ensayo de aprendizaje' : 'Diagnóstico con pesos congelados'} en curso. Las métricas de abajo pertenecen al entrenamiento seleccionado.` : '';
   const {views, current} = executionCatalogue(data);
   const select = $('execution-select');
   const options = [new Option('En curso · seguimiento automático', 'current'),
@@ -266,10 +277,11 @@ function render(data) {
   const p = view?.progress || {}, raw = view?.raw || {}, config = view?.config || {};
   const worldPoints = view?.worldPoints || [], validations = view?.validations || [];
   const fits = view?.behaviorPoints || [], evaluations = view?.evaluations || [];
+  const campaignEvaluation = view?.kind === 'campaign' && p.stage?.endsWith('_evaluation');
   $('run-info').textContent = view?.label || 'Registro no disponible';
   $('connection').textContent = statusFor(view, archived);
   $('connection').className = !view || !view.source.available || view.phase === 'campaign_error'
-    || (!archived && view.source.age_seconds > 60 && !['stopped', 'behavior_finished', 'campaign_finished'].includes(view.phase)) ? 'warn' : '';
+    || (!archived && view.source.age_seconds > (campaignEvaluation && !finite(p.evaluation?.current_episode) ? 900 : 60) && !['stopped', 'behavior_finished', 'campaign_finished'].includes(view.phase)) ? 'warn' : '';
   $('freshness').textContent = archived ? 'Datos de la ejecución seleccionada'
     : `Última escritura hace ${fmt(view?.source.age_seconds)} s · consulta cada 2 s`;
   $('selection-note').textContent = selectedExecution === 'current'
@@ -292,6 +304,11 @@ function render(data) {
     ? `${fmt(p.joint_updates)} conjuntas / ${fmt(p.frozen_updates)} con representación congelada`
     : view?.kind === 'behavior' ? 'Ronda de aprendizaje registrada' : 'Pasos del optimizador registrados';
   $('speed-note').textContent = `acciones/s · ${view?.kind === 'behavior' ? 'recogida' : 'aprendizaje'}`;
+  if (campaignEvaluation) {
+    $('speed-note').textContent = 'Evaluando con pesos congelados · no hay TPS de aprendizaje';
+    $('level').textContent = finite(p.evaluation?.level) ? `Nivel ${fmt(p.evaluation.level)}` : 'Evaluando';
+    $('game').textContent = p.evaluation?.game || 'Juego no identificado en el log de evaluación';
+  }
   const aggregates = validations.filter(r => r.aggregate);
   const visualRows = aggregates.length ? aggregates : validations;
   const latestWorld = visualRows.at(-1);
@@ -314,7 +331,7 @@ function render(data) {
   const curveGroup = r => `${splitName(r)} · ${scope(r)}`;
   charts.delta.set(groupedLines(visualRows, [['Predictor', r => percentValue(r.delta_error)],
     ['Decoder', r => percentValue(r.decoder_delta_error)]], curveGroup), finite(config.delta_error) ? config.delta_error * 100 : undefined, ' %');
-  charts.loss.set([['Predicción', 'decoder_ce'], ['Reconstrucción', 'reconstruction_ce'], ['Reconstrucción local', 'local_reconstruction_ce']]
+  charts.loss.set([['Predicción', 'decoder_ce'], ['Reconstrucción', 'reconstruction_ce'], ['Reconstrucción local', 'local_reconstruction_ce'], ['Visual a 2 pasos · ponderada', 'rollout_visual']]
     .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));
   charts.latent.set([['1 paso', 'latent_mse'], ['2 pasos', 'rollout_mse']]
     .map(([name, key]) => line(name, worldPoints, r => r.loss?.[key])));
@@ -341,24 +358,47 @@ function render(data) {
   const learned = evaluations.filter(r => r.policy !== 'random' && r.role !== 'initial');
   const aggregateLearned = learned.filter(r => !finite(r.level));
   const latest = (aggregateLearned.length ? aggregateLearned : learned).at(-1);
-  const pending = view?.kind === 'behavior' ? raw.progress?.evaluation : null;
-  const completed = ['behavior_finished', 'campaign_finished', 'campaign_error', 'stopped'].includes(view?.phase) || archived;
-  const ongoing = view?.source.available && !completed && view?.kind === 'behavior';
-  const evaluating = ongoing && view.phase === 'behavior_evaluation_progress';
+  const pending = view?.kind === 'behavior' ? raw.progress?.evaluation : view?.kind === 'campaign' ? p.evaluation : null;
+  const completed = ['behavior_finished', 'campaign_finished', 'campaign_error', 'campaign_paused', 'stopped'].includes(view?.phase) || archived;
+  const ongoing = view?.source.available && !completed && ['behavior', 'campaign'].includes(view?.kind);
+  const evaluating = ongoing && (view.phase === 'behavior_evaluation_progress'
+    || (view.kind === 'campaign' && p.stage === 'behavior_evaluation'));
+  const liveProgress = evaluating && finite(pending?.current_episode);
+  $('evaluation-progress').hidden = !liveProgress;
+  $('evaluation-progress').textContent = liveProgress
+    ? `${pending.game || 'Evaluación'} · Nivel ${fmt(pending.level)}`
+      + (finite(pending.pair_count) ? ` · bloque ${fmt(pending.pair_index)}/${fmt(pending.pair_count)}` : '')
+      + ` · Partida ${fmt(pending.current_episode)}/${fmt(pending.total_episodes)}`
+      + ` · ${fmt(pending.episode_actions)}/${fmt(pending.episode_budget)} acciones${pending.episode_complete ? ' · terminada' : ''}`
+      + ` · ${fmt(pending.episodes)} partidas completadas · ${fmt(pending.wins)} victorias`
+      + ` · ${fmt(pending.seconds)} s en este bloque (último registro)` : '';
+  const partial = evaluating && view.kind === 'campaign' && pending?.episodes > 0 && finite(pending.wins);
   const baseline = evaluations.findLast(r => r.policy === 'random' && r.split === (latest?.split || pending?.split)
     && (r.level ?? null) === (latest?.level ?? null) && (r.game ?? null) === (latest?.game ?? raw.run?.game ?? null));
-  $('behavior-win').textContent = latest ? pct(latest.win_rate) : evaluating ? 'En curso' : ongoing ? 'Pendiente' : '—';
-  $('behavior-wins').textContent = latest ? `${fmt(latest.wins)}/${fmt(latest.episodes)} · ${splitName(latest)} · ${scope(latest)} · ${policyName(latest)}`
+  $('behavior-win').textContent = partial ? pct(pending.wins / pending.episodes) : latest ? pct(latest.win_rate) : evaluating ? 'En curso' : ongoing && view.kind === 'behavior' ? 'Pendiente' : '—';
+  $('behavior-wins').textContent = partial ? `${fmt(pending.wins)}/${fmt(pending.episodes)} partidas · Nivel ${fmt(pending.level)} · parcial de la campaña`
+    : latest ? `${fmt(latest.wins)}/${fmt(latest.episodes)} · ${splitName(latest)} · ${scope(latest)} · ${policyName(latest)}`
     : evaluating ? `Evaluación ${splitName(pending || {})} en curso; esperando el resultado completo`
     : ongoing ? 'Evaluación aprendida pendiente' : 'Sin evaluación aprendida registrada';
   $('behavior-random').textContent = pct(baseline?.win_rate);
   $('behavior-random-note').textContent = baseline ? `${fmt(baseline.wins)}/${fmt(baseline.episodes)} · ${splitName(baseline)} · ${scope(baseline)}`
     : 'Sin referencia al azar para la misma fase y nivel';
-  $('behavior-ms').textContent = fmt(latest?.decision_ms, 2);
-  $('behavior-tps').textContent = fmt(latest?.actions_per_second, 2);
-  $('behavior-status').textContent = fits.length ? `Aprendizaje de comportamiento de esta ejecución. Eje de pérdidas: ${view.fitAxis}.`
+  const measured = partial ? pending : latest;
+  $('behavior-ms').textContent = fmt(measured?.decision_ms, 2);
+  $('behavior-tps').textContent = fmt(measured?.actions_per_second, 2);
+  $('behavior-status').textContent = evaluating && view.kind === 'campaign'
+    ? liveProgress
+      ? 'Evaluación con pesos congelados. Progreso aproximadamente cada 2 s al completar acciones y al terminar cada partida. Una decisión lenta puede tardar más; la antigüedad indica cuándo llegó el último registro.'
+      : 'Evaluación con pesos congelados. Este registro sólo ofrece progreso por bloques de partidas. El resultado completo aparecerá al finalizar todos los juegos y niveles.'
+    : fits.length ? `Aprendizaje de comportamiento de esta ejecución. Eje de pérdidas: ${view.fitAxis}.`
     : evaluations.length ? 'Resultados de evaluación; sin aprendizaje de comportamiento registrado en el tramo disponible.'
     : 'Sin métricas de comportamiento registradas en esta ejecución. El panel se completará si esta ejecución las produce.';
+  $('behavior-baseline-card').hidden = !baseline;
+  $('behavior-ms-card').hidden = !finite(measured?.decision_ms);
+  $('behavior-tps-card').hidden = !finite(measured?.actions_per_second);
+  $('behavior-wins-card').hidden = !evaluations.length;
+  $('behavior-loss-card').hidden = !fits.some(r => ['loss', 'event_ce', 'value_bce', 'q_bce'].some(k => finite(r.loss?.[k])));
+  $('behavior-actor-card').hidden = !fits.some(r => ['imitation_loss', 'actor_loss', 'critic_loss'].some(k => finite(r.loss?.[k])));
   charts.wins.set(groupedLines(evaluations, [['Éxito', r => percentValue(r.win_rate)]],
     r => `${policyName(r)} · ${splitName(r)} · ${scope(r)}`,
     r => view?.kind === 'behavior' ? r.evaluationIndex : r.trainingActions), undefined, ' %', view?.kind === 'behavior' ? 'evaluación' : 'acción');

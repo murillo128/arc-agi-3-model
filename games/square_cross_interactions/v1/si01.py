@@ -7,6 +7,7 @@ from arcengine import ARCBaseGame, Camera, Level, Sprite
 
 from games.pixel_grid import (BOUNDS, DIRECTIONS, Scene, draw_scene, fits,
                               render_hud, sweep_fits)
+from games.subgoals import SyntheticSubgoals
 
 
 class ClickScene(NamedTuple):
@@ -94,7 +95,7 @@ def touches_cross(center, size, target, target_size):
             or (abs(y - ty) <= r and abs(x - tx) <= r + tr))
 
 
-class Si01(ARCBaseGame):
+class Si01(SyntheticSubgoals, ARCBaseGame):
     def __init__(self, seed=0):
         self.instance_seed = seed  # Base constructor calls on_set_level before setting _seed.
         super().__init__(
@@ -104,6 +105,8 @@ class Si01(ARCBaseGame):
         )
 
     def on_set_level(self, level):
+        self._teacher_level = None
+        self._teacher_clicked = False
         self.number = number = level.get_data("number")
         # ARCEngine 0.9.3 has no action setter; FrameData reads this list. Its
         # constructor overwrites it after the first callback, so it also gets [6].
@@ -149,6 +152,7 @@ class Si01(ARCBaseGame):
                         break
             if self.number == 1:
                 if hit is not None:
+                    self._teacher_clicked = True
                     self.next_level()
             elif self.number == 2:
                 if hit is None:

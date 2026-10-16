@@ -2,10 +2,10 @@
 
 One sequential GPU job. Large artifacts are local, replay is ephemeral, and a
 completed comparison is never inferred from a launched process. The source
-checkpoint is immutable; interrupted cells restart from that same source.
+checkpoint is immutable; unfinished training restarts from that same source,
+while failed evaluations resume their saved trained agent.
 """
 import argparse
-from collections import deque
 from dataclasses import asdict, replace
 import gc
 import json
@@ -33,9 +33,9 @@ from .runner import merge_rollout_reports, validation
 from .value_learning import RealRecord
 
 
-WORLD_VARIANTS = ('world_reference', 'rollout2', 'local_decoder', 'staged_freeze', 'sigreg_only')
+WORLD_VARIANTS = ('world_reference', 'rollout2', 'rollout2_visual', 'local_decoder', 'staged_freeze', 'sigreg_only')
 BEHAVIOR_VARIANTS = ('mc', 'double_q', 'click_mixed', 'actor_imitation', 'actor_imagined')
-CONTROLS = dict(rollout2='world_reference', local_decoder='rollout2', sigreg_only='staged_freeze',
+CONTROLS = dict(rollout2='world_reference', rollout2_visual='rollout2', local_decoder='rollout2', sigreg_only='staged_freeze',
                 staged_freeze='rollout2', double_q='mc', click_mixed='mc',
                 actor_imitation='mc', actor_imagined='actor_imitation')
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +45,10 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}, allow_nan=False), flush=True)
 
 
-def write_report(path, data):
+def write_report(path, data, *, compact=False):
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(data, indent=2, allow_nan=False) + '\n')
+    temporary.write_text(json.dumps(data, indent=None if compact else 2,
+        separators=(',', ':') if compact else None, allow_nan=False) + '\n')
     temporary.replace(path)
 
 
@@ -69,10 +70,12 @@ def world_config(source, variant, total):
     # All variants use the same balanced collection protocol and bounded replay.
     common = dict(retain_replay_across_levels=True, validation_episodes=2,
                   validation_steps=64, rollout_diagnostics=True, cache_frozen_latents=True,
-                  rollout_weight=0.)
+                  rollout_weight=0., rollout_visual_weight=0.)
     if variant != 'world_reference':
         common['rollout_weight'] = .5
-    if variant == 'local_decoder':
+    if variant == 'rollout2_visual':
+        common['rollout_visual_weight'] = .5
+    elif variant == 'local_decoder':
         common['decoder_readout'] = 'local'
     elif variant == 'sigreg_only':
         common['variance_weight'] = 0.
@@ -247,7 +250,23 @@ def imagination_gate(engine, factories, pairs, seed, reference_cell=None):
             'per_pair': evidence}
 
 
-def train_world(engine, factories, pairs, total_actions, seed, variant, callback=None):
+def calibration_coverage(archive):
+    """Actual collected episodes, never imagined successes or oversampled labels."""
+    rows = []
+    for (game, level), items in archive.items():
+        rows.append({'game': game, 'level': level, 'episodes': len(items),
+            'actions': sum(len(ep.actions) for ep, _ in items),
+            'successes': sum(reason == 'progress' for _, reason in items),
+            'failures': sum(reason == 'game_over' for _, reason in items),
+            'budget_ends': sum(reason == 'budget' for _, reason in items),
+            'censored_episodes': sum(reason == 'interrupted' for _, reason in items)})
+    return {'sampling': 'all_collected_real_episodes', 'per_pair': rows,
+            **{key: sum(row[key] for row in rows) for key in
+               ('episodes', 'actions', 'successes', 'failures', 'budget_ends', 'censored_episodes')}}
+
+
+def train_world(engine, factories, pairs, total_actions, seed, variant, callback=None, *,
+                calibration_bytes=512 * 1024 * 1024):
     c = engine.config
     learner = Learner(engine)
     rng = random.Random(seed)
@@ -255,7 +274,11 @@ def train_world(engine, factories, pairs, total_actions, seed, variant, callback
     action_budget = min(c.max_episode_steps, 128)
     budget, counts = quotas(total_actions, pairs), dict.fromkeys(pairs, 0)
     replay = Replay(c.replay_episodes, c.replay_bytes)
-    archive = {pair: deque(maxlen=max(1, c.replay_episodes // len(pairs))) for pair in pairs}
+    # Calibration needs the entire bounded collection, including early successes.
+    # Raw CPU observations have a separate explicit budget; they are not replay
+    # caches and are never persisted. Fail visibly instead of dropping labels.
+    archive = {pair: [] for pair in pairs}
+    archive_bytes = 0
     actions = updates = episodes = 0
     joint_updates = frozen_updates = 0
     started, next_check, gate = time.monotonic(), min(4096, total_actions), None
@@ -319,7 +342,11 @@ def train_world(engine, factories, pairs, total_actions, seed, variant, callback
                           'budget' if position + 1 == action_budget else 'interrupted')
                 break
         # The archive owns raw observations only, never orphaned GPU caches.
-        archive[pair].append((Episode(real_observations, real_actions), reason))
+        collected = Episode(real_observations, real_actions)
+        archive_bytes += collected.nbytes
+        if archive_bytes > calibration_bytes:
+            raise MemoryError('Real calibration archive exceeds calibration_bytes; reduce collection or raise its explicit RAM limit')
+        archive[pair].append((collected, reason))
         episodes += 1
         replay.trim()
         if actions >= next_check and actions < total_actions:
@@ -343,18 +370,24 @@ def train_world(engine, factories, pairs, total_actions, seed, variant, callback
     if engine.device.type == 'cuda':
         torch.cuda.empty_cache()
     records = replay_records(engine, archive, .95)
+    coverage = calibration_coverage(archive)
+    coverage.update(raw_bytes=archive_bytes, records=len(records),
+                    positive_records=sum(row.target is not None and row.target > 0 for row in records),
+                    censored_records=sum(row.target is None for row in records))
+    emit('campaign_calibration_data', variant=variant, seed=seed, calibration=coverage)
     return records, {'actions': actions, 'updates': updates, 'episodes': episodes,
                      'joint_updates': joint_updates, 'frozen_updates': frozen_updates,
-                     'seconds': time.monotonic()-started,
+                     'seconds': time.monotonic()-started, 'calibration': coverage,
                      'per_pair': [{'game': g, 'level': l, 'actions': counts[(g, l)]} for g, l in pairs]}
 
 
 def evaluate_behavior(engine, planner, factories, pairs, seed, episodes, split):
     results, started = [], time.monotonic()
-    for game, level in pairs:
+    for pair_index, (game, level) in enumerate(pairs, 1):
         seeds = episode_seeds(split, episodes, offset=seed * 10000)
         report = evaluate(engine, planner, factories[game], level, seeds, 128,
-                          'value_mpc', split=split, role='campaign')
+                          'value_mpc', split=split, role='campaign', game=game,
+                          pair_index=pair_index, pair_count=len(pairs))
         results.extend(dict(r, game=game, training_seed=seed) for r in report['results'])
     return evaluation_summary(results, time.monotonic()-started)
 
@@ -414,9 +447,11 @@ def main(argv=None):
     parser.add_argument('--final-episodes', type=int, default=128)
     parser.add_argument('--device', choices=['cpu', 'cuda'], default='cuda')
     parser.add_argument('--games-dir', type=Path, default=ROOT/'games')
+    parser.add_argument('--calibration-bytes', type=int, default=512 * 1024 * 1024,
+                        help='Maximum raw CPU observation bytes retained for complete head calibration')
     parser.add_argument('--pilot', action='store_true', help='Diagnostic only: no promotion or final confirmation')
     args = parser.parse_args(argv)
-    if (min(args.actions, args.dev_episodes, args.final_episodes) < 1 or len(set(args.seeds)) != len(args.seeds)
+    if (min(args.actions, args.dev_episodes, args.final_episodes, args.calibration_bytes) < 1 or len(set(args.seeds)) != len(args.seeds)
             or any(seed not in (0, 1, 2) for seed in args.seeds)):
         parser.error('Positive budgets and distinct seeds in {0, 1, 2} required')
     if not args.pilot and (args.actions != 16384 or args.seeds != [0, 1, 2] or args.dev_episodes != 32 or args.final_episodes != 128):
@@ -468,63 +503,82 @@ def main(argv=None):
                 random.seed(seed)
                 emit('campaign_phase', variant=variant, seed=seed, stage='initializing',
                      actions=0, total_actions=args.actions)
-                training = world_config(source_config, variant, args.actions) if variant in WORLD_VARIANTS else source_config
-                engine = load_source(source_path, args.device, training)
-                initial_heads_path = args.output/f'mc-heads-{seed}.pt' if variant.startswith('actor_') else heads_path
-                if variant.startswith('actor_') and not initial_heads_path.exists():
-                    raise ValueError('Actor comparisons require completed MC calibration for the same seed')
-                heads = load_heads(initial_heads_path, engine)
-                gate = None
-                if variant == 'actor_imagined':
-                    reference_cell = next((r for r in report['cells']
-                                           if r['variant'] == 'mc' and r['seed'] == seed), None)
-                    gate = imagination_gate(engine, factories, pairs, seed, reference_cell)
-                    emit('campaign_imagination_gate', variant=variant, seed=seed, **gate)
-                    if not gate['passed']:
-                        report.setdefault('deferred_cells', []).append({
-                            'variant': variant, 'seed': seed, 'status': 'deferred',
-                            'reason': 'source_world_h2_not_admitted', 'fallback': 'actor_imitation',
-                            'training': {'actions': 0, 'updates': 0}, 'imagination_gate': gate})
-                        write_report(report_path, report)
-                        del engine, heads
-                        gc.collect()
-                        if args.device == 'cuda':
-                            torch.cuda.empty_cache()
-                        continue
-                if args.device == 'cuda':
-                    torch.cuda.reset_peak_memory_stats()
-                started = time.monotonic()
-                proposal = None
-                if variant in WORLD_VARIANTS:
-                    records, training_report = train_world(engine, factories, pairs, args.actions, seed, variant)
-                    emit('campaign_phase', variant=variant, seed=seed, stage='head_calibration',
-                         actions=args.actions, total_actions=args.actions)
-                    fit(engine, heads, records, 12, 32, 3e-4, seed, compiled=args.device == 'cuda')
-                    del records
-                    planner = Planner(engine, heads, PlanConfig(clicks=16), compile_heads=args.device == 'cuda')
+                pending_path = args.output / 'pending-agent.pt'
+                pending = report.get('pending_evaluation')
+                if pending and (pending['variant'], pending['seed']) == (variant, seed):
+                    resumed = agent_checkpoint.load(pending_path, device=args.device)
+                    engine, heads, planner = resumed.engine, resumed.heads, resumed.planner
+                    proposal, training_report = resumed.proposal_policy, pending['training']
+                    del resumed
+                    emit('campaign_resumed_evaluation', variant=variant, seed=seed, actions=args.actions)
                 else:
-                    from .campaign_behavior import train_behavior
-                    def check_behavior(actions, current_planner, current_proposal, current_report):
-                        if actions >= args.actions:
-                            return
-                        measured = evaluate_behavior(engine, current_planner, factories, pairs, seed, 2, 'dev')
-                        emit('campaign_evaluation', variant=variant, seed=seed, actions=actions,
-                             split='intermediate', behavior=measured)
-                    planner, proposal, training_report = train_behavior(engine, heads, PlanConfig(clicks=16), factories,
-                        pairs, total_actions=args.actions, seed=seed, variant=variant, emit=emit,
-                        check_callback=check_behavior)
-                    if variant == 'mc':
-                        save_heads(args.output/f'mc-heads-{seed}.pt', heads, fingerprint(engine.model), planner.config,
-                                   {'config': {'scope': 'synthetic_campaign', 'seed': seed}})
-                training_report['seconds'] = time.monotonic()-started
-                if gate is not None:
-                    training_report['imagination_gate'] = gate
-                training_report['stage_seconds'] = training_report['seconds']
-                training_report['cumulative_actions'] = args.actions
-                if variant.startswith('actor_'):
-                    calibration = next(r for r in report['cells'] if r['variant'] == 'mc' and r['seed'] == seed)
-                    training_report['seconds'] += calibration['training']['seconds']
-                    training_report['cumulative_actions'] += calibration['training']['actions']
+                    training = world_config(source_config, variant, args.actions) if variant in WORLD_VARIANTS else source_config
+                    engine = load_source(source_path, args.device, training)
+                    initial_heads_path = args.output/f'mc-heads-{seed}.pt' if variant.startswith('actor_') else heads_path
+                    if variant.startswith('actor_') and not initial_heads_path.exists():
+                        raise ValueError('Actor comparisons require completed MC calibration for the same seed')
+                    heads = load_heads(initial_heads_path, engine)
+                    gate = None
+                    if variant == 'actor_imagined':
+                        reference_cell = next((r for r in report['cells']
+                                               if r['variant'] == 'mc' and r['seed'] == seed), None)
+                        gate = imagination_gate(engine, factories, pairs, seed, reference_cell)
+                        emit('campaign_imagination_gate', variant=variant, seed=seed, **gate)
+                        if not gate['passed']:
+                            report.setdefault('deferred_cells', []).append({
+                                'variant': variant, 'seed': seed, 'status': 'deferred',
+                                'reason': 'source_world_h2_not_admitted', 'fallback': 'actor_imitation',
+                                'training': {'actions': 0, 'updates': 0}, 'imagination_gate': gate})
+                            write_report(report_path, report)
+                            del engine, heads
+                            gc.collect()
+                            if args.device == 'cuda':
+                                torch.cuda.empty_cache()
+                            continue
+                    if args.device == 'cuda':
+                        torch.cuda.reset_peak_memory_stats()
+                    started = time.monotonic()
+                    proposal = None
+                    if variant in WORLD_VARIANTS:
+                        records, training_report = train_world(engine, factories, pairs, args.actions, seed, variant,
+                                                              calibration_bytes=args.calibration_bytes)
+                        emit('campaign_phase', variant=variant, seed=seed, stage='head_calibration',
+                             actions=args.actions, total_actions=args.actions)
+                        fit(engine, heads, records, 12, 32, 3e-4, seed, compiled=args.device == 'cuda')
+                        del records
+                        planner = Planner(engine, heads, PlanConfig(clicks=16), compile_heads=args.device == 'cuda')
+                    else:
+                        from .campaign_behavior import train_behavior
+                        def check_behavior(actions, current_planner, current_proposal, current_report):
+                            if actions >= args.actions:
+                                return
+                            measured = evaluate_behavior(engine, current_planner, factories, pairs, seed, 2, 'dev')
+                            emit('campaign_evaluation', variant=variant, seed=seed, actions=actions,
+                                 split='intermediate', behavior=measured)
+                        planner, proposal, training_report = train_behavior(engine, heads, PlanConfig(clicks=16), factories,
+                            pairs, total_actions=args.actions, seed=seed, variant=variant, emit=emit,
+                            check_callback=check_behavior)
+                        if variant == 'mc':
+                            save_heads(args.output/f'mc-heads-{seed}.pt', heads, fingerprint(engine.model), planner.config,
+                                       {'config': {'scope': 'synthetic_campaign', 'seed': seed}})
+                    training_report['seconds'] = time.monotonic()-started
+                    if gate is not None:
+                        training_report['imagination_gate'] = gate
+                    training_report['stage_seconds'] = training_report['seconds']
+                    training_report['cumulative_actions'] = args.actions
+                    if variant.startswith('actor_'):
+                        calibration = next(r for r in report['cells'] if r['variant'] == 'mc' and r['seed'] == seed)
+                        training_report['seconds'] += calibration['training']['seconds']
+                        training_report['cumulative_actions'] += calibration['training']['actions']
+                    # Save every completed training cell BEFORE fallible evaluation.
+                    # This is a recovery snapshot, not a selected/promoted candidate.
+                    agent = Agent(engine, heads, AgentConfig(mode='value_mpc', planner=planner.config),
+                                  seed=seed, proposal_policy=proposal)
+                    agent_checkpoint.save(pending_path, agent)
+                    del agent
+                    report['pending_evaluation'] = {'variant': variant, 'seed': seed,
+                                                    'training': training_report}
+                    write_report(report_path, report)
                 emit('campaign_phase', variant=variant, seed=seed, stage='world_evaluation',
                      actions=args.actions, total_actions=args.actions)
                 world_report, world_evaluation = evaluate_cell_world(
@@ -538,12 +592,11 @@ def main(argv=None):
                         'gpu_peak_bytes': torch.cuda.max_memory_allocated() if args.device == 'cuda' else None}
                 if seed == args.seeds[0]:
                     # Predetermined representative seed, never the best-looking seed.
-                    agent = Agent(engine, heads, AgentConfig(mode='value_mpc', planner=planner.config),
-                                  seed=seed, proposal_policy=proposal)
-                    agent_checkpoint.save(candidate_path, agent)
-                    del agent
+                    copy_artifact(pending_path, candidate_path)
                 report['cells'].append(cell)
+                report.pop('pending_evaluation', None)
                 write_report(report_path, report)
+                pending_path.unlink(missing_ok=True)
                 emit('campaign_evaluation', variant=variant, seed=seed, actions=args.actions,
                      split='dev', world=world_report, behavior=behavior)
                 del engine, heads, planner, proposal

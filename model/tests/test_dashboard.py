@@ -8,18 +8,60 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from model.dashboard import LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LINE, MAX_READ, make_server
+from model.dashboard import GpuMonitor, LogMonitor, BehaviorMonitor, CampaignMonitor, MAX_LINE, MAX_READ, make_server
+
+
+class GpuMonitorTests(unittest.TestCase):
+    def test_live_readings_keep_zero_missing_values_and_share_two_second_cache(self):
+        monitor = GpuMonitor()
+        result = subprocess.CompletedProcess([], 0, '0, Test GPU, 0, 64\n1, Second GPU, [N/A], nan\n')
+        with patch('model.dashboard.subprocess.run', return_value=result) as query, \
+             patch('model.dashboard.time.monotonic', return_value=10.) as clock:
+            expected = [dict(index=0,name='Test GPU',utilization_percent=0.,temperature_c=64.),
+                        dict(index=1,name='Second GPU',utilization_percent=None,temperature_c=None)]
+            self.assertEqual(monitor.snapshot()['devices'],expected)
+            clock.return_value = 11.9
+            self.assertEqual(monitor.snapshot()['devices'],expected)
+            self.assertEqual(query.call_count,1)
+            result.stdout = '0, Test GPU, 87, 71\n1, Second GPU, 101, [N/A]\n'
+            clock.return_value = 12.
+            self.assertEqual(monitor.snapshot()['devices'],[
+                dict(index=0,name='Test GPU',utilization_percent=87.,temperature_c=71.),
+                dict(index=1,name='Second GPU',utilization_percent=None,temperature_c=None)])
+            self.assertEqual(query.call_count,2)
+            self.assertEqual(query.call_args.kwargs['timeout'],1)
+
+    def test_unavailable_queries_clear_old_readings_and_can_recover(self):
+        for failure in (FileNotFoundError(), subprocess.TimeoutExpired('nvidia-smi',1),
+                        subprocess.CalledProcessError(1,'nvidia-smi')):
+            with self.subTest(failure=type(failure).__name__):
+                monitor = GpuMonitor()
+                result = subprocess.CompletedProcess([],0,'0, Test GPU, 72, 70\n')
+                with patch('model.dashboard.subprocess.run',return_value=result) as query, \
+                     patch('model.dashboard.time.monotonic',return_value=10.) as clock:
+                    self.assertEqual(monitor.snapshot()['devices'][0]['temperature_c'],70.)
+                    clock.return_value = 12.
+                    query.side_effect = failure
+                    self.assertEqual(monitor.snapshot()['devices'],[])
+                    self.assertEqual(monitor.snapshot()['devices'],[])
+                    self.assertEqual(query.call_count,2,'failures are cached across clients too')
+                    query.side_effect = None
+                    clock.return_value = 14.
+                    self.assertEqual(monitor.snapshot()['devices'][0]['utilization_percent'],72.)
 
 
 class DashboardTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for dashboard JavaScript rendering contract')
     def test_full_javascript_poll_and_render(self):
-        result = subprocess.run(['node', str(Path(__file__).with_name('dashboard_runtime.cjs'))],
-                                text=True, capture_output=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for script in ('dashboard_runtime.cjs', 'campaign_runtime.cjs', 'subgoals_runtime.cjs'):
+            with self.subTest(script=script):
+                result = subprocess.run(['node', str(Path(__file__).with_name(script))],
+                                        text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -188,6 +230,8 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.monitor.snapshot()['progress']['actions'], 10)
 
     def test_actual_http_assets_metrics_and_fixed_read_only_routes(self):
+        self.enterContext(patch('model.dashboard.subprocess.run',return_value=
+            subprocess.CompletedProcess([],0,'0, Test GPU, 73, 69\n')))
         self.append({'event': 'progress', 'actions': 256, 'updates': 28})
         behavior_path = self.path.with_name('behavior.log')
         behavior_path.write_text('{"event":"behavior_collection","actions":7,"episodes":2}\n')
@@ -201,6 +245,7 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = f'http://127.0.0.1:{server.server_port}'
         for route, mime in (('/', 'text/html'), ('/dashboard.js', 'text/javascript'),
+                            ('/campaign.html', 'text/html'), ('/campaign.js', 'text/javascript'),
                             ('/dashboard.css', 'text/css'), ('/api/state', 'application/json')):
             with urlopen(base + route) as response:
                 self.assertEqual(response.headers.get_content_type(), mime)
@@ -213,6 +258,8 @@ class DashboardTests(unittest.TestCase):
                     self.assertEqual(data['behavior']['progress']['collection']['actions'], 7)
                     self.assertEqual(data['campaign']['progress']['actions'], 9)
                     self.assertEqual(data['campaign']['progress']['seed'], 2)
+                    self.assertEqual(data['gpu']['devices'],[
+                        dict(index=0,name='Test GPU',utilization_percent=73.,temperature_c=69.)])
         self.append({'event': 'progress', 'actions': 288})
         with urlopen(base + '/api/state') as response:
             self.assertEqual(json.load(response)['progress']['actions'], 288)
@@ -220,6 +267,170 @@ class DashboardTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 urlopen(base + route)
             self.assertEqual(error.exception.code, 404)
+
+    def test_campaign_inner_evaluation_progress_keeps_training_counters_and_context(self):
+        monitor = CampaignMonitor(self.path)
+        progress = {'event': 'behavior_evaluation_progress', 'role': 'campaign', 'split': 'dev',
+                    'level': 1, 'episodes': 16, 'wins': 7, 'policy': 'value_mpc', 'horizon': 2}
+        self.append(progress)
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'], 'orphan events have no reliable variant identity')
+        self.append({'event': 'campaign_phase', 'variant': 'rollout2', 'seed': 0,
+                     'stage': 'behavior_evaluation', 'actions': 16384}, progress)
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot['progress']['actions'], 16384)
+        self.assertEqual(snapshot['progress']['evaluation']['wins'], 7)
+        self.assertEqual(snapshot['executions'][0]['evaluation']['episodes'], 16)
+        self.assertEqual(snapshot['evaluations'], [], 'partial evaluation is not a completed campaign result')
+        self.append(dict(progress, episodes=0, wins=0, actions=3, current_episode=1,
+                         total_episodes=32, episode_actions=3, episode_budget=128,
+                         seconds=2.25, episode_seconds=2.25, game='si01-v1', pair_index=6, pair_count=10))
+        live = monitor.snapshot()['progress']
+        self.assertEqual(live['actions'], 16384)
+        self.assertEqual(live['evaluation']['actions'], 3)
+        self.assertEqual(live['evaluation']['current_episode'], 1)
+        self.assertEqual(live['evaluation']['pair_count'], 10)
+        self.assertEqual(live['evaluation']['game'], 'si01-v1')
+        self.assertEqual(live['evaluation']['seconds'], 2.25)
+        self.append(dict(progress, event='behavior_evaluation', episodes=32, wins=14,
+                         actions=3000, decision_ms=120, actions_per_second=8))
+        self.assertEqual(monitor.snapshot()['progress']['evaluation']['decision_ms'], 120)
+        self.append(dict(progress, level=2, wins=0))
+        current = monitor.snapshot()['progress']['evaluation']
+        self.assertEqual(current['wins'], 0)
+        self.assertNotIn('decision_ms', current, 'a new level cannot inherit the previous latency')
+        self.append(dict(progress, split='final', wins=15))
+        self.assertEqual(monitor.snapshot()['progress']['evaluation']['wins'], 0)
+        self.append({'event': 'campaign_evaluation', 'variant': 'rollout2', 'seed': 0, 'actions': 16384,
+                     'split': 'dev', 'behavior': {'win_rate': .4}})
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'])
+        self.append({'event': 'campaign_phase', 'variant': 'rollout2', 'seed': 1, 'stage': 'initializing', 'actions': 0}, progress)
+        self.assertNotIn('evaluation', monitor.snapshot()['progress'], 'previous seed progress cannot leak')
+
+    def test_frozen_diagnostics_refresh_independently_of_paused_campaign_report(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'paused', 'cells': []}))
+        monitor = CampaignMonitor(self.path, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['diagnostics']['available'])
+        diagnostic_path = path.parent / 'diagnostics' / 'report.json'
+        diagnostic_path.parent.mkdir()
+        diagnostic = {'status': 'running', 'progress': {'checkpoint': 'reference', 'current_episode': 2},
+                      'results': [{'checkpoint': 'reference', 'private_path': '/must/not/expose',
+                                   'probes': [{'game': 'sc01-v1', 'level': 1, 'predictor': {'delta_error': 0},
+                                               'distinct_pairs': 0, 'distinct_correct': {'delta_error': None}}],
+                                   'policies': {'random': {'summary': {'episodes': 8, 'wins': 0,
+                                                                     'results': ['private trace']}}}}]}
+        diagnostic_path.write_text(json.dumps(diagnostic))
+        snapshot = monitor.snapshot()['report']['diagnostics']
+        self.assertTrue(snapshot['available'])
+        self.assertEqual(snapshot['progress']['current_episode'], 2)
+        self.assertEqual(snapshot['results'][0]['probes'][0]['predictor']['delta_error'], 0)
+        self.assertIsNone(snapshot['results'][0]['probes'][0]['distinct_correct']['delta_error'])
+        self.assertNotIn('private_path', snapshot['results'][0])
+        self.assertNotIn('results', snapshot['results'][0]['policies']['random']['summary'])
+        diagnostic['progress']['current_episode'] = 3
+        diagnostic_path.write_text(json.dumps(diagnostic))
+        self.assertEqual(monitor.snapshot()['report']['diagnostics']['progress']['current_episode'], 3)
+        diagnostic_path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['diagnostics']['available'])
+        self.append({'event': 'campaign_phase', 'variant': 'staged_freeze', 'seed': 0, 'stage': 'behavior_evaluation'},
+                    {'event': 'campaign_paused', 'variant': 'staged_freeze', 'seed': 0, 'stage': 'paused'})
+        snapshot = monitor.snapshot()
+        self.assertEqual(snapshot['phase'], 'campaign_paused')
+        self.assertEqual(snapshot['progress']['stage'], 'paused')
+
+    def test_learning_probe_exposes_bounded_curves_and_refreshes_without_campaign_changes(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'failed', 'cells': []}))
+        monitor = CampaignMonitor(self.path, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['learning_probe']['available'])
+        probe_path = path.parent / 'learning-probe' / 'report.json'
+        probe_path.parent.mkdir()
+        probe = {'status': 'running', 'progress': {'updates': 20},
+                 'coverage': {'episodes': 2, 'per_pair': [{'game': 'sc01-v1', 'level': 1, 'successes': 0}]},
+                 'results': [{'variant': 'visual_2step', 'private_path': '/not/public', 'points': [
+                     {'updates': i, 'fit': {'rollouts': {'1': {'samples': 3, 'readouts': {
+                         'contextual': {'prediction_delta_error': 0}}}}}, 'private_trace': ['secret']}
+                     for i in range(205)]}]}
+        probe_path.write_text(json.dumps(probe))
+        row = monitor.snapshot()['report']['learning_probe']
+        self.assertEqual(row['progress']['updates'], 20)
+        self.assertEqual(len(row['results'][0]['points']), 200)
+        self.assertEqual(row['results'][0]['points'][-1]['fit_1'], 0)
+        self.assertIsNone(row['results'][0]['points'][-1]['development_2'])
+        self.assertNotIn('private_trace', row['results'][0]['points'][-1])
+        self.assertNotIn('private_path', row['results'][0])
+        self.assertEqual(row['coverage']['per_pair'][0]['successes'], 0)
+        probe['progress']['updates'] = 40
+        probe_path.write_text(json.dumps(probe))
+        self.assertEqual(monitor.snapshot()['report']['learning_probe']['progress']['updates'], 40)
+        probe_path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['learning_probe']['available'])
+
+    def test_streaming_probe_reports_selected_weights_strata_and_policies_without_paths(self):
+        path = self.path.with_name('report.json')
+        path.write_text(json.dumps({'status': 'failed', 'cells': []}))
+        probe_path = path.parent / 'streaming-probe' / 'report.json'
+        probe_path.parent.mkdir()
+        strata = {
+            'changed': {'samples': 0, 'readouts': {'contextual': {'prediction_delta_error': None}}},
+            'unchanged': {'samples': 4, 'readouts': {'contextual': {'prediction_wrong': 6}}}}
+        measured = {'per_pair': [{'game': 'fixture', 'level': 1, 'rollouts': {'1': {'strata': strata}}}]}
+        probe_path.write_text(json.dumps({'status': 'running', 'scope': 'streaming_real_training_probe',
+            'results': [{'variant': 'visual_2step', 'best': {'actions': 100, 'selection_error': .2, 'checkpoint': '/private'},
+                         'points': [{'actions': 100, 'development': measured}]}],
+            'selected': {'variant': 'visual_2step', 'actions': 100, 'checkpoint': '/private'},
+            'confirmation': [dict(measured, variant='selected')],
+            'calibration': {'records': 100, 'successes': 2},
+            'policies': {'q': {'complete': True, 'summary': {'wins': 0, 'episodes': 4, 'win_rate': 0}}}}))
+        snapshot = CampaignMonitor(self.path, report_path=path).snapshot()['report']['learning_probe']
+        self.assertEqual(snapshot['scope'], 'streaming_real_training_probe')
+        self.assertEqual(snapshot['results'][0]['best']['actions'], 100)
+        self.assertEqual(snapshot['measurements'][0]['unchanged_pixels'], 1.5)
+        self.assertIsNone(snapshot['measurements'][0]['changed_error'])
+        self.assertEqual(snapshot['policies'][0]['win_rate'], 0)
+        self.assertEqual(snapshot['calibration']['successes'], 2)
+        self.assertNotIn('/private', json.dumps(snapshot))
+
+    def test_campaign_report_refresh_retention_and_read_only_summary(self):
+        path = self.path.with_name('report.json')
+        monitor = CampaignMonitor(self.path, max_points=2, report_path=path)
+        self.assertFalse(monitor.snapshot()['report']['available'])
+
+        report = {'status': 'running', 'selected': None,
+            'config': {'variants': ['world_reference', 'rollout2'], 'seeds': [0, 1, 2], 'actions': 100},
+            'cells': [{'variant': 'world_reference', 'seed': 0,
+                'world': {'delta_error': .2, 'per_pair': [{'private_trace': 'not exposed'}]},
+                'behavior': {'win_rate': .5, 'wins': 2, 'episodes': 4, 'results': ['not exposed']},
+                'training': {'actions': 100, 'per_pair': ['not exposed'], 'calibration': {
+                    'episodes': 6, 'positive_records': 2, 'private_trace': ['not exposed'],
+                    'per_pair': [{'game': 'sc01-v1', 'level': 1, 'successes': 1, 'failures': 5}]}}}]}
+        path.write_text(json.dumps(report))
+        original = path.read_bytes()
+        snapshot = monitor.snapshot()['report']
+        self.assertTrue(snapshot['available'])
+        self.assertEqual(snapshot['cells'][0]['behavior']['win_rate'], .5)
+        self.assertNotIn('results', snapshot['cells'][0]['behavior'])
+        self.assertNotIn('per_pair', snapshot['cells'][0]['world'])
+        self.assertEqual(snapshot['calibration'][0]['positive_records'], 2)
+        self.assertEqual(snapshot['calibration'][0]['per_pair'][0]['successes'], 1)
+        self.assertNotIn('private_trace', snapshot['calibration'][0])
+        self.assertEqual(path.read_bytes(), original)
+        for action in range(5):
+            self.append({'event': 'campaign_progress', 'variant': 'rollout2', 'seed': 1, 'actions': action})
+        self.assertEqual(len(monitor.snapshot()['report']['cells']), 1)
+        # The trainer atomically replaces its report; a cold dashboard can recover it too.
+        report.update(status='complete', selected='world_reference', final={
+            'selected': {'win_rate': .75, 'results': ['not exposed']}, 'reference': {'win_rate': .5}})
+        replacement = path.with_suffix('.tmp')
+        replacement.write_text(json.dumps(report)); replacement.replace(path)
+        snapshot = monitor.snapshot()['report']
+        self.assertEqual(snapshot['status'], 'complete')
+        self.assertEqual(snapshot['final']['selected'], {'win_rate': .75})
+        self.assertEqual(CampaignMonitor(self.path, report_path=path).snapshot()['report'], snapshot)
+        path.write_text('{broken')
+        self.assertFalse(monitor.snapshot()['report']['available'], 'do not silently reuse stale results')
+        path.unlink()
+        self.assertFalse(monitor.snapshot()['report']['available'])
 
     def test_campaign_counters_and_evaluation_are_isolated_by_variant_and_seed(self):
         monitor = CampaignMonitor(self.path, max_points=3)
