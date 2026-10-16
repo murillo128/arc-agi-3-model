@@ -251,6 +251,7 @@ function fixedEvaluations(report) {
   return {points,expected:expected.size,pending};
 }
 let displayedReport;
+let curriculumCells=[];
 function render(report) {
   displayedReport=report;
   const p=report.progress||{}, c=report.config||{};
@@ -272,14 +273,20 @@ function render(report) {
     ? `Última petición manual: ${control.operation==='phase'?'fase':'nivel'} · ${control.game} / ${control.level} · ${control.phase} · ${results[control.result]||control.result} · acción ${fmt(control.actions)}. No acredita una evaluación aprobada.`
     : 'Sin avances manuales registrados.';
   $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. Avance: además éxito ≥ ${pct(limits.success)} en TODOS los niveles desbloqueados del juego. Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
+  const focusedControl=[phaseButton,levelButton].includes(document.activeElement)?document.activeElement:null;
+  curriculumCells=[];
   $('curriculum-rows').replaceChildren(...(curriculum?.levels||[]).map(row=>{
     const m=row.measurements||{}, tr=document.createElement('tr');
     const next=!row.unlocked?'Nivel bloqueado':row.planner?'Planner activo':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${limits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${limits.patience}`;
     const active=!row.unlocked?'Pendiente':c.freeze_representation_after_planner&&row.planner
       ? 'Predictor + planner · representación congelada'
       : row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
-    for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;
+    for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}
+    curriculumCells.push({game:row.game,level:row.level,unlocked:row.unlocked,levelCell:tr.children[0],phaseCell:tr.children[1]});
+    return tr;
   }));
+  renderControls(controlState);
+  if(focusedControl&&!focusedControl.disabled)focusedControl.focus({preventScroll:true});
   $('representation-updates').textContent=fmt(p.representation_updates);
   $('representation-update-scope').textContent=representationFrozen ? 'Encoder y decoder congelados'
     : encoderFrozen
@@ -400,11 +407,23 @@ for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   if(name==='world'&&displayedReport)render(displayedReport);
 });
 let controlState=null, controlBusy=false, controlError='';
+const phaseButton=$('advance-phase'), levelButton=$('advance-level');
+const controlParking=$('curriculum-action-parking');
 function renderControls(state){
   controlState=state||null;
-  $('advance-phase').disabled=controlBusy||!state?.phase;
-  $('advance-level').disabled=controlBusy||!state?.level;
   const target=state?.target;
+  const active=curriculumCells.find(row=>row.game===target?.game&&row.level===target?.level&&row.unlocked);
+  // Level advance unlocks the next curriculum level, even when practicing an older one.
+  const frontier=curriculumCells.filter(row=>row.game===target?.game&&row.unlocked)
+    .reduce((last,row)=>!last||row.level>last.level?row:last,null);
+  for(const [button,cell] of [[phaseButton,active?.phaseCell],[levelButton,frontier?.levelCell]]){
+    const parent=cell||controlParking;
+    if(button.parentNode!==parent)parent.append(button);
+  }
+  phaseButton.disabled=controlBusy||!state?.phase||!active;
+  levelButton.disabled=controlBusy||!state?.level||!frontier;
+  phaseButton.title=active?`Avanzar la fase de ${active.game} / ${active.level}`:'';
+  levelButton.title=frontier?`Abrir el nivel siguiente a ${frontier.game} / ${frontier.level}`:'';
   $('control-target').textContent=target?.game&&target?.level?`Nivel de entrenamiento: ${target.game} / ${target.level}`:'';
   const pending=state?.pending;
   const result=state?.result;
@@ -435,7 +454,7 @@ async function advanceCurriculum(operation){
     controlState=null;
   }finally{controlBusy=false;renderControls(controlState);}
 }
-$('advance-phase').addEventListener('click',()=>advanceCurriculum('phase'));
-$('advance-level').addEventListener('click',()=>advanceCurriculum('level'));
+phaseButton.addEventListener('click',()=>advanceCurriculum('phase'));
+levelButton.addEventListener('click',()=>advanceCurriculum('level'));
 async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 poll();

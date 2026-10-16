@@ -7,8 +7,11 @@ const assets = path.join(__dirname, '../dashboard_web');
 const html = fs.readFileSync(path.join(assets, 'subgoals.html'), 'utf8');
 function element() {
   return {textContent:'', hidden:false, children:[], listeners:{},
-    append(...items) {this.children.push(...items);},
-    replaceChildren(...items) {this.children=items;},
+    append(...items) {for(const item of items){
+      if(item.parentNode)item.parentNode.children=item.parentNode.children.filter(child=>child!==item);
+      item.parentNode=this;this.children.push(item);
+    }},
+    replaceChildren(...items) {for(const child of this.children)child.parentNode=null;this.children=[];this.append(...items);},
     setAttribute(k,v) {this[k]=v;},
     addEventListener(k,v) {this.listeners[k]=v;},
     getContext() {return this.context??=( {pixels:[],clearRect(){this.pixels=[];},
@@ -513,10 +516,13 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('evaluation-rows').children.length,0);
   assert.equal(nodes.get('advance-phase').disabled,true,'read-only dashboards cannot send controls');
   assert.equal(nodes.get('advance-level').disabled,true);
+  report.curriculum.levels.forEach(row=>{row.game='sc01-v1';});
   controls={token:'session-token',target:{game:'sc01-v1',level:1},phase:true,level:true,pending:null,result:null};
   await vm.runInContext('poll()',context);
   assert.equal(text('control-target'),'Nivel de entrenamiento: sc01-v1 / 1');
   assert.equal(nodes.get('advance-phase').disabled,false);
+  assert.equal(nodes.get('advance-phase').parentNode,nodes.get('curriculum-rows').children[0].children[1],'phase belongs to the current training level');
+  assert.equal(nodes.get('advance-level').parentNode,nodes.get('curriculum-rows').children[1].children[0],'level advance belongs to the highest unlocked level, not the current practice level');
   let finishRequest;
   controlReply=new Promise(resolve=>{finishRequest=resolve;});
   const click=nodes.get('advance-phase').listeners.click();
@@ -535,6 +541,10 @@ const text=id=>nodes.get(id).textContent;
   controls={...controls,phase:true,level:true,pending:null,result:{status:'applied',event:{result:'advanced',level:1,phase:'predictor'}}};
   await vm.runInContext('poll()',context);
   assert.match(text('control-status'),/Avance aplicado · nivel 1 · fase predictor/);
+  controls={...controls,target:{game:'sc01-v1',level:2}};
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('advance-phase').parentNode,nodes.get('curriculum-rows').children[1].children[1],'polling moves the same control to the new target');
+  assert.equal(nodes.get('advance-level').parentNode,nodes.get('curriculum-rows').children[1].children[0]);
   controlReply={ok:false,json:async()=>({error:'Entrenador detenido'})};
   await nodes.get('advance-level').listeners.click();
   assert.deepEqual(JSON.parse(controlRequests[1].options.body),{operation:'level'});
@@ -549,6 +559,8 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('advance-phase').disabled,true);
   assert.equal(nodes.get('advance-level').disabled,true);
   offline=true;await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('advance-phase').parentNode,nodes.get('curriculum-action-parking'),'unavailable controls leave the table');
+  assert.equal(nodes.get('advance-level').disabled,true);
   assert.match(text('connection'),/Sin conexión.*offline/);
   assert.equal(text('gpu-status'),'GPU · datos no disponibles','connection failure clears stale GPU readings');
   console.log('Subgoal dashboard contracts passed');

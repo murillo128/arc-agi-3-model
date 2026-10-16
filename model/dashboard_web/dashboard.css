@@ -135,8 +135,11 @@ a { color: #77dabb; font-size: 13px; }
 .probe-legend-2 { color: #b4a5ff; }
 .probe-legend-3 { color: #7cceff; }
 
-.curriculum-controls { margin: 20px 0; }
-.curriculum-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
-.curriculum-buttons button { padding: 10px 16px; border: 1px solid #77dabb; border-radius: 7px; background: #23483d; color: #e7efec; font: inherit; cursor: pointer; }
-.curriculum-buttons button:disabled { opacity: .45; cursor: not-allowed; }
-.curriculum-buttons button:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
+.curriculum-controls { margin: 16px 0; }
+#curriculum-rows td { vertical-align: top; }
+.curriculum-action { display: flex; align-items: center; gap: 10px; width: fit-content; min-height: 32px; margin-top: 9px; padding: 5px 12px; border: 1px solid #3b6255; border-radius: 999px; background: #1c332b; color: #9ce4cd; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.curriculum-action span { font-size: 16px; line-height: 1; }
+.curriculum-action:hover:not(:disabled) { background: #284c3e; border-color: #77dabb; color: #e7efec; }
+.curriculum-action:disabled { opacity: .4; cursor: not-allowed; }
+.curriculum-action:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
+@media (pointer: coarse) { .curriculum-action { min-height: 44px; padding-inline: 14px; } }
