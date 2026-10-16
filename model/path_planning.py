@@ -23,12 +23,18 @@ class PathConfig:
     beam: int = 4
     clicks: int = 16
     success_margin: float = .02
+    leaf_only: bool = False
+    noop_cooldown: int = 0
 
     def __post_init__(self):
         if any(type(n) is not int or not 1 <= n <= 64 for n in (self.horizon, self.beam, self.clicks)):
             raise ValueError('Path search budgets must be integers in 1..64')
         if not math.isfinite(self.success_margin) or not 0 <= self.success_margin <= 1:
             raise ValueError('Success margin must be finite and in 0..1')
+        if type(self.leaf_only) is not bool:
+            raise ValueError('leaf_only must be boolean')
+        if type(self.noop_cooldown) is not int or not 0 <= self.noop_cooldown <= 64:
+            raise ValueError('No-op cooldown must be an integer in 0..64')
 
 
 class PathValue(nn.Module):
@@ -122,7 +128,21 @@ class PathPlanner:
 
     def reset(self):
         self.goal = None
+        self.noop_history = {}
+        self.observed_steps = 0
         self.clear_paths()
+
+    def after_real_action(self, action, before, after):
+        self.observed_steps += 1
+        self.noop_history = {k: v for k, v in self.noop_history.items() if v > self.observed_steps}
+        if not self.config.noop_cooldown or self.goal is None or action.id == 0 or after.terminal or after.starts_new_level(before):
+            return
+        mask = self.goal['pixel_mask']
+        if before.final is None or after.final is None or before.final.shape != mask.shape or after.final.shape != mask.shape:
+            return
+        if np.array_equal(before.final[mask], after.final[mask]):
+            key = (before.final[mask].tobytes(), action.id, tuple(sorted(action.data.items())))
+            self.noop_history[key] = self.observed_steps + self.config.noop_cooldown
 
     def clear_paths(self):
         self.last_plan, self.last_states, self.last_endpoint = [], [], None
@@ -143,6 +163,7 @@ class PathPlanner:
         tensor = F.avg_pool2d(tensor, patch, patch, ceil_mode=True).flatten(2).transpose(1, 2)
         self.goal = dict(z=z.detach(), mask=tensor, frame=np.array(frame, copy=True),
                          pixel_mask=np.array(mask, dtype=bool, copy=True))
+        self.noop_history.clear()
         self.clear_paths()
 
     @torch.no_grad()
@@ -156,6 +177,15 @@ class PathPlanner:
         self.engine.model.eval()
         self.evaluator.eval()
         choices = candidates(observation, rng, self.config.clicks)
+        root_allowed = None
+        if self.config.noop_cooldown:
+            key = observation.final[self.goal['pixel_mask']].tobytes()
+            root_allowed = [i for i, a in enumerate(choices) if
+                            (key, a.id, tuple(sorted(a.data.items()))) not in self.noop_history]
+            # The cache is fallible in partially observed games. Never exhaust
+            # legal actions; its bounded lifetime also permits retries.
+            if not root_allowed or len(root_allowed) == len(choices):
+                root_allowed = None
         actions = self.engine.actions(choices)
         count = len(choices)
         z, h, paths = state.z[None], state.h, [[]]
@@ -179,7 +209,12 @@ class PathPlanner:
                     raise ValueError('Nonfinite latent path/value')
                 probabilities = logits.float().sigmoid().tolist()
                 scores = (depth + 1 + log_costs.float().clamp(max=math.log1p(1024)).expm1()).tolist()
-                keep = rank_routes(probabilities, scores, rng, self.config.success_margin)[:self.config.beam]
+                if depth == 0 and root_allowed is not None:
+                    keep = [root_allowed[i] for i in rank_routes(
+                        [probabilities[i] for i in root_allowed], [scores[i] for i in root_allowed],
+                        rng, self.config.success_margin)[:self.config.beam]]
+                else:
+                    keep = rank_routes(probabilities, scores, rng, self.config.success_margin)[:self.config.beam]
                 selected_paths, selected_history, estimates = [], [], []
                 for index in keep:
                     path = paths[index // count] + [choices[index % count]]
@@ -189,7 +224,8 @@ class PathPlanner:
                     selected_paths.append(path)
                     selected_history.append(states)
                     estimates.append(estimate)
-                    routes.append((path, states, estimate))
+                    if not self.config.leaf_only or depth + 1 == horizon:
+                        routes.append((path, states, estimate))
                 z, h, paths, history = z[keep], h[keep], selected_paths, selected_history
         winner = rank_routes([r[2]['success_probability'] for r in routes],
                              [r[2]['successful_actions'] for r in routes], rng, self.config.success_margin)[0]
@@ -210,6 +246,7 @@ class PathPlanner:
             diagnostics['path'] = {**self.last_estimate, 'success_margin': self.config.success_margin,
                                    'steps': [a.id for a in best_path],
                                    'horizon': horizon, 'source': 'latent_search'}
+            diagnostics['path']['noop_excluded'] = count - len(root_allowed) if root_allowed is not None else 0
         return best_path[0]
 
 

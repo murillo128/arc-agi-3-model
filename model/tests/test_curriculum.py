@@ -426,7 +426,7 @@ class CurriculumTests(unittest.TestCase):
             self.assertFalse(report['progress']['encoder_frozen'])
 
     def test_resume_selects_predictive_loss_preserving_weights_counters_and_admissions(self):
-        for mode in ('union', 'focal', 'recall_focal'):
+        for mode in ('union', 'focal', 'recall_focal', 'recall_focal_capped'):
             with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
                 root = Path(temp)
                 agent_checkpoint.save(root / 'source.pt', path_agent())
@@ -478,6 +478,50 @@ class CurriculumTests(unittest.TestCase):
                 self.assertNotIn('prediction_delta_loss', report['resumed_from'])
                 self.assertEqual(report['progress']['representation_updates'], 8)
                 self.assertEqual(report['progress']['predictor_updates'], 4)
+
+    def test_search_budget_resume_preserves_weights_and_three_step_training(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root=Path(temp)
+            agent_checkpoint.save(root/'source.pt',path_agent())
+            args=['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                  '--device','cpu','--steps','2','--evaluate-every','4',
+                  '--checkpoint-every','2','--evaluation-episodes','1']
+            main([*args,'--actions','4'])
+            filename=root/'run/latest.pt'
+            saved=checkpoint.load(filename)
+            saved['training_progress']['curriculum']['levels'][0].update(
+                predictor=True,representation_passes=3,prediction_passes=2,promotion_passes=1)
+            checkpoint.write(filename,saved)
+            initial=agent_checkpoint.load(filename)
+            expected=(fingerprint(initial.engine.model),fingerprint(initial.path_evaluator))
+            save=agent_checkpoint.save
+            captured=[]
+            def capture(path,agent,**kwargs):
+                progress=kwargs['training_progress']
+                if progress['actions']==4:
+                    self.assertEqual((fingerprint(agent.engine.model),fingerprint(agent.path_evaluator)),expected)
+                    self.assertEqual(agent.config.path.horizon,6)
+                    self.assertEqual(agent.config.path.noop_cooldown,8)
+                    captured.append(progress)
+                return save(path,agent,**kwargs)
+            with patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture), \
+                 patch('model.subgoal_training.OnlinePredictor',wraps=OnlinePredictor) as predictor, \
+                 patch('model.subgoal_training.evaluate_recording',wraps=evaluate_recording) as quality:
+                main([*args,'--actions','6','--resume','--path-horizon','6','--path-noop-cooldown','8'])
+            self.assertEqual(len(captured),1)
+            self.assertTrue(captured[0]['curriculum']['levels'][0]['predictor'])
+            self.assertEqual(captured[0]['curriculum']['levels'][0]['prediction_passes'],0)
+            self.assertEqual(predictor.call_args.args[-1],3)
+            self.assertTrue(quality.call_args_list)
+            self.assertTrue(all(call.args[-1]==3 for call in quality.call_args_list))
+            main([*args,'--actions','8','--resume'])
+            resumed=agent_checkpoint.load(filename)
+            self.assertEqual(resumed.config.path.horizon,6)
+            self.assertEqual(resumed.config.path.noop_cooldown,8)
+            report=json.loads((root/'run/report.json').read_text())
+            self.assertEqual(report['config']['horizon'],3)
+            self.assertEqual(report['config']['path_search']['horizon'],6)
+            self.assertNotIn('path_search',report['resumed_from'])
 
     def test_sigreg_stops_globally_on_predictor_admission_and_stays_off_on_resume(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):

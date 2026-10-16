@@ -120,6 +120,57 @@ def path_agent():
 
 
 class PathTests(unittest.TestCase):
+    def test_observed_noop_avoidance_expires_and_never_exhausts_actions(self):
+        class Value(nn.Module):
+            def forward(self,z,h,goal,mask,rows,columns,remaining_budget):
+                return torch.zeros(len(z)), torch.where(z.flatten()==1,0.,5.)
+        engine=SimpleNamespace(device=torch.device('cpu'),model=nn.Identity(),autocast=nullcontext,
+            actions=lambda actions:torch.tensor([[a.id] for a in actions]),
+            predict=lambda z,h,a,height,width:(a[:,:1,None].float(),h,z))
+        engine.model.config=SimpleNamespace(patch=1)
+        planner=PathPlanner(engine,Value(),PathConfig(horizon=1,noop_cooldown=2))
+        planner.goal=dict(z=torch.zeros(1,1),mask=torch.ones(1,1,1),frame=np.zeros((1,2)),
+                          pixel_mask=np.array([[True,False]]))
+        state=State(torch.zeros(1,1),torch.zeros(1,1),(1,2))
+        before=replace(obs(1),frames=np.array([[[1,0]]],dtype=np.uint8),available_actions=(1,2))
+        after=replace(before,frames=np.array([[[1,7]]],dtype=np.uint8))
+        choose=lambda observation=after:planner.choose(state,observation,random.Random(0),remaining_budget=8)
+        self.assertEqual(choose(),Action(1))
+        planner.after_real_action(Action(1),before,after)  # Only excluded pixels change.
+        self.assertEqual(choose(),Action(2))
+        self.assertEqual(choose(replace(after,available_actions=(1,))),Action(1))
+        # Real changes must not create a ban. Once two confirmed actions pass,
+        # the old no-effect observation can no longer suppress a legal retry.
+        changed=replace(after,frames=np.array([[[2,7]]],dtype=np.uint8))
+        planner.after_real_action(Action(2),after,changed)
+        self.assertEqual(choose(),Action(2))
+        planner.after_real_action(Action(2),changed,after)
+        self.assertEqual(choose(),Action(1))
+        planner.after_real_action(Action(1),before,after)
+        planner.reset()
+        self.assertEqual(planner.noop_history,{})
+
+    def test_noop_carry_and_goal_change_round_trip(self):
+        agent=path_agent()
+        agent.config=replace(agent.config,path=replace(agent.config.path,noop_cooldown=8))
+        agent.planner.config=agent.config.path
+        observation=obs(1)
+        agent.observe(observation)
+        mask=np.ones_like(observation.final,dtype=bool)
+        agent.set_goal(observation.final,mask)
+        agent.observe(observation,Action(1))
+        self.assertEqual(len(agent.planner.noop_history),1)
+        with tempfile.TemporaryDirectory() as directory:
+            filename=Path(directory)/'live.pt'
+            agent_checkpoint.save(filename,agent,include_runtime=True)
+            restored=agent_checkpoint.load(filename,resume_runtime=True)
+            self.assertEqual(restored.planner.noop_history,agent.planner.noop_history)
+            self.assertEqual(restored.planner.observed_steps,1)
+            self.assertEqual(restored.config.path.noop_cooldown,8)
+            self.assertEqual(restored.act(),agent.act())
+            restored.set_goal(observation.final,mask)
+            self.assertEqual(restored.planner.noop_history,{})
+
     def test_tuning_metrics_keep_failures_and_common_winners(self):
         from model.path_tuning import summarize
         baseline = [dict(seed=s, success=won, actions=n) for s,won,n in
@@ -281,6 +332,41 @@ class PathTests(unittest.TestCase):
         ranks = [rank_routes([.5] * 4, [3, 3 + 1e-8, 3, 3], random.Random(seed), .02) for seed in range(32)]
         self.assertEqual({r[0] for r in ranks}, {0, 1, 2, 3})
         self.assertEqual(ranks[0], rank_routes([.5] * 4, [3, 3 + 1e-8, 3, 3], random.Random(0), .02))
+
+    def test_longer_search_finds_four_step_route_without_confusing_success_with_terminal(self):
+        # A1 is a cheap trap. A2 starts a four-step corridor whose value is
+        # visible only at its end. Future-success logits never declare WIN.
+        calls = []
+        class Value(nn.Module):
+            def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
+                calls.append(remaining_budget.tolist())
+                terminal = z.flatten() == 4
+                probability = torch.where(terminal, .99, .5)
+                cost = torch.where((z.flatten() == 10) | terminal, 0., 10.)
+                return probability.logit(), cost.log1p()
+        def predict(z, h, actions, height, width):
+            following = torch.where(z == 0, torch.where(actions[:, :1, None] == 1, 10., 1.),
+                                    torch.where(z < 4, z + 1, z))
+            return following, h + 1, following - z
+        engine = SimpleNamespace(device=torch.device('cpu'), model=nn.Identity(),
+            actions=lambda actions: torch.tensor([[a.id] for a in actions]), predict=predict,
+            autocast=nullcontext)
+        engine.model.config = SimpleNamespace(patch=1)
+        state = State(torch.zeros(1,1), torch.zeros(1,1), (1,1))
+        observation = replace(obs(1), available_actions=(1,2))
+        for horizon, budget, leaf_only, expected, depth in (
+                (3, 6, False, 1, 1), (6, 6, False, 2, 4),
+                (6, 6, True, 2, 6), (6, 3, False, 1, 1)):
+            with self.subTest(horizon=horizon, budget=budget, leaf_only=leaf_only):
+                planner = PathPlanner(engine, Value(), PathConfig(horizon=horizon, beam=64, leaf_only=leaf_only))
+                planner.goal = dict(z=torch.tensor([[4.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)))
+                calls.clear()
+                action = planner.choose(state, observation, random.Random(0), remaining_budget=budget)
+                self.assertEqual(action.id, expected)
+                self.assertEqual(len(planner.last_plan), depth)
+                self.assertEqual([set(c) for c in calls], [{budget-i-1} for i in range(min(horizon,budget))])
+                self.assertEqual(state.z.item(), 0)
+                self.assertEqual(state.h.item(), 0)
 
     def test_success_priority_in_beam_and_across_depths_with_budget(self):
         calls = []

@@ -96,7 +96,7 @@ class TrainConfig:
             if k in {'decoder_readout', 'backward_mode', 'prediction_delta_loss'}:
                 allowed = {'decoder_readout': {'contextual', 'local'},
                            'backward_mode': {'fragmented', 'ordinary'},
-                           'prediction_delta_loss': {'balanced', 'union', 'focal', 'recall_focal'}}[k]
+                           'prediction_delta_loss': {'balanced', 'union', 'focal', 'recall_focal', 'recall_focal_capped'}}[k]
                 if v not in allowed:
                     raise ValueError(f'Invalid {k}: {v}')
                 continue

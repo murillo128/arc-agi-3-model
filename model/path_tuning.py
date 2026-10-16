@@ -51,6 +51,8 @@ def main(argv=None):
     parser.add_argument('--epsilons', nargs='+', type=float, default=[0.],
                         help='Random exploration rates; zero is the normal frozen planner evaluation')
     parser.add_argument('--episodes', type=int, default=16)
+    parser.add_argument('--leaf-only', action='store_true', help='Evaluate only full-horizon routes')
+    parser.add_argument('--noop-cooldowns', nargs='+', type=int, default=[0])
     parser.add_argument('--dev-offset', type=int, default=710000)
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     args = parser.parse_args(argv)
@@ -58,7 +60,8 @@ def main(argv=None):
         parser.error('Invalid synthetic levels')
     if (len(set(args.levels)) != len(args.levels) or len(set(args.margins)) != len(args.margins)
             or (args.horizons is not None and len(set(args.horizons)) != len(args.horizons))
-            or len(set(args.epsilons)) != len(args.epsilons)):
+            or len(set(args.epsilons)) != len(args.epsilons)
+            or len(set(args.noop_cooldowns)) != len(args.noop_cooldowns)):
         parser.error('Duplicate comparison settings')
     if any(not math.isfinite(e) or not 0 <= e <= 1 for e in args.epsilons):
         parser.error('Exploration rates must be finite and in 0..1')
@@ -68,6 +71,8 @@ def main(argv=None):
             PathConfig(success_margin=margin)
         for horizon in args.horizons or []:
             PathConfig(horizon=horizon)
+        for cooldown in args.noop_cooldowns:
+            PathConfig(noop_cooldown=cooldown)
     except ValueError as error:
         parser.error(str(error))
     # Pin the input before invoking this command; never follow a live latest.pt.
@@ -88,8 +93,9 @@ def main(argv=None):
     began = time.monotonic()
     for level in args.levels:
         baseline = None
-        for horizon, margin, epsilon in product(horizons, args.margins, args.epsilons):
-            config = replace(original, success_margin=margin, horizon=horizon)
+        for horizon, margin, epsilon, cooldown in product(horizons, args.margins, args.epsilons, args.noop_cooldowns):
+            config = replace(original, success_margin=margin, horizon=horizon, leaf_only=args.leaf_only,
+                             noop_cooldown=cooldown)
             agent.config = replace(agent.config, path=config)
             agent.planner.config = config
             results = []
@@ -101,7 +107,8 @@ def main(argv=None):
                 raise RuntimeError('Frozen evaluation changed weights')
             if baseline is None:
                 baseline = results
-            row = dict(level=level, horizon=horizon, margin=margin, epsilon=epsilon,
+            row = dict(level=level, horizon=horizon, margin=margin, epsilon=epsilon, leaf_only=args.leaf_only,
+                       noop_cooldown=cooldown,
                        **summarize(results, baseline),
                        results=results, elapsed_seconds=time.monotonic()-began)
             report['evaluations'].append(row)

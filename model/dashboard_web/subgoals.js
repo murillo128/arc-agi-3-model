@@ -638,20 +638,25 @@ function render(report) {
     ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,
       points:t.map(r=>[r.x,r.rates[key],'px/acción · media móvil de hasta 512 acciones'])}))
   ],{unit:'px/acción'});
-  plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.loss])},
-    {...series('Actualización individual','predictor_loss'),muted:true}]);
+  const objectiveStart=report.objective_changes?.at(-1)?.actions;
+  const lossRows=finite(objectiveStart)?rows.filter(r=>r.actions>objectiveStart):rows;
+  const lossTrend=trend(lossRows,blocks(lossRows));
+  plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:lossTrend.map(r=>[r.x,r.loss])},
+    {name:'Actualización individual',points:lossRows.map(r=>[r.actions,r.predictor_loss]),muted:true}]);
   plot('representation-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.representationLoss])},
     {...series('Actualización individual','representation_loss'),muted:true}]);
   lossBreakdown('representation-loss-terms',rows,'representation_terms');
-  lossBreakdown('loss-terms',rows,'predictor_terms');
+  lossBreakdown('loss-terms',lossRows,'predictor_terms');
   const lossTerms=predictorLossKinds.map(([name,key],colorIndex)=>({name,colorIndex,
-    points:rows.map(r=>[r.actions,r.predictor_terms?.[key]])}));
+    points:lossRows.map(r=>[r.actions,r.predictor_terms?.[key]])}));
   plot('predictor-components',[
     ...lossTerms.map(s=>({...s,faint:true,legend:false})),
     ...lossTerms.map(s=>({...s,points:movingAverage(s.points)}))
   ],{digits:4,minimumRange:.001,empty:'Todavía no hay componentes de pérdida registrados'});
   const lossMode=report.config?.prediction_delta_loss;
-  $('predictor-objective').textContent=lossMode==='recall_focal'
+  $('predictor-objective').textContent=lossMode==='recall_focal_capped'
+    ? 'NLL activa: 2× el error de color de los cambios reales + penalización focal de píxeles estáticos (γ=2, T=1). Dividida entre max(32, cambios reales) para limitar el peso de los pasos con pocos cambios. Sin argmax ni solapamiento; aplicada también al rollout de 3 pasos.'
+    : lossMode==='recall_focal'
     ? 'NLL activa: 2× el error de color de los cambios reales + penalización focal de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales. Se penalizan omisiones, colores erróneos y cambios inventados; sin argmax ni solapamiento.'
     : lossMode==='focal'
     ? 'NLL activa: cambios reales y penalización focal suave de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales, sin máscara de argmax.'
@@ -674,8 +679,11 @@ function render(report) {
     : 'Criterio histórico: duración estimada más penalización por fracaso.';
   if(finite(report.config?.path_exploration_warmup))$('path-objective').textContent+=
     ` Exploración de entrenamiento: del 100 % al 20 % durante ${fmt(report.config.path_exploration_warmup)} acciones del planner por nivel. La evaluación del planner no añade exploración.`;
+  const search=report.config?.path_search;
+  if(search)$('path-objective').textContent+=` Búsqueda: hasta ${fmt(search.horizon)} pasos; predictor y evaluación de calidad: 3 pasos.`+
+    (search.noop_cooldown>0?` Se evita repetir durante ${fmt(search.noop_cooldown)} acciones una acción sin efecto observado desde el mismo tablero relevante al objetivo, si hay alternativas. No cambia las acciones legales.`:'');
   const change=report.objective_changes?.at(-1);
-  const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa.`:'';
+  const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa. Las gráficas del predictor muestran solo el objetivo actual; el historial se conserva en el reporte.`:'';
   const pathReplay=p.path_replay;
   const replayNote=pathReplay?` Entrenamiento mezclado: ${fmt(pathReplay.segments)} intentos reales guardados (${fmt(pathReplay.successes)} éxitos); hasta ${fmt(pathReplay.batch_segments)} por actualización.`:'';
   const augmentationNote=pathReplay?.hindsight?' También aprende de objetivos alcanzados realmente dentro de esas partidas, sin convertir los fracasos originales en victorias.':'';

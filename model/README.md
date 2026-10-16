@@ -41,15 +41,17 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
    LR 3e-5; supervisión latente y visual a uno y tres pasos cuando hay historia.
    En el rollout, tanto z como h intermedios son predichos. Los targets son reales.
-   La receta activa usa `prediction_delta_loss: "recall_focal"`, con temperatura 1.
+   La receta activa usa `prediction_delta_loss: "recall_focal_capped"`, con temperatura 1.
    Si `q` es la probabilidad del color real y `C` los píxeles realmente cambiados,
    suma `2*(-log(q))` en `C` y `lambda*(1-q)^2*(-log(q))` en los estáticos; divide
-   por `max(1, |C|)` en cada imagen y promedia las imágenes del lote.
+   por `max(32, |C|)` en cada imagen y promedia las imágenes del lote.
    `false_change_weight` fija lambda (1 en esta receta). La máscara y el divisor
    dependen de la realidad, sin argmax ni cortes de gradiente en los pesos suaves.
    Los estáticos bien conservados aportan poco, no cero; muchos estáticos dudosos
-   pueden acumular una penalización grande. Una imagen sin cambios conserva
-   supervisión con divisor 1. El objetivo del predictor es **MSE latente + NLL visual**,
+   pueden acumular una penalización grande. El suelo de 32 limita la amplificación
+   en deltas pequeños; una imagen sin cambios conserva supervisión con divisor 32.
+   No normaliza por el total de píxeles ni limita el valor máximo de la pérdida.
+   El objetivo del predictor es **MSE latente + NLL visual**,
    tanto a un paso como en el extremo del rollout de tres pasos. No incluye
    overlap suave; `delta_overlap_weight` sigue aplicándose a la reconstrucción.
 3. PathValue se incorpora cuando además los errores de predicción a uno y tres
@@ -167,6 +169,9 @@ El primer margen es la referencia. `--horizons 3 2` compara también profundidad
 búsqueda sin modificar los horizontes de entrenamiento; la primera combinación es
 la referencia de cada nivel. `--epsilons .2 .1` compara exploración aleatoria con
 los mismos pesos; por defecto es cero como en la evaluación fija del planner.
+`--noop-cooldowns 0 8` compara la exclusión temporal de acciones observadas sin
+efecto. `--leaf-only` es una variante experimental que puntúa sólo rutas de toda
+la profundidad; está desactivada en la campaña. Ninguna opción cambia pesos.
 El informe conserva semillas, hash del checkpoint,
 victorias ganadas/perdidas, acciones totales, acciones de partidas exitosas y acciones
 en las mismas partidas ganadas por ambos candidatos. Reducir sólo la media de los
@@ -189,6 +194,22 @@ de 2.048 acciones, manteniendo el mínimo .20: los niveles que ya completaron el
 arranque permanecen igual. Es evidencia con pesos fijos, no una garantía de la
 evolución futura del aprendizaje. Los resultados completos por semilla están en
 [`path_tuning_evidence.json`](path_tuning_evidence.json).
+
+En el checkpoint 140330, ampliar de tres a seis pasos no cambió las victorias ni
+las acciones en 16 partidas por nivel y multiplicó por aproximadamente 2,2 el coste de decisión.
+Puntuar sólo las hojas empeoró los resultados. Se conserva profundidad 3 y se
+adopta `--path-noop-cooldown 8`: dos muestras separadas de 32 y 64 partidas pasan,
+en total, de 61/96 a 64/96 victorias en nivel 2 y conservan 71/96 en nivel 1.
+La segunda muestra intercambia una victoria por una derrota en nivel 1: no hay
+garantía por partida ni significación estadística demostrada. Los bloqueos de
+2/4 acciones no mejoran el resultado global de la muestra de 64. Se rechaza usar
+la probabilidad de éxito futuro como señal de WIN actual: tampoco se separan de
+forma fiable los estados predichos exitosos mediante distancia al objetivo.
+No se habilita poda por éxito imaginado ni reutilización no verificada de rutas.
+La evidencia y semillas están en [`path_budget_evidence.json`](path_budget_evidence.json).
+Ese archivo incluye el nuevo divisor del loss sobre las 211 transiciones reales
+ya analizadas: media visual 5,109 → 2,299 y máximo 114,329 → 17,864.
+Es un cambio de escala, no una mejora demostrada de precisión.
 
 Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como
 métrica histórica, no como criterio de selección ni target de PathValue.
@@ -247,13 +268,24 @@ permite cambiar únicamente ese umbral con `--resume`.
 `--update-latent-drift-threshold --latent-drift 0.15` permite cambiar el límite de
 deriva. Ambas opciones conservan pesos, contadores y permisos abiertos, pero
 reinician las rachas de evaluaciones si cambia el umbral para exigir evidencia nueva.
-`--prediction-delta-loss recall_focal` permite seleccionar explícitamente la nueva NLL,
+`--prediction-delta-loss recall_focal_capped` permite seleccionar explícitamente la nueva NLL,
 también con `--resume`. Sin esta opción se hereda la pérdida del checkpoint o del
 JSON de inicialización; los checkpoints anteriores siguen usando `balanced`.
-Los modos anteriores `balanced`, `union` y `focal` siguen disponibles sin cambiar sus fórmulas.
+Los modos anteriores `balanced`, `union`, `focal` y `recall_focal` siguen disponibles sin cambiar sus fórmulas.
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
+`--path-horizon N` cambia sólo la profundidad de búsqueda; el entrenamiento y la
+evaluación del predictor conservan tres pasos. `--path-noop-cooldown N` activa una
+exclusión temporal en la raíz: tras una respuesta real sin cambios dentro de la
+máscara del objetivo, evita la misma acción/datos desde ese mismo tablero durante
+N acciones reales, siempre que queden alternativas. No altera las acciones legales
+ni poda estados imaginados. Caduca, se borra al cambiar de objetivo/episodio y
+permite todas las acciones si no quedan alternativas. Es una heurística falible
+con observación parcial: una acción aparentemente ineficaz podría tener efectos
+ocultos o retardados. Cero conserva el comportamiento anterior. Ambas opciones
+se heredan del checkpoint al reanudar; un cambio explícito conserva pesos y
+permisos, reinicia rachas y guarda la configuración antes de actuar.
 Para convertir un PathValue antiguo se exige `--migrate-path-value`: conserva sus
 features compartidas y todos los pesos del mundo, pero reinicia las dos salidas
 (éxito inicial 0,5; duración inicial 16 acciones) y añade la entrada de presupuesto.
@@ -1327,9 +1359,13 @@ y el tamaño de la red; desactivar la compilación no es la solución de entrena
    Una unión vacía aporta cero diferenciable. No usa top-K, frecuencia de color
    ni `false_change_weight`: todos los píxeles de la unión pesan igual.
    Este modo no cambia la NLL equilibrada de las ramas de reconstrucción.
-   La receta incremental actual selecciona `"recall_focal"`: suma el doble de la NLL de cambios
+   La receta incremental actual selecciona `"recall_focal_capped"`: suma el doble de la NLL de cambios
    reales y la NLL estática ponderada por `false_change_weight*(1-q)^2`, dividida
-   por `max(1, número de cambios reales)`, con `q=softmax(logits)[y]` y T=1.
+   por `max(32, número de cambios reales)`, con `q=softmax(logits)[y]` y T=1.
+   El modo histórico `recall_focal` conserva el divisor `max(1, cambios reales)`.
+   El suelo 32 atenúa por igual todos los términos de una imagen con pocos cambios;
+   no altera su preferencia relativa entre omisiones, colores erróneos e invenciones.
+   El loss latente mantiene su escala, por lo que aumenta su peso relativo en esas imágenes.
    No selecciona píxeles mediante argmax ni diferencia el divisor; sí diferencia
    los pesos suaves. Su contribución estática disminuye de forma continua al
    acertar con más confianza. No es estrictamente invariante a añadir fondo con

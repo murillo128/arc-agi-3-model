@@ -65,6 +65,8 @@ def _runtime(agent):
                 'z': None if agent.state.z is None else agent.state.z.detach().cpu(),
                 'h': agent.state.h.detach().cpu(), 'geometry': agent.state.geometry},
             'planner': {
+                'observed_steps': getattr(planner, 'observed_steps', 0),
+                'noop_history': list(getattr(planner, 'noop_history', {}).items()),
                 'visual_goal': None if visual_goal is None else {
                     'frame': torch.from_numpy(visual_goal['frame'].copy()),
                     'mask': torch.from_numpy(visual_goal['pixel_mask'].copy())},
@@ -161,6 +163,8 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
             visual = saved.get('visual_goal')
             if visual is not None:
                 planner.set_goal(visual['frame'].numpy(), visual['mask'].numpy())
+            planner.observed_steps = saved.get('observed_steps', 0)
+            planner.noop_history = dict(saved.get('noop_history', []))
         elif hasattr(planner, 'goal'):
             goal = saved['goal']
             planner.goal = None if goal is None else Goal(**(goal | {'z': goal['z'].to(device)}))

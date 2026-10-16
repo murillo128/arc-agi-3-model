@@ -39,6 +39,7 @@ from .latent_diagnostics import LatentProbe, summarize_latents
 from .fixed_evaluation import random_cohort
 
 EVALUATION_PROTOCOL = 'current_level_cached_v1'
+PREDICTOR_HORIZON = 3
 
 def error_counts(before, actual, predicted):
     wrong, union, changed = delta_counts(before, actual, predicted)
@@ -334,8 +335,10 @@ def main(argv=None):
     parser.add_argument('--encoder-learning-rate-after-predictor', type=float,
                         help='Lower encoder LR after first predictor admission; decoder unchanged. Resume inherits checkpoint.')
     parser.add_argument('--migrate-path-value', action='store_true', help='Upgrade old path evaluators to normalized success-first outputs; preserve world weights')
-    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal', 'recall_focal'),
+    parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal', 'recall_focal', 'recall_focal_capped'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
+    parser.add_argument('--path-horizon', type=int, help='Inference lookahead; predictor training/quality stay at three steps')
+    parser.add_argument('--path-noop-cooldown', type=int, help='Temporarily avoid observed no-effect root actions; 0 disables')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
                         help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')
     parser.add_argument('--freeze-representation-after-planner', action=argparse.BooleanOptionalAction, default=None,
@@ -386,7 +389,7 @@ def main(argv=None):
                      if k not in ('update_representation_threshold', 'update_latent_drift_threshold',
                                   'update_evaluation_interval')}
     report_config['curriculum'] = asdict(gates)
-    report_config['horizon'] = PathConfig().horizon
+    report_config['horizon'] = PREDICTOR_HORIZON
     report_config['initialization'] = 'random' if args.init_config else 'checkpoint'
     report_config['evaluation_protocol'] = EVALUATION_PROTOCOL
     report = dict(kind='synthetic_subgoals', status='running', config=report_config,
@@ -414,6 +417,7 @@ def main(argv=None):
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder', 'migrate_path_value',
                            'predictor_replay_episodes', 'predictor_batch_size', 'path_hindsight', 'path_predicted_inputs',
                            'path_exploration_warmup',
+                           'path_horizon', 'path_noop_cooldown', 'path_search',
                            'evaluation_protocol',
                            'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
@@ -559,11 +563,13 @@ def main(argv=None):
 
     try:
         publish(force=True)
+        previous_path = PathConfig()
         if args.resume or args.source:
             source = agent_checkpoint.load(args.output / 'latest.pt' if args.resume else args.source, device=args.device,
                                            migrate_path_value=args.migrate_path_value)
             engine, heads = source.engine, source.heads
             evaluator = source.path_evaluator if args.resume else None
+            previous_path = source.config.path if args.resume else PathConfig()
             del source
         else:
             initial = json.loads(args.init_config.read_text())
@@ -577,7 +583,17 @@ def main(argv=None):
         if args.resume and migrated_path:
             report['resumed_from']['path_objective'] = dict(old_version=evaluator.previous_objective_version,
                 new_version=path_version, reset_outputs=True)
-        report['config'].update(path_objective_version=path_version, path_success_margin=PathConfig().success_margin)
+        try:
+            selected_path = replace(previous_path,
+                horizon=previous_path.horizon if args.path_horizon is None else args.path_horizon,
+                noop_cooldown=previous_path.noop_cooldown if args.path_noop_cooldown is None else args.path_noop_cooldown)
+        except ValueError as error:
+            parser.error(str(error))
+        changed_path = selected_path != previous_path
+        report['config'].update(path_objective_version=path_version, path_success_margin=selected_path.success_margin,
+                               path_search=asdict(selected_path))
+        if args.resume and changed_path:
+            report['resumed_from']['path_search'] = dict(old=asdict(previous_path), new=asdict(selected_path))
         engine.optimizer_bits = 8 if args.device == 'cuda' else 32
         previous_loss = engine.config.prediction_delta_loss
         selected_loss = args.prediction_delta_loss or previous_loss
@@ -591,24 +607,25 @@ def main(argv=None):
             retain_replay_across_levels=False, replay_episodes=1, burn_in_steps=0, representation_joint_steps=0)
         report['config']['prediction_delta_loss'] = selected_loss
         report['config']['freeze_encoder'] = freeze_encoder
-        if changed_loss or migrated_path:
+        if changed_loss or migrated_path or changed_path:
             at_action = (restored or {}).get('actions', 0)
             changes = [r for r in report.get('objective_changes', []) if r['actions'] <= at_action]
             changes.append(dict(actions=at_action, prediction_delta_loss=selected_loss,
-                                path_objective_version=path_version, path_heads_reset=migrated_path))
+                                path_objective_version=path_version, path_heads_reset=migrated_path,
+                                path_search=asdict(selected_path)))
             report['objective_changes'] = changes[-32:]
         if args.resume and changed_loss:
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
         if args.resume and changed_freeze:
             report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
-        if args.resume and (changed_loss or migrated_path or changed_freeze or changed_replay or changed_encoder_rate or changed_planner_freeze):
+        if args.resume and (changed_loss or migrated_path or changed_freeze or changed_replay or changed_encoder_rate or changed_planner_freeze or changed_path):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
             if args.resume:
                 raise ValueError('Resuming requires the saved PathValue weights')
             evaluator = PathValue(engine.model.config.latent, engine.model.config.memory).to(args.device)
-        agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=PathConfig()),
+        agent = Agent(engine, heads, AgentConfig(mode='path_mpc', max_actions=args.steps, path=selected_path),
                       seed=args.seed, frozen=False, compile_heads=args.device == 'cuda', path_evaluator=evaluator)
         representation = OnlineRepresentation(engine, args.representation_learning_rate, freeze_encoder=freeze_encoder,
             encoder_learning_rate_after_predictor=encoder_rate)
@@ -617,7 +634,7 @@ def main(argv=None):
         # also restore this global phase without adding a checkpoint counter.
         if any(state.predictor for state in curriculum.readiness.values()):
             representation.activate_predictor()
-        world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
+        world = OnlinePredictor(engine, None, args.learning_rate, PREDICTOR_HORIZON)
         predictor_replay = (PredictorReplay(engine, **replay_config, horizon=world.horizon, seed=args.seed)
                             if replay_config['episodes'] else None)
         path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda', seed=args.seed, **path_learning)
@@ -694,7 +711,7 @@ def main(argv=None):
                             publish(phase='evaluation', policy=mode, evaluation_game=game, evaluation_level=level,
                                 evaluation_episode=i + 1, evaluation_episodes=len(recordings), evaluation_action=0)
                             summaries.append(dict(result, quality=evaluate_recording(
-                                engine, episode, agent.config.path.horizon)))
+                                engine, episode, PREDICTOR_HORIZON)))
                     for i, seed in enumerate(seeds if mode == 'path_mpc' else []):
                         def progress(row):
                             publish(phase='evaluation', policy=mode, evaluation_game=game, evaluation_level=level,
@@ -812,7 +829,7 @@ def main(argv=None):
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval or changed_loss or migrated_path or changed_freeze or changed_replay
                             or changed_encoder_rate or changed_planner_freeze or changed_path_learning or changed_warmup
-                            or changed_evaluation):
+                            or changed_evaluation or changed_path):
             save('resume')
         if not args.resume:
             save('initial')
