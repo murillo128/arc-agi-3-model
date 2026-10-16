@@ -36,6 +36,9 @@ from .planning import GoalValue
 from .prediction_samples import PredictionSamples
 from .training_telemetry import PlannerTrajectory, RecentThroughput
 from .latent_diagnostics import LatentProbe, summarize_latents
+from .fixed_evaluation import random_cohort
+
+EVALUATION_PROTOCOL = 'current_level_cached_v1'
 
 def error_counts(before, actual, predicted):
     wrong, union, changed = delta_counts(before, actual, predicted)
@@ -114,15 +117,36 @@ def summarize_quality(summaries, previous_anchors=None):
     return result, anchors
 
 
+@torch.no_grad()
+def evaluate_recording(engine, episode, horizon):
+    """Re-encode real evidence; no environment, policy, learner or replay access."""
+    state = engine.initial(episode.observations[0])
+    probe = QualityProbe(engine, horizon, state)
+    prefix = Episode([episode.observations[0]])
+    for action, after in zip(episode.actions, episode.observations[1:], strict=True):
+        before = prefix.observations[-1]
+        boundary = after.starts_new_level(before)
+        prediction = engine.prediction(state, action, before.final)
+        current = (engine.initial(after.level_initial()) if boundary or action.id == 0
+                   else engine.observe(state, action, after))
+        counts = (error_counts(before.final, after.final, prediction[0])
+                  if not boundary and prediction is not None and after.final is not None else None)
+        prefix.append(action, after)
+        probe.observe(prefix, state, current, counts)
+        state = current
+    return probe.result()
+
+
 def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilon=0.,
          random_policy=False, progress=None, action_limit=None, representation=None, quality_horizon=None,
-         sample=None, predictor_replay=None, trajectory=None, trajectory_step=None):
+         sample=None, predictor_replay=None, trajectory=None, trajectory_step=None, evaluation_capture=None):
     """A synthetic teacher supplies only one visual goal to the shared agent.
 
     Evaluation calls omit all learners. Goal predicates/distances are used only
     by this trainer, never by action selection or hypothetical-state scoring.
     """
-    if quality_horizon is not None and any(x is not None for x in (world, learner, representation, predictor_replay)):
+    if (quality_horizon is not None or evaluation_capture is not None) and any(
+            x is not None for x in (world, learner, representation, predictor_replay)):
         raise ValueError('Quality evaluation must not update weights')
     env = factory.make(seed, level)
     teacher = factory.teacher(env)
@@ -263,6 +287,8 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
                 quality=None if quality is None else quality.result())
     if trajectory is not None and not random_policy:
         trajectory(episode, records, result)
+    if evaluation_capture is not None:
+        evaluation_capture(episode, result)
     return result
 
 
@@ -354,6 +380,7 @@ def main(argv=None):
     report_config['curriculum'] = asdict(gates)
     report_config['horizon'] = PathConfig().horizon
     report_config['initialization'] = 'random' if args.init_config else 'checkpoint'
+    report_config['evaluation_protocol'] = EVALUATION_PROTOCOL
     report = dict(kind='synthetic_subgoals', status='running', config=report_config,
                   progress={'phase': 'loading', 'actions': 0, 'total_actions': args.actions},
                   curriculum=curriculum.snapshot(), curves=[], episodes=[], evaluations=[])
@@ -379,6 +406,7 @@ def main(argv=None):
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder', 'migrate_path_value',
                            'predictor_replay_episodes', 'predictor_batch_size', 'path_hindsight', 'path_predicted_inputs',
                            'path_exploration_warmup',
+                           'evaluation_protocol',
                            'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
@@ -415,6 +443,11 @@ def main(argv=None):
             report['resumed_from']['evaluation_interval'] = dict(old=old_interval, new=args.evaluate_every)
         report.pop('error', None)
         report.pop('prediction_sample', None)
+    changed_evaluation = bool(restored and restored.get('evaluation_protocol') != EVALUATION_PROTOCOL)
+    if changed_evaluation:
+        report['resumed_from']['evaluation_protocol'] = EVALUATION_PROTOCOL
+        for state in curriculum.readiness.values():
+            state.representation_passes = state.prediction_passes = state.promotion_passes = 0
     previous_encoder_rate = (restored or {}).get('encoder_learning_rate_after_predictor')
     encoder_rate = (previous_encoder_rate if args.encoder_learning_rate_after_predictor is None
                     else args.encoder_learning_rate_after_predictor)
@@ -613,7 +646,7 @@ def main(argv=None):
 
         def evaluate(split):
             # Freeze the coverage of this sweep; promotion happens AFTER it.
-            pairs = curriculum.pairs
+            pairs = list(curriculum.unlocked.items())
             coverage = [dict(game=g, level=n) for g, n in pairs]
             for game, level in pairs:
                 pair = game, level
@@ -621,11 +654,40 @@ def main(argv=None):
                 seeds = episode_seeds(split, args.evaluation_episodes,
                                       offset=700000 + evaluation_pairs.index(pair) * 100)
                 quality, success = None, None
-                for mode in ('random', 'path_mpc'):
+                for mode in ('quality_probe', 'path_mpc'):
                     if mode == 'path_mpc' and not readiness.planner:
                         continue
                     summaries = []
-                    for i, seed in enumerate(seeds):
+                    if mode == 'quality_probe':
+                        def collect(seed):
+                            captured = []
+                            publish(force=True, phase='evaluation', policy='random', evaluation_game=game,
+                                evaluation_level=level, evaluation_episode=seeds.index(seed) + 1,
+                                evaluation_episodes=len(seeds), evaluation_action=0)
+                            play(agent, factory, level, seed, args.steps, random_policy=True,
+                                 evaluation_capture=lambda episode, result: captured.append((episode, result)))
+                            return captured[0]
+                        metadata = dict(game=game, level=level, split=split, seeds=seeds, steps=args.steps)
+                        cached, recordings = random_cohort(
+                            args.output / 'evaluation' / f'{split}-{game}-{level}.pt', metadata, collect, actions)
+                        # Persist the random score once; it is independent of model weights.
+                        if not any(r.get('fixed_baseline') and r['split'] == split and
+                                   (r['game'], r['level']) == pair for r in report['evaluations']):
+                            outcomes = [result for _, result in recordings]
+                            report['evaluations'].append(dict(actions=cached['collected_at_action'],
+                                stage=curriculum.stage, coverage=coverage, split=split, policy='random',
+                                fixed_baseline=True, game=game, level=level, episodes=len(outcomes),
+                                successes=sum(r['success'] for r in outcomes),
+                                subgoals=sum(s['success'] for r in outcomes for s in r['segments']),
+                                attempted_subgoals=sum(len(r['segments']) for r in outcomes),
+                                real_actions=sum(r['actions'] for r in outcomes), delta_error=None, quality=None,
+                                decision_ms=sum(r['decision_ms'] for r in outcomes) / len(outcomes)))
+                        for i, (episode, result) in enumerate(recordings):
+                            publish(phase='evaluation', policy=mode, evaluation_game=game, evaluation_level=level,
+                                evaluation_episode=i + 1, evaluation_episodes=len(recordings), evaluation_action=0)
+                            summaries.append(dict(result, quality=evaluate_recording(
+                                engine, episode, agent.config.path.horizon)))
+                    for i, seed in enumerate(seeds if mode == 'path_mpc' else []):
                         def progress(row):
                             publish(phase='evaluation', policy=mode, evaluation_game=game, evaluation_level=level,
                                 evaluation_episode=i + 1, evaluation_episodes=len(seeds), evaluation_action=row['action'],
@@ -633,15 +695,14 @@ def main(argv=None):
                                 **{k: row[k] for k in ('goal', 'observation', 'goal_frame', 'goal_mask')})
                         capture = trajectories.begin() if mode == 'path_mpc' else None
                         summaries.append(play(agent, factory, level, seed, args.steps,
-                            random_policy=mode == 'random', progress=progress,
+                            progress=progress,
                             sample=lambda before, actual, predicted, **meta: previews.add(
                                 before, actual, predicted, phase='evaluation', training_action=actions, **meta),
-                            quality_horizon=agent.config.path.horizon if mode == 'random' else None,
                             trajectory_step=capture,
                             trajectory=(lambda episode, records, result: trajectories.add(
                                 episode, records, result, game=game, level=level, episode_seed=seed,
                                 phase='evaluation', split=split, training_action=actions)) if capture else None))
-                    if mode == 'random':
+                    if mode == 'quality_probe':
                         quality, current_anchors = summarize_quality(
                             summaries, anchors.get(pair) if split == 'dev' else None)
                         if split == 'dev':
@@ -651,18 +712,20 @@ def main(argv=None):
                     report['evaluations'].append(dict(actions=actions, stage=curriculum.stage,
                         evaluate_every=args.evaluate_every,
                         coverage=coverage, split=split, policy=mode, game=game, level=level,
-                        episodes=len(summaries), successes=sum(r['success'] for r in summaries),
-                        subgoals=sum(s['success'] for r in summaries for s in r['segments']),
-                        attempted_subgoals=sum(len(r['segments']) for r in summaries),
-                        real_actions=sum(r['actions'] for r in summaries),
-                        delta_error=sum(r['counts']['wrong'] for r in summaries) / max(1, sum(r['counts']['union'] for r in summaries)),
-                        quality=quality if mode == 'random' else None,
-                        decision_ms=sum(r['decision_ms'] for r in summaries) / len(summaries)))
+                        episodes=len(summaries), successes=None if mode == 'quality_probe' else sum(r['success'] for r in summaries),
+                        subgoals=None if mode == 'quality_probe' else sum(s['success'] for r in summaries for s in r['segments']),
+                        attempted_subgoals=None if mode == 'quality_probe' else sum(len(r['segments']) for r in summaries),
+                        real_actions=0 if mode == 'quality_probe' else sum(r['actions'] for r in summaries),
+                        analyzed_actions=sum(r['actions'] for r in summaries) if mode == 'quality_probe' else None,
+                        delta_error=(quality['prediction_error'] if mode == 'quality_probe' else
+                            sum(r['counts']['wrong'] for r in summaries) / max(1, sum(r['counts']['union'] for r in summaries))),
+                        quality=quality if mode == 'quality_probe' else None,
+                        decision_ms=None if mode == 'quality_probe' else sum(r['decision_ms'] for r in summaries) / len(summaries)))
                     publish(force=True)
                 if split == 'dev':
                     readiness.observe(quality, success, gates)
             if split == 'dev':
-                promotions = curriculum.advance()
+                promotions = curriculum.advance(latest_only=True)
                 if promotions:
                     report.setdefault('promotions', []).append(dict(actions=actions, levels=promotions))
                 publish(force=True)
@@ -685,6 +748,7 @@ def main(argv=None):
                 'predictor_replay': replay_config,
                 'path_learning': path_learning,
                 'path_exploration_warmup': exploration_warmup,
+                'evaluation_protocol': EVALUATION_PROTOCOL,
                 'path_recovery': recovery,
                 'curriculum': curriculum.snapshot(),
                 'active_pair': active_pair,
@@ -739,7 +803,8 @@ def main(argv=None):
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval or changed_loss or migrated_path or changed_freeze or changed_replay
-                            or changed_encoder_rate or changed_planner_freeze or changed_path_learning or changed_warmup):
+                            or changed_encoder_rate or changed_planner_freeze or changed_path_learning or changed_warmup
+                            or changed_evaluation):
             save('resume')
         if not args.resume:
             save('initial')

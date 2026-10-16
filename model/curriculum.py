@@ -117,11 +117,12 @@ class Curriculum:
         self.preferred_pair = (game, n + 1)
         return self.preferred_pair
 
-    def advance(self):
+    def advance(self, *, latest_only=False):
         promoted = []
         for game, n in self.unlocked.items():
+            levels = [n] if latest_only else range(1, n + 1)
             if n < self.levels[game] and all(self.readiness[game, level].promotion_passes
-                    >= self.config.patience for level in range(1, n + 1)):
+                    >= self.config.patience for level in levels):
                 self.unlocked[game] += 1
                 promoted.append((game, n + 1))
                 for level in range(1, n + 1):

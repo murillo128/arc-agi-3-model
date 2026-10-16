@@ -24,7 +24,8 @@ from model.learning import State
 from model.online_learning import OnlineRepresentation, OnlinePredictor
 from model.path_planning import PathLearner, real_states
 from model.planning import fingerprint
-from model.subgoal_training import main, play, QualityProbe, summarize_quality
+from model.subgoal_training import main, play, QualityProbe, summarize_quality, evaluate_recording
+from model.fixed_evaluation import random_cohort
 from model.tests.test_subgoals import path_agent
 from model.tests.test_agent import obs
 from tests.square_cross_support import fixture
@@ -35,6 +36,117 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_fixed_recording_matches_live_quality_and_reencodes_current_weights(self):
+        agent = path_agent()
+        engine = agent.engine
+        factory = Factory('sc01-v1', Path('games'))
+        metadata = dict(game='sc01-v1', level=1, split='dev', seeds=[123], steps=4)
+        captures = []
+        weights = fingerprint(engine.model), fingerprint(agent.path_evaluator)
+        def collect(seed):
+            play(agent, factory, 1, seed, 4, random_policy=True, quality_horizon=2,
+                 evaluation_capture=lambda episode, result: captures.append((episode, result)))
+            return captures[-1]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'dev.pt'
+            payload, recordings = random_cohort(path, metadata, collect, 7)
+            episode, outcome = recordings[0]
+            live = captures[0][1]['quality']
+            cached = evaluate_recording(engine, episode, 2)
+            self.assertEqual(cached['counts'], live['counts'])
+            torch.testing.assert_close(cached['anchor'], live['anchor'], rtol=0, atol=0)
+            self.assertEqual(episode.actions, captures[0][0].actions)
+            for old, new in zip(captures[0][0].observations, episode.observations):
+                np.testing.assert_array_equal(old.frames, new.frames)
+                self.assertEqual(old.action_input, new.action_input)
+            self.assertEqual((fingerprint(engine.model), fingerprint(agent.path_evaluator)), weights)
+            self.assertTrue(all(p.grad is None for p in engine.model.parameters()))
+            original = path.read_bytes()
+            with torch.no_grad():
+                for parameter in engine.model.encoder.parameters():
+                    parameter.add_(.05)
+            changed = fingerprint(engine.model)
+            with patch.object(factory, 'make', side_effect=AssertionError('No repeated environment calls')):
+                resumed, loaded = random_cohort(path, metadata, collect, 100)
+                measured = evaluate_recording(engine, loaded[0][0], 2)
+            self.assertEqual(len(captures), 1)
+            self.assertEqual(resumed['collected_at_action'], 7)
+            self.assertEqual(loaded[0][1], outcome)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(torch.equal(measured['anchor'], live['anchor']))
+            self.assertEqual(fingerprint(engine.model), changed)
+            with self.assertRaisesRegex(ValueError, 'does not match'):
+                random_cohort(path, dict(metadata, split='final'), collect, 100)
+            with self.assertRaisesRegex(ValueError, 'must not update'):
+                play(agent, factory, 1, 123, 4, representation=object(), evaluation_capture=lambda *_: None)
+
+    def test_evaluation_reuses_random_cohort_on_resume_and_only_visits_latest_level(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            agent_checkpoint.save(root/'source.pt', path_agent())
+            args = ['--source',str(root/'source.pt'),'--output',str(root/'run'),
+                    '--device','cpu','--steps','2','--evaluate-every','2','--evaluation-episodes','1']
+            main([*args,'--actions','4'])
+            report = json.loads((root/'run/report.json').read_text())
+            baseline = [r for r in report['evaluations'] if r.get('fixed_baseline') and r['split']=='dev']
+            self.assertEqual([r['actions'] for r in baseline], [0])
+            probes = [r for r in report['evaluations'] if r['policy']=='quality_probe' and r['split']=='dev']
+            self.assertEqual([r['actions'] for r in probes], [0,2,4])
+            self.assertTrue(all(r['real_actions']==0 and r['successes'] is None for r in probes))
+            saved = checkpoint.load(root/'run/latest.pt')
+            progress = saved['training_progress']
+            # Simulate migration of a two-level legacy run with permissions retained.
+            progress.pop('evaluation_protocol')
+            progress['curriculum']['unlocked']['sc01-v1'] = 2
+            for row in progress['curriculum']['levels'][:2]:
+                row.update(predictor=True, planner=True, representation_passes=3,
+                           prediction_passes=2, promotion_passes=1)
+            checkpoint.write(root/'run/latest.pt', saved)
+            before = agent_checkpoint.load(root/'run/latest.pt')
+            weights = fingerprint(before.engine.model), fingerprint(before.path_evaluator)
+            snapshots, calls = [], []
+            save = agent_checkpoint.save
+            def capture(path, agent, **kwargs):
+                if kwargs['training_progress']['actions']==4:
+                    self.assertEqual((fingerprint(agent.engine.model),fingerprint(agent.path_evaluator)),weights)
+                    snapshots.append(kwargs['training_progress'])
+                return save(path,agent,**kwargs)
+            def record(*pos, **kw):
+                if kw.get('representation') is None and kw.get('learner') is None and kw.get('world') is None:
+                    calls.append((pos[2],pos[3],kw.get('evaluation_capture') is not None))
+                return play(*pos,**kw)
+            with patch('model.subgoal_training.play',side_effect=record), \
+                 patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture):
+                main([*args,'--actions','8','--resume'])
+            self.assertEqual(len(snapshots),1)
+            self.assertTrue(all(r['predictor'] and r['planner'] for r in snapshots[0]['curriculum']['levels'][:2]))
+            self.assertEqual(snapshots[0]['planner_actions'],progress['planner_actions'])
+            self.assertTrue(all(level==2 for level,_,_ in calls))
+            self.assertEqual(sum(collected for _,_,collected in calls),2)  # dev and final, once each.
+            self.assertEqual(len({seed for _,seed,collected in calls if collected}),2)
+            calls.clear()
+            with patch('model.subgoal_training.play',side_effect=record):
+                main([*args,'--actions','10','--resume'])
+            self.assertTrue(calls)
+            self.assertTrue(all(level==2 and not collected for level,_,collected in calls))
+            report = json.loads((root/'run/report.json').read_text())
+            fresh = [r for r in report['evaluations'] if r['actions']>4]
+            self.assertTrue(all(r['level']==2 for r in fresh))
+            self.assertEqual(len([r for r in fresh if r.get('fixed_baseline') and r['split']=='dev']),1)
+
+    def test_latest_level_promotion_does_not_require_stale_earlier_evidence(self):
+        c = Curriculum({'a':3}, CurriculumConfig(patience=2))
+        c.advance_level('a')
+        c.readiness['a',2].observe(GOOD,1.,c.config)
+        self.assertEqual(c.advance(latest_only=True),[])
+        c.readiness['a',2].observe(GOOD,1.,c.config)
+        c.readiness['a',2].observe(GOOD,1.,c.config)
+        self.assertEqual(c.advance(latest_only=True),[])
+        c.readiness['a',2].observe(GOOD,1.,c.config)
+        self.assertEqual(c.advance(),[])  # Legacy aggregate mode remains available.
+        self.assertEqual(c.advance(latest_only=True),[('a',3)])
+        self.assertEqual(c.pairs,[('a',1),('a',2),('a',3)])  # Training remains cumulative.
+
     def test_exploration_warmup_preserves_initial_and_mature_policy(self):
         for warmup, halfway, endpoint in ((8192,4096,8192),(2048,1024,2048)):
             self.assertEqual(planner_exploration(0,warmup),1.)
@@ -624,10 +736,10 @@ class CurriculumTests(unittest.TestCase):
                 for key in ('curves', 'episodes', 'evaluations'):
                     self.assertEqual({r['game'] for r in report[key]}, {game})
                 self.assertEqual(report['prediction_sample']['game'],game)
-                self.assertEqual(sum(r['real_actions'] for r in report['evaluations']),6)
+                self.assertEqual(sum(r['real_actions'] for r in report['evaluations']),4)
                 self.assertTrue(all(r['quality']['latent_drift'] is None
-                                    for r in report['evaluations'] if r['split']=='final'))
-                for row in report['evaluations']:
+                                    for r in report['evaluations'] if r['split']=='final' and r['quality']))
+                for row in (r for r in report['evaluations'] if r['quality']):
                     diagnostics = row['quality']['latent']
                     self.assertEqual(diagnostics['sample_count'], 3)
                     self.assertEqual(diagnostics['transitions'], 2)
@@ -675,7 +787,7 @@ class CurriculumTests(unittest.TestCase):
             self.assertEqual([permissions[k] for k in
                               ('representation_passes','prediction_passes','promotion_passes')],[0,0,0])
             report = json.loads(report_path.read_text())
-            checks = [r for r in report['evaluations'] if r['split']=='dev' and r['policy']=='random']
+            checks = [r for r in report['evaluations'] if r['split']=='dev' and r['policy']=='quality_probe']
             self.assertEqual([(r['actions'],r['evaluate_every']) for r in checks],[(0,4),(4,4),(6,2),(8,2)])
             self.assertIsNone(checks[-2]['quality']['latent_drift'])
             self.assertIsNotNone(checks[-1]['quality']['latent_drift'])

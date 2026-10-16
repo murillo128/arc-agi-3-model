@@ -214,6 +214,31 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(successSelector.value,'');
   assert.equal(successSelector.disabled,true);
   assert.match(text('planner-success-summary'),/Planner: sin evaluación disponible/);
+  // A single saved random score extends across later planner measurements. The
+  // current evaluation level is the highest unlocked, even during old-level practice.
+  const savedCurriculum=report.curriculum, savedGame=report.config.game;
+  report.config.game='a';report.config.evaluation_protocol='current_level_cached_v1';
+  report.curriculum={unlocked:{a:2}};
+  report.evaluations=[winRow(0,'path_mpc',8),
+    {...winRow(20,'random',3,8,2),fixed_baseline:true,delta_error:null,quality:null},
+    winRow(100,'path_mpc',4,8,2),winRow(200,'path_mpc',6,8,2),
+    {...winRow(200,'quality_probe',null,8,2),coverage:[{game:'a',level:2}],
+      stage:2,delta_error:.1,real_actions:0,analyzed_actions:211,decision_ms:null,
+      subgoals:null,quality:{reconstruction_error:0,rollout_error:.2,latent_drift:.01}}];
+  await vm.runInContext('poll()',context);
+  assert.equal(successSelector.value,JSON.stringify(['a',2]));
+  assert.deepEqual(successLabels(),['Planner: 75 %','Azar · referencia fija: 37,5 %','Límite · Éxito del currículo: 80 %']);
+  assert.deepEqual(winPoints().filter(s=>s.startsWith('Azar')), [
+    'Azar · referencia fija: 37,5 · acción 100 · 3/8 victorias',
+    'Azar · referencia fija: 37,5 · acción 200 · 3/8 victorias']);
+  assert.match(text('planner-success-summary'),/medida una vez en acción 20/);
+  assert.equal(circles('fixed-delta').length,4,'quality probes provide fresh measurements, baseline does not');
+  const storedRow=nodes.get('evaluation-rows').children.at(-1).children.map(n=>n.textContent);
+  assert.deepEqual(storedRow.slice(3),['Calidad · muestra guardada','—','—','10 %','0 nuevas · 211 guardadas','—']);
+  assert.equal(nodes.get('evaluation-rows').children[1].children[6].textContent,'—','unknown baseline error is not zero');
+  report.curriculum=savedCurriculum;report.config.game=savedGame;
+  delete report.config.evaluation_protocol;
+  report.evaluations=[];await vm.runInContext('poll()',context);
   delete report.config.success;
 
   // Only the same complete, fixed-random development coverage is comparable.

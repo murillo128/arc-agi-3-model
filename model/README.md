@@ -80,15 +80,29 @@ Primero nivel 1; después 1+2; después 1+2+3, etc. Se alternan partidas nuevas
 entre los niveles desbloqueados del juego elegido, con parámetros aleatorios. No se
 borran pesos al avanzar; la experiencia temporal sí se descarta en cada partida.
 El avance automático a otro nivel exige calidad de representación/predicción y ≥80 %
-de éxito del planner en **todos** los niveles ya abiertos de ese juego durante
+de éxito del planner en **el último nivel desbloqueado** de ese juego durante
 tres evaluaciones consecutivas. No basta una media global ni agotar un presupuesto.
 
 **Evaluación:** cada 256 acciones (`--evaluate-every`), al terminar la partida,
-ocho partidas por nivel desbloqueado, con
-semillas fijas de desarrollo y pesos sin actualizar. La política aleatoria sirve
-para medir representación y predicción sobre las mismas situaciones. El planner
-se evalúa aparte una vez habilitado, con las mismas semillas y presupuesto de
-128 acciones. Antes de habilitarlo, recoge datos la exploración aleatoria.
+solo se comprueba el último nivel desbloqueado. Se juegan ocho partidas aleatorias
+una vez por nivel y se conservan sus resultados como referencia fija. Las observaciones
+y acciones reales se guardan atómicamente en `evaluation/` dentro del directorio
+local de la campaña, separadas del replay de entrenamiento. Cada comprobación
+recalcula representación y predicción con los pesos actuales sobre esas mismas
+trayectorias, sin nuevas llamadas al entorno ni aprendizaje. No se guardan latentes
+aprendidos: la calidad necesita recalcularse aunque el éxito aleatorio sea constante.
+El planner se evalúa aparte una vez habilitado: ocho partidas con las mismas
+semillas y presupuesto de 128 acciones. El historial de niveles anteriores sigue
+visible, pero ya no detectamos regresiones periódicamente en ellos. El entrenamiento
+acumulativo de niveles anteriores se mantiene.
+
+La caché persiste al reanudar; un archivo incompatible o corrupto produce un error.
+Las campañas antiguas sin trayectorias guardadas recogen la muestra una vez en la
+primera comprobación de cada nivel. La migración guarda el protocolo nuevo antes
+de entrenar, conserva pesos/contadores/permisos y reinicia las rachas de activación.
+Las filas `quality_probe` no son nuevas partidas: tienen cero acciones nuevas y
+resultados de victoria ausentes. La referencia `random` se registra una sola vez;
+su línea permanece horizontal. La frecuencia sigue siendo 256 acciones, configurable.
 La calidad predictiva requiere al menos ocho muestras y cuatro con cambios reales
 a cada horizonte. Una predicción exacta sin cambios tiene error cero, pero no
 sustituye la cobertura de transiciones con cambios. Para tareas que terminan sin

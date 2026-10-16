@@ -462,7 +462,7 @@ function fixedEvaluations(report) {
   const expected=new Set((report.config?.evaluation_pairs||[...(report.episodes||[]),...(report.evaluations||[])]).map(pair));
   const grouped=new Map();
   for(const row of report.evaluations||[]) {
-    if(row.split!=='dev'||row.policy!=='random'||!finite(row.actions))continue;
+    if(row.split!=='dev'||!['random','quality_probe'].includes(row.policy)||row.fixed_baseline||!finite(row.actions))continue;
     if(!grouped.has(row.actions))grouped.set(row.actions,new Map());
     grouped.get(row.actions).set(pair(row),row);
   }
@@ -475,7 +475,7 @@ function fixedEvaluations(report) {
     const mean=key=>rows.every(r=>finite(r.quality?.[key]))?100*rows.reduce((s,r)=>s+r.quality[key],0)/rows.length:null;
     const latentMean=(key,scale=1)=>rows.every(r=>finite(r.quality?.latent?.[key]))
       ?scale*rows.reduce((s,r)=>s+r.quality.latent[key],0)/rows.length:null;
-    points.push({actions,stage:rows[0].stage,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
+    points.push({actions,stage:`${rows[0].stage}:${rows.map(pair).sort().join(',')}`,error:100*rows.reduce((s,r)=>s+r.delta_error,0)/rows.length,
       reconstruction:mean('reconstruction_error'),rollout:mean('rollout_error'),drift:mean('latent_drift'),
       latentStd:latentMean('std_mean'),latentWithin:latentMean('within_episode_std'),
       latentInactive:latentMean('inactive_fraction',100),latentRank:latentMean('effective_rank'),
@@ -494,7 +494,10 @@ function renderPlannerSuccess(report) {
     .sort((a,b)=>a.game.localeCompare(b.game)||a.level-b.level);
   const keys=pairs.map(pair), selector=$('planner-success-level');
   if(!keys.includes(successPairSelection))successPairSelection=null;
-  const current=pair(report.progress||{}), selected=successPairSelection||(keys.includes(current)?current:keys[0]);
+  const latest=report.curriculum?.unlocked?.[report.config?.game];
+  const current=pair(report.config?.evaluation_protocol==='current_level_cached_v1'&&latest
+    ?{game:report.config.game,level:latest}:report.progress||{});
+  const selected=successPairSelection||(keys.includes(current)?current:keys[0]);
   const signature=JSON.stringify(keys);
   if(signature!==successOptionsKey) {
     successOptionsKey=signature;
@@ -509,19 +512,20 @@ function renderPlannerSuccess(report) {
   }
   const valid=r=>r&&Number.isInteger(r.episodes)&&r.episodes>0&&Number.isInteger(r.successes)
     &&r.successes>=0&&r.successes<=r.episodes;
+  const baseline=rows.find(r=>pair(r)===selected&&r.policy==='random'&&r.fixed_baseline&&valid(r));
   let sweeps=[...byAction].sort((a,b)=>a[0]-b[0]);
   const firstPlanner=sweeps.findIndex(([,policies])=>valid(policies.get('path_mpc')));
   // Earlier random-only evaluations would compress the planner's history to a sliver.
   if(firstPlanner>=0)sweeps=sweeps.slice(firstPlanner);
-  const series=[['Planner','path_mpc'],['Azar','random']].map(([name,policy])=>({name,
-    points:sweeps.map(([actions,policies])=>{const r=policies.get(policy);
+  const series=[['Planner','path_mpc'],[baseline?'Azar · referencia fija':'Azar','random']].map(([name,policy])=>({name,
+    points:sweeps.map(([actions,policies])=>{const r=policy==='random'&&baseline?baseline:policies.get(policy);
       return [actions,valid(r)?100*r.successes/r.episodes:null,valid(r)?`${r.successes}/${r.episodes} victorias`:''];})}));
   const success=report.curriculum?.thresholds?.success??report.config?.success;
   plot('planner-success',series,{percent:true,responsive:true,
     thresholds:finite(success)&&success>=0&&success<=1?[{name:'Éxito del currículo',value:100*success,colorIndex:2}]:[],
     empty:'Pendiente de evaluaciones de éxito de este nivel'});
-  $('planner-success-summary').textContent=series.map(s=>{const last=s.points.findLast(p=>finite(p[1]));
-    return last?`${s.name}: ${last[2]} · acción ${fmt(last[0])}`:`${s.name}: sin evaluación disponible`;}).join(' · ');
+  $('planner-success-summary').textContent=series.map((s,i)=>{const last=s.points.findLast(p=>finite(p[1]));
+    return last?`${s.name}: ${last[2]} · ${i===1&&baseline?'medida una vez en acción':'acción'} ${fmt(i===1&&baseline?baseline.actions:last[0])}`:`${s.name}: sin evaluación disponible`;}).join(' · ');
 }
 $('planner-success-level').addEventListener('change',()=>{
   successPairSelection=$('planner-success-level').value;
@@ -603,7 +607,8 @@ function render(report) {
     {name:'Predicción · 3 pasos',points:qualityPoints('rollout')},
     {name:'Deriva latente',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
   $('quality-cadence').textContent=finite(c.evaluate_every)
-    ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`:'';
+    ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`+
+      (c.evaluation_protocol==='current_level_cached_v1'?' Solo el último nivel desbloqueado · trayectorias reales guardadas; sin volver a jugar al azar.':''):'';
   $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
     (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
   const latentPoints=key=>{
@@ -698,7 +703,14 @@ function render(report) {
   plot('reward',[{name:'Media por subobjetivo · hasta 512 acciones',points:movingAverage(rewards)},
     {name:'Reward individual',points:rewards,muted:true}]);
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
-  $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));
+  $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');
+    const policy=r.fixed_baseline?'Azar · referencia fija':r.policy==='quality_probe'?'Calidad · muestra guardada':r.policy;
+    for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,policy,
+      finite(r.successes)?`${r.successes}/${r.episodes}`:'—',finite(r.subgoals)?`${r.subgoals}/${r.attempted_subgoals}`:'—',
+      finite(r.delta_error)?`${fmt(r.delta_error*100,2)} %`:'—',
+      r.policy==='quality_probe'?`0 nuevas · ${fmt(r.analyzed_actions)} guardadas`:fmt(r.real_actions),fmt(r.decision_ms,2)]) {
+        const td=document.createElement('td');td.textContent=value;tr.append(td);
+      }return tr;}));
 }
 const tabs=['world','path','evaluation','curriculum'];
 for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
