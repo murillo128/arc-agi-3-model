@@ -1,16 +1,19 @@
 """Literal executed-frame, sampling and wall-clock contracts; no GPU required."""
 import base64
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import random
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import numpy as np
+import torch
 
 from model.data import Action, Episode, Observation
 from model.dashboard import make_server
@@ -18,6 +21,61 @@ from model.training_telemetry import PlannerTrajectory, RecentThroughput
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_selected_latents_are_captured_before_updates_and_exploration_has_no_stale_plan(self):
+        # Literal decoder: each latent is a palette index for one pixel. No
+        # dynamics/search method exists on this seam, so it cannot re-plan.
+        def decode(z, height, width):
+            self.assertFalse(torch.is_grad_enabled())
+            self.assertEqual((height, width), (1, 1))
+            return torch.nn.functional.one_hot(z.long().reshape(-1, 1, 1), 16).float()
+        planner = SimpleNamespace(last_plan=[Action(4), Action(2)],
+            last_states=[torch.tensor([3.]), torch.tensor([7.])],
+            goal=dict(frame=np.array([[9]], dtype=np.uint8), pixel_mask=np.array([[False]])))
+        agent = SimpleNamespace(planner=planner, last_diagnostics={'path': {'score': 1}},
+            engine=SimpleNamespace(decode=decode, autocast=nullcontext), state=SimpleNamespace(geometry=(1, 1)))
+        observations = [Observation(np.full((1, 1, 1), c, dtype=np.uint8), (2, 4), 'NOT_FINISHED', 0, 1)
+                        for c in (1, 3, 8)]
+        episode = Episode(observations, [Action(4), Action(2)])
+        records = [dict(action_source=s, goal='Cruzar') for s in ('planner', 'exploration')]
+        now = [0.]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'planner_trajectory.json'
+            sample = PlannerTrajectory(path, clock=lambda: now[0])
+            capture = sample.begin()
+            rng, tensor_rng = random.getstate(), torch.get_rng_state().clone()
+            capture(agent, Action(4), False)
+            # Later learning/goal replacement must not rewrite the captured route.
+            planner.last_states[0].fill_(12)
+            planner.goal['frame'][:] = 2
+            capture(agent, Action(2), True)
+            sample.add(episode, records, dict(success=False, reason='budget'))
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved['format_version'], 2)
+            steps = saved['steps']
+            self.assertEqual([p['action']['id'] for p in steps[0]['imagination']], [4, 2])
+            self.assertEqual([base64.b64decode(p['frames']['pixels']) for p in steps[0]['imagination']], [b'\x03', b'\x07'])
+            self.assertEqual(base64.b64decode(steps[0]['goal_frame']['pixels']), b'\x10')
+            self.assertEqual(steps[1]['imagination'], [])
+            self.assertEqual(steps[1]['imagination_status'], 'exploration')
+            self.assertEqual(random.getstate(), rng)
+            self.assertTrue(torch.equal(torch.get_rng_state(), tensor_rng))
+            now[0] = 1.99
+            self.assertIsNone(sample.begin(), 'throttled episodes must not decode any route')
+            previous = path.read_bytes()
+            now[0] = 2.
+            capture = sample.begin()
+            capture(agent, Action(4), False)
+            sample.add(episode, records, dict(success=False, reason='budget'))
+            self.assertIn('Faltan predicciones', sample.error)
+            self.assertEqual(path.read_bytes(), previous)
+            now[0] = 4.
+            capture = sample.begin()
+            sample.max_bytes = 6  # 4 captured bytes + 3 real pixels exceed the bound.
+            capture(agent, Action(4), False); capture(agent, Action(2), True)
+            sample.add(episode, records, dict(success=False, reason='budget'))
+            self.assertIn('límite', sample.error)
+            self.assertEqual(path.read_bytes(), previous)
+
     def test_recent_rate_startup_cutoff_idle_and_new_process(self):
         now = [100.]
         rate = RecentThroughput(clock=lambda: now[0])

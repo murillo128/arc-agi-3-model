@@ -130,7 +130,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   state.update();
 }
 function picture(id, frame, mask, pixelColors=palette) {
-  const canvas=$(id), ctx=canvas.getContext('2d');
+  const canvas=typeof id==='string'?$(id):id, ctx=canvas.getContext('2d');
   canvas.height=Array.isArray(frame)&&frame.length?frame.length:64;
   canvas.width=Array.isArray(frame?.[0])&&frame[0].length?frame[0].length:64;
   ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -171,44 +171,159 @@ function predictionSample(sample) {
     ? `Error de esta muestra: ${fmt(100*sample.wrong/sample.union,2)} % · ${fmt(sample.wrong)} / ${fmt(sample.union)} píxeles cambiados en cualquiera de los dos deltas.`
     : 'Sin cambios reales ni predichos en esta acción.';
 }
-const trajectoryPlayer={sample:null,frames:[],position:0,playing:false,timer:null,fetching:false};
+const trajectoryPlayer={sample:null,frames:[],states:[],steps:[],extent:0,position:0,playing:false,timer:null,fetching:false,matrixId:null,cells:[]};
 function stopTrajectory(){
   trajectoryPlayer.playing=false;
   clearTimeout(trajectoryPlayer.timer);
 }
+function frameImage(frame){
+  return frame?Array.from({length:frame.height},(_,y)=>Array.from({length:frame.width},(_,x)=>frame.pixels.charCodeAt(frame.offset+y*frame.width+x))):null;
+}
+function actionLabel(action){
+  return action?`A${action.id}${action.id===6?` (${action.data.x}, ${action.data.y})`:''}`:'Inicio';
+}
+function sameAction(a,b){
+  return !!a&&!!b&&a.id===b.id&&Object.keys(a.data||{}).length===Object.keys(b.data||{}).length
+    &&Object.entries(a.data||{}).every(([k,v])=>b.data?.[k]===v);
+}
+function renderObservationContext(){
+  const player=trajectoryPlayer, sample=player.sample, frame=player.frames[player.position], p=displayedReport?.progress||{};
+  if(!sample){
+    picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
+    $('observation-context').textContent='Interacción actual';
+    $('observation-detail').textContent=p.game?`${p.game} / nivel ${fmt(p.level)}`:'Esperando una observación…';
+    $('goal-context').textContent=p.goal||'Objetivo actual';
+    $('goal-detail').textContent='Imagen del profesor. Cuadrícula: zona excluida del objetivo.';
+    return;
+  }
+  picture('observation',frameImage(frame));picture('goal',frameImage(frame.goalImage));
+  $('observation-context').textContent=`Muestra seleccionada · t = ${frame.step}`;
+  $('observation-detail').textContent=`${sample.game} / nivel ${sample.level} · partida ${sample.episode_seed} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · frame ${player.position+1}/${player.frames.length}`;
+  $('goal-context').textContent=frame.goal||'Subobjetivo de la muestra';
+  $('goal-detail').textContent=frame.goalImage?'Objetivo de esta acción. Cuadrícula: zona excluida del objetivo.':'Esta muestra antigua no incluye la imagen del subobjetivo.';
+}
+function buildTrajectoryMatrix(){
+  const player=trajectoryPlayer, table=$('trajectory-matrix');
+  table.replaceChildren();player.cells=[];
+  if(!player.sample){player.matrixId=null;return;}
+  const make=(tag,className='',text='')=>{const node=document.createElement(tag);node.className=className;node.textContent=text;return node;};
+  const track=(node,t)=>{player.cells.push({node,t});return node;};
+  const thumb=(frame,label)=>{const canvas=make('canvas','trajectory-thumb');canvas.setAttribute('role','img');canvas.setAttribute('aria-label',label);picture(canvas,frameImage(frame));return canvas;};
+  const caption=make('caption','sr-only','Tiempo de izquierda a derecha. Cada fila imaginada parte de un estado real; las columnas alinean el instante de destino.');
+  const cols=make('colgroup');cols.append(make('col','trajectory-label-column'));
+  const head=make('thead'), headRow=make('tr');headRow.append(make('th','trajectory-row-label','Instante'));
+  for(let t=0;t<=player.extent;t++){
+    cols.append(track(make('col'),t));
+    const cell=track(make('th','trajectory-time',`t = ${t}`),t);cell.setAttribute('scope','col');headRow.append(cell);
+  }
+  head.append(headRow);table.append(caption,cols,head);
+  const body=make('tbody'), real=make('tr','trajectory-real');
+  const realLabel=make('th','trajectory-row-label','REAL');realLabel.setAttribute('scope','row');real.append(realLabel);
+  for(let t=0;t<=player.extent;t++){
+    const cell=track(make('td','trajectory-cell'),t), frame=player.states[t];
+    cell.setAttribute('data-time',t);
+    if(frame){
+      const button=make('button','trajectory-state');button.type='button';button.setAttribute('aria-label',`Ver estado real t = ${t} · ${actionLabel(frame.action)}`);
+      button.append(thumb(frame,`Estado real t = ${t}`),make('span','action-badge',actionLabel(frame.action)));
+      if(frame.source==='exploration')button.append(make('small','trajectory-source','Exploración'));
+      button.addEventListener('click',()=>seekTrajectory(frame.frameIndex));track(button,t);cell.append(button);
+    }else cell.append(make('span','trajectory-absent','Sin observar'));
+    real.append(cell);
+  }
+  body.append(real);
+  const separator=make('tr','trajectory-section'), section=make('th','','IMAGINACIÓN · una fila por origen');
+  section.colSpan=player.extent+2;separator.append(section);body.append(separator);
+  const spacer=count=>{const node=make('td','trajectory-spacer');node.colSpan=count;return node;};
+  player.steps.forEach((step,origin)=>{
+    const row=make('tr','trajectory-imagined');row.setAttribute('data-origin',origin);
+    const label=make('th','trajectory-row-label',`Desde t = ${origin}`);label.setAttribute('scope','row');row.append(label);
+    if(origin)row.append(spacer(origin));
+    const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Origen');
+    button.type='button';button.setAttribute('aria-label',`Ver origen t = ${origin}`);
+    button.addEventListener('click',()=>seekTrajectory(player.states[origin].frameIndex));originCell.append(button);row.append(originCell);
+    let diverged=false;
+    step.imagination.forEach((prediction,index)=>{
+      const destination=origin+index+1, actual=player.sample.steps[origin+index]?.action;
+      if(actual&&!sameAction(prediction.action,actual))diverged=true;
+      const cell=track(make('td','trajectory-cell trajectory-prediction'),destination);
+      cell.setAttribute('data-origin',origin);cell.setAttribute('data-time',destination);
+      cell.setAttribute('data-diverged',String(diverged));
+      const label=`Predicción de t = ${destination} desde t = ${origin} · ${actionLabel(prediction.action)}`;
+      cell.append(thumb(prediction.image,label),make('span','action-badge',`+${index+1} · ${actionLabel(prediction.action)}`));
+      if(diverged)cell.append(make('small','trajectory-route','Ruta distinta'));
+      else if(!actual)cell.append(make('small','trajectory-source','Sin resultado real'));
+      cell.title=label+(diverged?' · La secuencia imaginada difiere de la ejecutada':'');row.append(cell);
+    });
+    const remaining=player.extent-origin-step.imagination.length;
+    if(remaining){
+      const empty=spacer(remaining);
+      if(!step.imagination.length){
+        empty.className+=' trajectory-missing';
+        empty.textContent=step.imagination_status==='exploration'?'Exploración aleatoria · sin ruta imaginada'
+          :player.sample.format_version===2?'Sin ruta seleccionada':'Muestra anterior · sin predicciones guardadas';
+      }
+      row.append(empty);
+    }
+    body.append(row);
+  });
+  table.append(body);player.matrixId=player.sample.id;
+}
 function renderTrajectory(){
   const player=trajectoryPlayer, sample=player.sample, frame=player.frames[player.position];
   $('trajectory-viewer').hidden=!sample;
-  if(!sample){picture('trajectory-frame',null);return;}
+  $('trajectory-mode').textContent=$('trajectory-live').checked?'Actualización automática':'Muestra fijada';
+  $('trajectory-mode').setAttribute('data-pinned',String(!$('trajectory-live').checked));
+  renderObservationContext();
+  if(!sample){if(player.matrixId)buildTrajectoryMatrix();return;}
+  if(player.matrixId!==sample.id)buildTrajectoryMatrix();
+  for(const {node,t} of player.cells){node.setAttribute('data-selected',String(t===frame.step));if(node.className==='trajectory-state')node.setAttribute('aria-pressed',String(t===frame.step));}
   const reasons={success:'Nivel resuelto',game_over:'Game over',budget:'Límite de acciones',interrupted:'Interrumpida',unreachable_subgoal:'Objetivo inaccesible'};
   $('trajectory-info').textContent=`${sample.game} / nivel ${sample.level} · partida ${sample.episode_seed} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · ${sample.actions} acciones · ${reasons[sample.reason]||sample.reason} · capturada en acción ${fmt(sample.training_action)}`;
-  $('trajectory-play').textContent=player.playing?'Pausar':'Reproducir';
+  $('trajectory-play').textContent=player.playing?'Pausar animación':'Reproducir animación';
   $('trajectory-prev').disabled=player.position===0;
   $('trajectory-next').disabled=player.position===player.frames.length-1;
   $('trajectory-position').max=String(player.frames.length-1);
   $('trajectory-position').value=String(player.position);
-  const image=Array.from({length:frame.height},(_,y)=>Array.from({length:frame.width},(_,x)=>frame.pixels.charCodeAt(frame.offset+y*frame.width+x)));
-  picture('trajectory-frame',image);
   const command=frame.action;
   const action=command?`Acción ${frame.step}/${sample.actions} · ACTION${command.id}${command.id===6?` (${command.data.x}, ${command.data.y})`:''} · ${frame.source==='planner'?'Planner':'Exploración aleatoria'}`:'Estado inicial';
   $('trajectory-step').textContent=`${action} · frame ${player.position+1}/${player.frames.length}${frame.goal?' · '+frame.goal:''}`;
   $('trajectory-position').setAttribute('aria-valuetext',$('trajectory-step').textContent);
 }
 function unpackTrajectory(sample){
-  const frames=[];
-  for(const [step,entry] of [{frames:sample.initial},...sample.steps].entries()){
-    const [count,height,width]=entry.frames.shape, pixels=atob(entry.frames.pixels);
-    if(![count,height,width].every(n=>Number.isInteger(n)&&n>0)||pixels.length!==count*height*width)throw Error('Frames incompletos');
-    for(let i=0;i<count;i++)frames.push({...entry,step,width,height,pixels,offset:i*height*width});
+  if(!Number.isInteger(sample.actions)||sample.actions<1||sample.actions>128||!Array.isArray(sample.steps)||sample.steps.length!==sample.actions)throw Error('Trayectoria incompleta');
+  const frames=[], states=[], steps=[];let bytes=0, extent=sample.actions;
+  const unpack=(packed,maxColor=15)=>{
+    if(!packed||!Array.isArray(packed.shape)||packed.shape.length!==3)throw Error('Frames incompletos');
+    const [count,height,width]=packed.shape;
+    if(![count,height,width].every(n=>Number.isInteger(n)&&n>0)||count*height*width>4*1024*1024)throw Error('Dimensiones inválidas');
+    const pixels=atob(packed.pixels);bytes+=pixels.length;
+    if(pixels.length!==count*height*width||bytes>4*1024*1024)throw Error('Frames incompletos o demasiado grandes');
+    for(let i=0;i<pixels.length;i++)if(pixels.charCodeAt(i)>maxColor)throw Error('Color inválido');
+    return Array.from({length:count},(_,i)=>({width,height,pixels,offset:i*height*width}));
+  };
+  const single=(packed,maxColor=15)=>{const result=unpack(packed,maxColor);if(result.length!==1)throw Error('Se esperaba un estado final');return result[0];};
+  const validAction=action=>action&&Number.isInteger(action.id)&&action.id>=0&&action.id<=7&&action.data&&typeof action.data==='object';
+  for(const [origin,step] of sample.steps.entries()){
+    if(!validAction(step.action))throw Error('Acción inválida');
+    const predictions=step.imagination??[];
+    if(!Array.isArray(predictions)||predictions.length>3)throw Error('Ruta imaginada inválida');
+    const imagination=predictions.map(p=>{if(!validAction(p.action))throw Error('Acción imaginada inválida');return {...p,image:single(p.frames)};});
+    if(step.source==='exploration'&&imagination.length)throw Error('La exploración no tiene una ruta seleccionada');
+    steps.push({...step,goalImage:step.goal_frame?single(step.goal_frame,16):null,imagination});
+    extent=Math.max(extent,origin+imagination.length);
   }
-  if(frames.length!==sample.frame_count||sample.steps.length!==sample.actions)throw Error('Trayectoria incompleta');
-  return frames;
+  for(const [t,entry] of [{frames:sample.initial,goal:steps[0].goal,goalImage:steps[0].goalImage},...steps].entries()){
+    for(const frame of unpack(entry.frames))frames.push({...entry,...frame,step:t,frameIndex:frames.length});
+    states.push(frames.at(-1));
+  }
+  if(frames.length!==sample.frame_count)throw Error('Trayectoria incompleta');
+  return {frames,states,steps,extent};
 }
 async function refreshTrajectory(metadata){
   const player=trajectoryPlayer;
   $('trajectory-warning').textContent=displayedReport?.trajectory_error||'';
   if(!metadata){
-    stopTrajectory();player.sample=null;player.frames=[];renderTrajectory();
+    stopTrajectory();player.sample=null;player.frames=[];player.states=[];player.steps=[];renderTrajectory();
     $('trajectory-info').textContent=displayedReport?.trajectory_error||'Esperando una trayectoria terminada con el planner activo…';
     return;
   }
@@ -220,8 +335,8 @@ async function refreshTrajectory(metadata){
     const sample=(await response.json()).trajectory;
     if(displayedReport?.planner_trajectory?.id!==metadata.id||!$('trajectory-live').checked)return;
     if(!sample||sample.id!==metadata.id){$('trajectory-info').textContent='Esperando la nueva muestra completa…';return;}
-    const frames=unpackTrajectory(sample);
-    stopTrajectory();player.sample=sample;player.frames=frames;player.position=0;renderTrajectory();
+    const decoded=unpackTrajectory(sample);
+    stopTrajectory();Object.assign(player,decoded,{sample,position:0});renderTrajectory();
   }catch(error){$('trajectory-info').textContent='No se pudo cargar la trayectoria: '+error.message;}
   finally{player.fetching=false;}
 }
@@ -514,7 +629,7 @@ function render(report) {
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
   $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
-  picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
+  renderObservationContext();
   const efficiency=[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
   plot('efficiency',[
     ...efficiency.map(s=>({...s,faint:true,legend:false})),

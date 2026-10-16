@@ -615,16 +615,16 @@ const text=id=>nodes.get(id).textContent;
   await vm.runInContext('poll()',context);
   assert.equal(trajectoryRequests,1);
   assert.match(text('trajectory-info'),/Evaluación.*1 acciones.*Game over/);
-  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#ffffff','#cccccc']);
+  assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#ffffff','#cccccc']);
   await vm.runInContext('poll()',context);
   assert.equal(trajectoryRequests,1,'same sample is not downloaded twice');
   nodes.get('trajectory-next').listeners.click();
   assert.equal(nodes.get('trajectory-live').checked,false,'manual inspection holds the sample');
   assert.match(text('trajectory-step'),/Acción 1\/1 · ACTION4 · Planner · frame 2\/3/);
-  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#999999','#666666']);
+  assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#999999','#666666']);
   nodes.get('trajectory-play').listeners.click();
   vm.runInContext('trajectoryTick()',context);
-  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#333333','#000000']);
+  assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#333333','#000000']);
   report.planner_trajectory={id:'two'};
   await vm.runInContext('poll()',context);
   assert.equal(trajectoryRequests,1,'polling cannot interrupt playback');
@@ -645,6 +645,58 @@ const text=id=>nodes.get(id).textContent;
   trajectoryReply={ok:true,json:async()=>({trajectory:null})};
   await vm.runInContext('poll()',context);
   assert.match(text('trajectory-info'),/Esperando la nueva muestra completa/);
+  assert.match(text('goal-detail'),/muestra antigua/);
+  // Every predicted destination is aligned with the actual time column. A
+  // route from t0 uses different actions after step 1; later goals can change.
+  const action=id=>({id,data:{}});
+  const predicted=(id,color)=>({action:action(id),frames:packed([color,color],[1,1,2])});
+  const modern={...trajectory,id:'matrix',format_version:2,actions:3,frame_count:5,steps:[
+    {...trajectory.steps[0],goal_frame:packed([9,16],[1,1,2]),imagination_status:'planned',
+      imagination:[predicted(4,6),predicted(3,7),predicted(2,8)]},
+    {action:action(2),source:'planner',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([8,8],[1,1,2]),
+      imagination_status:'planned',imagination:[predicted(2,9),predicted(1,10),predicted(4,11)]},
+    {action:action(1),source:'exploration',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([9,9],[1,1,2]),
+      imagination_status:'exploration',imagination:[]}]};
+  report.planner_trajectory={id:'matrix'};trajectoryReply={ok:true,json:async()=>({trajectory:modern})};
+  await vm.runInContext('poll()',context);
+  const descendants=node=>[node,...node.children.flatMap(descendants)];
+  const matrix=nodes.get('trajectory-matrix'), all=descendants(matrix);
+  const cell=(origin,time)=>all.find(n=>n.className==='trajectory-cell trajectory-prediction'&&n['data-origin']===origin&&n['data-time']===time);
+  assert.equal(cell(0,1)['data-diverged'],'false');
+  assert.equal(cell(0,2)['data-diverged'],'true');
+  assert.equal(cell(0,3)['data-diverged'],'true','divergence persists after an earlier action differs');
+  assert.equal(cell(1,2)['data-diverged'],'false');
+  assert.equal(cell(1,3)['data-diverged'],'false');
+  assert.equal(cell(1,4).children.at(-1).textContent,'Sin resultado real');
+  const realRow=all.find(n=>n.className==='trajectory-real');
+  assert.equal(realRow.children.at(-1).children[0].textContent,'Sin observar');
+  assert.ok(all.some(n=>n.textContent==='Exploración aleatoria · sin ruta imaginada'));
+  assert.deepEqual(realRow.children[2].children[0].children[0].context.pixels.map(p=>p.color),['#333333','#000000'],
+    'real t1 thumbnail is the final animation frame, not its intermediate frame');
+  assert.deepEqual(cell(0,1).children[0].context.pixels.map(p=>p.color),['#e53aa3','#e53aa3']);
+  const selectedButton=realRow.children[3].children[0];
+  selectedButton.listeners.click();
+  assert.equal(nodes.get('trajectory-live').checked,false);
+  assert.equal(selectedButton['aria-pressed'],'true');
+  assert.equal(cell(0,2)['data-selected'],'true');
+  assert.equal(cell(1,2)['data-selected'],'true');
+  assert.equal(text('goal-context'),'Segunda meta');
+  assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#f93c31','#f93c31']);
+  const firstMatrixChild=matrix.children[0], downloads=trajectoryRequests;
+  report.progress.observation=[[15]];report.progress.goal_frame=[[15]];
+  await vm.runInContext('poll()',context);
+  assert.equal(matrix.children[0],firstMatrixChild,'polling preserves matrix DOM and selected sample');
+  assert.equal(trajectoryRequests,downloads);
+  assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#f93c31','#f93c31']);
+  nodes.get('trajectory-live').checked=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(matrix.children[0],firstMatrixChild,'same ID does not rebuild thumbnails even in live mode');
+  report.planner_trajectory={id:'broken'};
+  trajectoryReply={ok:true,json:async()=>({trajectory:{...modern,id:'broken',steps:[
+    {...modern.steps[0],imagination:[{...predicted(4,6),frames:packed([6],[1,1,2])}]},...modern.steps.slice(1)]}})};
+  await vm.runInContext('poll()',context);
+  assert.match(text('trajectory-info'),/Frames incompletos/);
+  assert.equal(matrix.children[0],firstMatrixChild,'malformed new sample preserves last complete view');
   delete report.planner_trajectory;
   delete report.progress.recent_tps;report.progress.tps=99;
   await vm.runInContext('poll()',context);

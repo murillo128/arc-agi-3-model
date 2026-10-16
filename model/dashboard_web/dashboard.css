@@ -143,14 +143,86 @@ a { color: #77dabb; font-size: 13px; }
 .curriculum-action:disabled { opacity: .4; cursor: not-allowed; }
 .curriculum-action:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
 @media (pointer: coarse) { .curriculum-action { min-height: 44px; padding-inline: 14px; } }
-.trajectory-preview { margin-bottom: 16px; }
-.trajectory-live { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 16px; color: #a8bbb5; }
+/* Shared polish for the incremental-training dashboard. */
+.subgoal-dashboard main { max-width: 1560px; padding-top: 30px; }
+.subgoal-dashboard h1 { font-weight: 650; letter-spacing: -.035em; }
+.subgoal-dashboard h3 { font-size: 16px; letter-spacing: -.015em; }
+.subgoal-dashboard article { border-color: #2b3b38; border-radius: 14px; }
+.subgoal-dashboard .chart-card { padding: 22px; }
+.subgoal-dashboard .chart-card p { line-height: 1.65; }
+.subgoal-dashboard .tabs { gap: 4px; margin-top: 24px; }
+.subgoal-dashboard .tabs button { border-radius: 8px 8px 0 0; transition: color .15s, background .15s; }
+.subgoal-dashboard .tabs button:hover { background: #192724; color: #e7efec; }
+.subgoal-dashboard .tabs button[aria-selected="true"] { background: #1b2d28; }
+.subgoal-dashboard .metrics article { background: #172122; }
+.subgoal-dashboard #path .summary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.subgoal-dashboard select { min-height: 38px; max-width: 100%; border-radius: 8px; }
+.subgoal-dashboard .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.trajectory-context { margin: 24px 0 16px; }
+.observation-card h3, .goal-card h3 { padding-left: 12px; border-left: 3px solid #77dabb; }
+.goal-card h3 { border-color: #a9a6ef; }
+.observation-content { display: flex; align-items: center; gap: 24px; margin-top: 20px; }
+.subgoal-dashboard .observation-content .goal-image { width: 168px; max-width: 42%; flex: 0 0 auto; }
+.observation-content strong { color: #9ce4cd; font-size: 14px; line-height: 1.5; }
+.goal-card .observation-content strong { color: #c3bef7; }
+.subgoal-dashboard .observation-content p { min-height: 0; margin: 10px 0 0; }
+.trajectory-preview { margin: 0 0 24px; }
+.trajectory-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.trajectory-heading h3 { padding-left: 12px; border-left: 3px solid #77dabb; }
+.subgoal-dashboard .trajectory-preview p { min-height: 0; }
+#trajectory-info { margin: 8px 0 14px; }
+.trajectory-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 14px; flex-shrink: 0; max-width: 380px; }
+.trajectory-controls small { flex-basis: 100%; text-align: right; }
+.trajectory-live { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; margin: 0; padding: 6px 12px; border: 1px solid #3b6255; border-radius: 999px; font-size: 12px; color: #c7e8dc; cursor: pointer; background: #1c332b; }
 .trajectory-live input, .trajectory-timeline input { accent-color: #77dabb; }
-#trajectory-frame { display: block; width: min(100%, 380px); margin: 0 auto 16px; }
-.trajectory-toolbar { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
-.trajectory-toolbar button { min-height: 40px; padding: 8px 14px; border: 1px solid #3b6255; border-radius: 999px; background: #1c332b; color: #9ce4cd; font: inherit; font-size: 12px; cursor: pointer; }
+.trajectory-mode { font-size: 11px; color: #9aadaa; }
+.trajectory-mode[data-pinned="true"] { color: #77dabb; }
+#trajectory-warning:empty { display: none; }
+.trajectory-preview .warn { color: #f4b979; }
+.trajectory-axis { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 20px; padding: 14px 0; border-top: 1px solid #2b3b38; color: #9aadaa; font-size: 11px; }
+.trajectory-axis > span:first-child { color: #c7e8dc; }
+.trajectory-scroll { overflow: auto; max-height: 680px; border: 1px solid #2b3b38; border-radius: 10px; scrollbar-color: #45665b #172122; }
+#trajectory-matrix { width: max-content; min-width: 100%; table-layout: fixed; border-spacing: 0; border-collapse: separate; margin: 0; }
+#trajectory-matrix col { width: 116px; }
+#trajectory-matrix .trajectory-label-column { width: 138px; }
+#trajectory-matrix th, #trajectory-matrix td { padding: 10px; text-align: center; vertical-align: middle; border-bottom: 1px solid #293b35; }
+#trajectory-matrix thead th { position: sticky; top: 0; height: 38px; padding-block: 8px; background: #192825; z-index: 4; font-size: 12px; font-weight: 600; }
+#trajectory-matrix .trajectory-row-label { position: sticky; left: 0; z-index: 2; background: #172122; text-align: left; min-width: 138px; font-size: 12px; font-weight: 600; }
+#trajectory-matrix thead .trajectory-row-label { z-index: 6; }
+#trajectory-matrix .trajectory-real > * { position: sticky; top: 38px; background: #172522; z-index: 3; }
+#trajectory-matrix .trajectory-real .trajectory-row-label { color: #77dabb; z-index: 5; }
+#trajectory-matrix col[data-selected="true"] { background: #1d302b; }
+#trajectory-matrix th[data-selected="true"], #trajectory-matrix .trajectory-real td[data-selected="true"] { background: #223f35; color: #a2efd7; }
+#trajectory-matrix .trajectory-cell { min-width: 116px; }
+.trajectory-state { display: flex; flex-direction: column; gap: 8px; align-items: center; width: 96px; margin: auto; padding: 4px; color: #dce9e3; font: inherit; border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; }
+.trajectory-state:hover { background: #29443a; }
+.trajectory-state[data-selected="true"] { border-color: #77dabb; background: #203c32; }
+#trajectory-matrix .trajectory-thumb { width: 76px; height: auto; max-height: 100px; object-fit: contain; image-rendering: pixelated; margin: auto auto 6px; border-radius: 2px; }
+#trajectory-matrix .trajectory-real .trajectory-thumb { width: 86px; margin-bottom: 0; }
+.action-badge { display: block; width: fit-content; min-width: 62px; margin: 0 auto; padding: 4px 7px; border: 1px solid #3a4d47; border-radius: 6px; color: #cdded7; background: #21302d; font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+#trajectory-matrix .trajectory-section th { padding: 12px 14px; color: #bdb5f4; font-size: 11px; font-weight: 600; text-align: left; background: #1b242b; letter-spacing: .03em; }
+.trajectory-imagined .trajectory-row-label { color: #bcb8ef; }
+.trajectory-origin-button { min-width: 66px; min-height: 36px; border-radius: 999px; border: 1px solid #477d69; background: transparent; color: #91e0c5; font: inherit; font-size: 11px; cursor: pointer; }
+.trajectory-origin-button:hover { background: #223e33; }
+.trajectory-prediction .trajectory-thumb { outline: 1px solid #8277b6; outline-offset: 2px; }
+.trajectory-prediction[data-diverged="true"] .trajectory-thumb { outline-color: #d6a46b; outline-style: dashed; }
+.trajectory-source, .trajectory-route, .trajectory-absent { display: block; font-size: 10px; color: #91a59d; margin-top: 4px; white-space: normal; }
+.trajectory-route { color: #e2b782; }
+#trajectory-matrix .trajectory-spacer { padding: 0; }
+#trajectory-matrix .trajectory-missing { text-align: left; padding-left: 14px; font-size: 11px; color: #91a59d; white-space: normal; }
+.trajectory-playback { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 24px; margin-top: 18px; }
+.trajectory-toolbar { display: flex; flex-wrap: wrap; gap: 8px; }
+.trajectory-toolbar button { min-height: 38px; padding: 8px 13px; border: 1px solid #3b6255; border-radius: 999px; background: #1c332b; color: #9ce4cd; font: inherit; font-size: 12px; cursor: pointer; }
 .trajectory-toolbar button:hover:not(:disabled) { background: #284c3e; }
 .trajectory-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
-.trajectory-toolbar button:focus-visible, .trajectory-timeline input:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
-.trajectory-timeline { display: grid; gap: 8px; margin-top: 16px; color: #a8bbb5; font-size: 12px; }
+.trajectory-preview button:focus-visible, .trajectory-scroll:focus-visible, .trajectory-timeline input:focus-visible, .trajectory-live:focus-within { outline: 2px solid #79deba; outline-offset: 3px; }
+.trajectory-timeline { flex: 1 1 280px; display: grid; gap: 8px; color: #a8bbb5; font-size: 11px; }
 .trajectory-timeline input { width: 100%; }
+#trajectory-step { margin: 12px 0 16px; font-size: 11px; }
+.trajectory-key { display: flex; flex-wrap: wrap; gap: 12px 24px; border-top: 1px solid #2b3b38; padding: 16px 0 8px; font-size: 11px; }
+.trajectory-key span { border-left: 3px solid; padding-left: 8px; }
+.observed-key { color: #77dabb; }.imagined-key { color: #b6aaee; }.different-key { color: #e2b782; }
+#trajectory-explanation { margin-bottom: 0; font-size: 11px; }
+@media (max-width: 1000px) { .observation-content { gap: 16px; } .trajectory-heading { flex-direction: column; gap: 8px; } .trajectory-controls { max-width: none; justify-content: flex-start; margin-bottom: 14px; } .trajectory-controls small { flex-basis: auto; } }
+@media (max-width: 720px) { .subgoal-dashboard .chart-card { padding: 18px 14px; } .subgoal-dashboard .trajectory-context { grid-template-columns: 1fr; } .observation-content { margin-top: 16px; } .trajectory-scroll { max-height: 65vh; } #trajectory-matrix col { width: 100px; } #trajectory-matrix .trajectory-cell { min-width: 100px; } #trajectory-matrix .trajectory-label-column, #trajectory-matrix .trajectory-row-label { width: 112px; min-width: 112px; } .trajectory-state { width: 84px; } #trajectory-matrix .trajectory-real .trajectory-thumb { width: 72px; } #trajectory-matrix .trajectory-thumb { width: 64px; } }
+@media (pointer: coarse) { .trajectory-toolbar button, .trajectory-origin-button { min-height: 44px; } }

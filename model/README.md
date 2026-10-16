@@ -307,20 +307,36 @@ medido se conserva y una evaluación ausente no se rellena. Las evaluaciones
 finales y las partidas de entrenamiento no se mezclan en estas curvas. La línea
 del umbral de éxito no sustituye los demás requisitos de promoción del currículo.
 
-**Subobjetivos y Path Planner → Trayectoria real del planner** reproduce una
-partida terminada con sus acciones y todos los frames de animación devueltos
-por el entorno. Se distinguen entrenamiento/evaluación y las acciones del
-planner frente a exploración aleatoria. No se capturan las evaluaciones de la
-política aleatoria ni se generan imágenes para el visor. Reproducir, avanzar
-o mover la barra mantiene la muestra; la casilla de actualización automática
-permite recibir otra. Se conserva una sola trayectoria completa en
+**Subobjetivos y Path Planner → Trayectoria real e imaginación** aparece debajo
+de la observación y el subobjetivo de la muestra seleccionada. El tiempo avanza
+hacia la derecha: la fila real contiene el estado final de cada acción y su
+etiqueta; cada fila inferior parte de un origen `t` y alinea sus predicciones
+en las columnas `t+1`, `t+2`, `t+3`. Son reconstrucciones de los latentes de la
+ruta elegida entonces, capturados antes de ejecutar la acción o aprender de su
+resultado. Se decodifican hasta tres estados ya calculados, sin repetir la
+búsqueda ni ejecutar nuevas predicciones, sin gradientes y sin cambiar pesos.
+La captura añade ese coste de lectura/decodificación sólo a las partidas elegibles.
+Una ruta más corta no se rellena. Las secuencias que difieren de las acciones
+finalmente ejecutadas se marcan «Ruta distinta»; no son medidas de error de
+predicción sobre la trayectoria real. Los destinos posteriores al final real
+se muestran sin observación de referencia.
+
+Seleccionar un estado fija la muestra y sincroniza las dos tarjetas superiores.
+La reproducción y la barra recorren además todos los frames de animación reales.
+Se distinguen entrenamiento/evaluación y exploración aleatoria; esta última no
+reutiliza rutas anteriores del planner. Las evaluaciones de la política aleatoria
+no se capturan. La casilla de actualización automática permite recibir otra
+muestra, sin reconstruir miniaturas cuando su identificador no cambia. Las
+muestras antiguas siguen funcionando con avisos de subobjetivos/predicciones
+ausentes. Se conserva una sola trayectoria completa en
 `planner_trajectory.json`, sustituida como máximo cada dos segundos al finalizar
 una partida, sin guardar un archivo histórico ni añadir datos al checkpoint.
 El reporte incluye solo su identificador/contexto y `/api/trajectory` sirve
 exclusivamente la muestra que coincide con ese identificador. Los frames se
-guardan como bytes de paleta en base64; una trayectoria que exceda 4 MiB de
-frames o 128 acciones se omite entera, con un aviso, sin truncarla. Un error de
-escritura conserva la muestra anterior y no detiene el entrenamiento. Al
+guardan como bytes de paleta en base64; una trayectoria que exceda 4 MiB entre
+frames reales, predicciones y subobjetivos, o 128 acciones, se omite entera con
+un aviso, sin truncarla. Un error de captura o escritura conserva la muestra
+anterior y no detiene el entrenamiento. Al
 reanudar se descarta la referencia a la muestra del proceso anterior.
 
 Cada gráfica de pérdida permite desplegar los componentes de la última

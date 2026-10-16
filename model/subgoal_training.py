@@ -116,7 +116,7 @@ def summarize_quality(summaries, previous_anchors=None):
 
 def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilon=0.,
          random_policy=False, progress=None, action_limit=None, representation=None, quality_horizon=None,
-         sample=None, predictor_replay=None, trajectory=None):
+         sample=None, predictor_replay=None, trajectory=None, trajectory_step=None):
     """A synthetic teacher supplies only one visual goal to the shared agent.
 
     Evaluation calls omit all learners. Goal predicates/distances are used only
@@ -154,6 +154,8 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             action = agent.act(diagnostics=True)
         decision_ms += (time.monotonic() - begin) * 1000
         prediction = agent.engine.prediction(state, action, before.final)
+        if trajectory_step is not None and not random_policy:
+            trajectory_step(agent, action, exploring)
         after = env.step(action)
         episode.append(action, after)
         agent.observe(after, action)
@@ -585,14 +587,16 @@ def main(argv=None):
                                 evaluation_episode=i + 1, evaluation_episodes=len(seeds), evaluation_action=row['action'],
                                 predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                                 **{k: row[k] for k in ('goal', 'observation', 'goal_frame', 'goal_mask')})
+                        capture = trajectories.begin() if mode == 'path_mpc' else None
                         summaries.append(play(agent, factory, level, seed, args.steps,
                             random_policy=mode == 'random', progress=progress,
                             sample=lambda before, actual, predicted, **meta: previews.add(
                                 before, actual, predicted, phase='evaluation', training_action=actions, **meta),
                             quality_horizon=agent.config.path.horizon if mode == 'random' else None,
-                            trajectory=lambda episode, records, result: trajectories.add(
+                            trajectory_step=capture,
+                            trajectory=(lambda episode, records, result: trajectories.add(
                                 episode, records, result, game=game, level=level, episode_seed=seed,
-                                phase='evaluation', split=split, training_action=actions)))
+                                phase='evaluation', split=split, training_action=actions)) if capture else None))
                     if mode == 'random':
                         quality, current_anchors = summarize_quality(
                             summaries, anchors.get(pair) if split == 'dev' else None)
@@ -729,6 +733,7 @@ def main(argv=None):
                         tps=point['tps'], seconds=seconds, **{k: v for k, v in row.items() if k not in ('counts', 'segment')})
             publish(force=True, phase='warmup' if began_learning is None else 'training', game=game, level=level,
                     predictor_enabled=readiness.predictor, planner_enabled=readiness.planner)
+            capture = trajectories.begin() if readiness.planner else None
             result = play(agent, factory, level, seed, args.steps,
                 representation=representation, world=world if readiness.predictor else None,
                 predictor_replay=predictor_replay if readiness.predictor else None,
@@ -736,9 +741,10 @@ def main(argv=None):
                 random_policy=not readiness.planner, epsilon=epsilon, progress=progress,
                 sample=lambda before, actual, predicted, **meta: previews.add(
                     before, actual, predicted, phase='training', training_action=actions + 1, **meta),
-                trajectory=lambda episode, records, result: trajectories.add(
+                trajectory_step=capture,
+                trajectory=(lambda episode, records, result: trajectories.add(
                     episode, records, result, game=game, level=level, episode_seed=seed,
-                    phase='training', training_action=actions),
+                    phase='training', training_action=actions)) if capture else None,
                 action_limit=args.actions - actions)
             report['episodes'].append(dict(game=game, level=level, end_action=actions,
                 **{k: v for k, v in result.items() if k not in ('records', 'quality')}))

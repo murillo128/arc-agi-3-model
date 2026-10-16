@@ -26,6 +26,7 @@ from model.learning import State
 from model.path_planning import PathConfig, PathPlanner, PathValue, PathLearner, segment_cost
 from model.planning import fingerprint
 from model.subgoal_training import OnlinePredictor, play
+from model.training_telemetry import PlannerTrajectory
 from model.tests.test_agent import make_agent, obs
 from tests.square_cross_support import act, frame, fixture, center
 
@@ -218,6 +219,37 @@ class PathTests(unittest.TestCase):
         play(agent, factory, 1, 24, 8, action_limit=1, epsilon=1., trajectory=capture)
         self.assertEqual(captures[-1][1][0]['action_source'], 'exploration')
         self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), weights)
+
+    def test_real_sdk_imagination_capture_preserves_policy_and_weights(self):
+        agent = path_agent()
+        factory = Factory('sc01-v1', Path('games'))
+        weights = fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)
+        captured = []
+        play(agent, factory, 1, 22, 8, action_limit=2,
+             trajectory=lambda episode, records, result: captured.append(episode))
+        expected_actions = captured[0].actions
+        tensor_rng = torch.get_rng_state().clone()
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'planner_trajectory.json'
+            preview = PlannerTrajectory(path)
+            callback = preview.begin()
+            before_actions = []
+            def capture_step(current, action, exploring):
+                self.assertIs(current, agent)
+                self.assertEqual(current.planner.last_plan[0], action)
+                # The state is still the origin; env.step/observe have not run.
+                before_actions.append(current.observation.final.copy())
+                callback(current, action, exploring)
+            play(agent, factory, 1, 22, 8, action_limit=2, trajectory_step=capture_step,
+                 trajectory=lambda episode, records, result: preview.add(episode, records, result))
+            data = json.loads(path.read_text())
+            self.assertEqual([s['action'] for s in data['steps']],
+                             [dict(id=a.id, data=dict(a.data)) for a in expected_actions])
+            self.assertTrue(all(s['imagination'] for s in data['steps']))
+            for original, before in zip(captured[0].observations, before_actions):
+                np.testing.assert_array_equal(before, original.final)
+        self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), weights)
+        self.assertTrue(torch.equal(torch.get_rng_state(), tensor_rng))
 
     def test_dashboard_selects_only_new_report_and_redacts_paths(self):
         with tempfile.TemporaryDirectory() as temp:
