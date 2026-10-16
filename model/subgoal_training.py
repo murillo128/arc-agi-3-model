@@ -997,11 +997,13 @@ def _main(argv=None, *, plan=None):
         if plan is not None:
             save('final')
             report['final_validation'] = []
-            from .training_release import file_sha256
-            report['checkpoint_sha256'] = file_sha256(args.output / 'latest.pt')
         if plan is None or curriculum.completed:
             evaluate('final')
         if plan is not None:
+            # Final evaluation services pending checkpoint requests. Bind its
+            # evidence only after that last possible replacement of latest.pt.
+            from .training_release import file_sha256
+            report['checkpoint_sha256'] = file_sha256(args.output / 'latest.pt')
             report['status'] = ('converged' if curriculum.completed else 'budget_exhausted')
             report['publication_eligible'] = (curriculum.completed and not report['manual_controls']
                 and report.get('provenance', {}).get('dirty') is False

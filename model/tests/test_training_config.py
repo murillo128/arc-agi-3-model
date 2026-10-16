@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import signal
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -209,32 +210,56 @@ class TrainingConfigTests(unittest.TestCase):
                 self.observation = replace(self.observation,
                     frames=obs(1 + self.actions % 2).frames, action_input=action)
                 return self.observation
-        factory = SimpleNamespace(native_training=True, reserve_final_level=False,
-            game_id='aa01', access_actions=2, make=lambda seed, level: PublicEnvironment(level))
-        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
-            root = Path(tmp)
-            path, value = config(root, [dict(source='sdk', game='aa01', levels=[2, 1])],
-                phase='final', sdk={'environments_dir': 'sdk'},
-                thresholds=dict(representation_open=1., prediction_open=1., latent_drift=1.,
-                                patience=1, minimum_samples=1, minimum_changed=1))
-            value['settings'].update(actions=24, steps=3, evaluate_every=3)
-            path.write_text(json.dumps(value))
-            with patch('model.subgoal_training.NativeTrainingFactory', return_value=factory):
-                main(['--training-config', str(path), '--output', str(root / 'run'), '--device', 'cpu'])
-            report = json.loads((root / 'run/report.json').read_text())
-            self.assertEqual(report['status'], 'converged')
-            self.assertLess(report['checkpoint_action'], 24)
-            levels = [r['level'] for r in report['episodes']]
-            self.assertEqual(levels, sorted(levels, reverse=True))
-            self.assertEqual(set(levels), {1, 2})
-            self.assertEqual([r['level'] for r in report['final_validation']], [2, 1])
-            self.assertTrue(all(r['passed'] for r in report['final_validation']))
-            self.assertTrue(all(r['success'] is None for r in report['final_validation']))
-            self.assertEqual(report['progress']['path_updates'], 0)
-            self.assertEqual(report['progress']['access_actions'], 2 * len(levels))
-            saved = checkpoint.load(root / 'run/latest.pt')
-            self.assertTrue(saved['training_progress']['curriculum']['completed'])
-            self.assertEqual(report['checkpoint_sha256'], file_sha256(root / 'run/latest.pt'))
+        for checkpoint_during_final in (False, True):
+            with self.subTest(checkpoint_during_final=checkpoint_during_final), \
+                 tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()):
+                if checkpoint_during_final and not hasattr(signal, 'SIGUSR1'):
+                    self.skipTest('SIGUSR1 is a POSIX signal')
+                signalled = []
+                def make(seed, level):
+                    # Only the final seed partition requests a checkpoint. Assert
+                    # a handler before delivery so a regression cannot kill unittest.
+                    if checkpoint_during_final and seed >= 8_000_001 and not signalled:
+                        self.assertTrue(callable(signal.getsignal(signal.SIGUSR1)))
+                        signal.raise_signal(signal.SIGUSR1)
+                        signalled.append(level)
+                    return PublicEnvironment(level)
+                factory = SimpleNamespace(native_training=True, reserve_final_level=False,
+                    game_id='aa01', access_actions=2, make=make)
+                root = Path(tmp)
+                path, value = config(root, [dict(source='sdk', game='aa01', levels=[2, 1])],
+                    phase='final', sdk={'environments_dir': 'sdk'},
+                    thresholds=dict(representation_open=1., prediction_open=1., latent_drift=1.,
+                                    patience=1, minimum_samples=1, minimum_changed=1))
+                value['settings'].update(actions=24, steps=3, evaluate_every=3)
+                path.write_text(json.dumps(value))
+                # Keep unrelated Git provenance stable, including in dirty test
+                # worktrees; training, evaluation, checkpoint IO and export are real.
+                with patch('model.subgoal_training.NativeTrainingFactory', return_value=factory), \
+                     patch('subprocess.check_output', side_effect=['a' * 40, '']):
+                    main(['--training-config', str(path), '--output', str(root / 'run'), '--device', 'cpu'])
+                report = json.loads((root / 'run/report.json').read_text())
+                self.assertEqual(signalled, [2] if checkpoint_during_final else [])
+                self.assertEqual(report['last_checkpoint']['reason'], 'signal' if checkpoint_during_final else 'final')
+                self.assertEqual(report['status'], 'converged')
+                self.assertTrue(report['publication_eligible'])
+                self.assertLess(report['checkpoint_action'], 24)
+                levels = [r['level'] for r in report['episodes']]
+                self.assertEqual(levels, sorted(levels, reverse=True))
+                self.assertEqual(set(levels), {1, 2})
+                self.assertEqual([r['level'] for r in report['final_validation']], [2, 1])
+                self.assertTrue(all(r['passed'] for r in report['final_validation']))
+                self.assertTrue(all(r['success'] is None for r in report['final_validation']))
+                self.assertEqual(report['progress']['path_updates'], 0)
+                self.assertEqual(report['progress']['access_actions'], 2 * len(levels))
+                saved = checkpoint.load(root / 'run/latest.pt')
+                self.assertTrue(saved['training_progress']['curriculum']['completed'])
+                self.assertEqual(report['checkpoint_sha256'], hashlib.sha256((root / 'run/latest.pt').read_bytes()).hexdigest())
+                manifest = prepare(root / 'run', root / 'release')
+                self.assertEqual([r['level'] for r in manifest['validation']], [2, 1])
+                agent = agent_checkpoint.load(root / 'release/agent.pt', device='cpu', compile_model=False)
+                agent.observe(obs())
+                self.assertIsNotNone(agent.state.z)
 
 
 class PublicNativeTests(unittest.TestCase):
