@@ -662,16 +662,22 @@ function render(report) {
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
   plot('speed',[series('Acciones/s · últimos 60 s','recent_tps')],{unit:'acciones/s'});
-  const successFirst=report.config?.path_objective_version===2;
+  const successFirst=report.config?.path_objective_version>=2;
   const margin=report.config?.path_success_margin;
   $('path-objective').textContent=successFirst
     ? `Primero éxito estimado dentro del presupuesto; entre rutas a ${fmt(100*(finite(margin)?margin:.02))} puntos porcentuales de la mejor, menos acciones. Empates aleatorios. La estimación aún debe aprenderse; no certifica el éxito.`
     : 'Criterio histórico: duración estimada más penalización por fracaso.';
   const change=report.objective_changes?.at(-1);
   const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa.`:'';
+  const pathReplay=p.path_replay;
+  const replayNote=pathReplay?` Entrenamiento mezclado: ${fmt(pathReplay.segments)} intentos reales guardados (${fmt(pathReplay.successes)} éxitos); hasta ${fmt(pathReplay.batch_segments)} por actualización.`:'';
+  const augmentationNote=pathReplay?.hindsight?' También aprende de objetivos alcanzados realmente dentro de esas partidas, sin convertir los fracasos originales en victorias.':'';
+  const calibrationNote=pathReplay?.predicted_inputs?' Las predicciones se calibran con el resultado de las acciones reales correspondientes.':'';
+  const recovery=report.path_recovery;
+  const recoveryNote=recovery?` Recuperación previa: ${fmt(recovery.training_episodes)} partidas y ${fmt(recovery.training_actions)} acciones reales adicionales; contabilizadas aparte de estas curvas.`:'';
   $('path-objective-loss').textContent=(successFirst
     ? 'BCE de éxito/fracaso + error de duración solo en trayectorias exitosas. Los intentos interrumpidos no entrenan estas salidas.'
-    : 'Error del coste mixto de duración y fracaso.')+since;
+    : 'Error del coste mixto de duración y fracaso.')+replayNote+augmentationNote+calibrationNote+recoveryNote+since;
   $('predictor-objective').textContent+=since;
   renderPlannerSuccess(report);
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},

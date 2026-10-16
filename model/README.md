@@ -118,7 +118,11 @@ Tras habilitarse, exploración de 100 % a 20 % en sus primeras 8.192 acciones po
 nivel. PathValue usa features compartidas y el presupuesto restante para aprender
 `P(éxito dentro del presupuesto)` con BCE y `log1p(acciones restantes | éxito)`
 con SmoothL1, sólo para segmentos exitosos (cero en el estado final alcanzado).
-Se entrena en segmentos reales completos, cuatro pasadas, LR 3e-4. El fracaso
+Se entrena con cuatro pasadas y LR 1e-4 sobre una mezcla de hasta ocho segmentos
+reales completos, conservados en un replay de hasta 64 segmentos y limitado por
+el presupuesto de bytes del motor. Cada segmento tiene el mismo peso, aunque su
+partida sea más larga. Se guardan observaciones y objetivos originales, y se
+recalculan sus latentes y memorias con los pesos actuales. El fracaso
 observado supervisa la probabilidad; no significa que ese estado sea irresoluble.
 El presupuesto de cada ejemplo es el de la partida menos las acciones ya gastadas,
 también al cambiar de subobjetivo. No se renueva artificialmente.
@@ -132,6 +136,19 @@ explotar errores del predictor. No sustituye la confirmación real del profesor.
 Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como
 métrica histórica, no como criterio de selección ni target de PathValue.
 Un corte administrativo queda censurado, no se etiqueta como fracaso.
+La versión 3 normaliza las features antes de las dos salidas con LayerNorm; la
+versión 4 además usa contraste compartido entre estado y objetivo dentro de la
+máscara, para que el fondo no domine los pequeños cambios relevantes. La versión
+4 es el valor inicial para evaluadores nuevos. La versión se almacena en el
+checkpoint: cargar una versión anterior no cambia su cálculo.
+
+`--path-hindsight` añade un objetivo realmente alcanzado dentro de cada segmento
+muestreado, hasta su primera aparición; conserva el fracaso del objetivo original
+y excluye imágenes de GAME_OVER. `--path-predicted-inputs` empareja los estados
+reales con predicciones de uno a tres pasos usando las acciones que efectivamente
+se ejecutaron. Ambos reciben las mismas etiquetas reales: las predicciones nunca
+aportan objetivos de éxito ni gradientes al modelo del mundo. Las dos opciones
+son explícitas y se heredan al reanudar; por defecto están desactivadas.
 
 **Coherencia de los pesos:** representación, predictor y planner tienen optimizadores
 separados sobre los mismos módulos del agente. Tras actualizar representación se
@@ -180,15 +197,41 @@ Los modos anteriores `balanced`, `union` y `focal` siguen disponibles sin cambia
 El cambio conserva pesos, permisos y contadores, reinicia las rachas y guarda
 el nuevo modo antes de continuar. El reporte registra el cambio y su acción.
 La reconstrucción del encoder/decoder conserva su pérdida anterior.
-Para reanudar un PathValue antiguo se exige `--migrate-path-value`: conserva sus
+Para convertir un PathValue antiguo se exige `--migrate-path-value`: conserva sus
 features compartidas y todos los pesos del mundo, pero reinicia las dos salidas
 (éxito inicial 0,5; duración inicial 16 acciones) y añade la entrada de presupuesto.
-Los siguientes checkpoints ya usan `objective_version: 2` y no necesitan migración.
+La migración desde versiones 1/2 produce `objective_version: 3`, con LayerNorm
+antes de las salidas. Los siguientes checkpoints no necesitan migración. La
+versión 2 sigue siendo cargable sin migración para controles congelados; la
+versión 4 de contraste se inicializa con pesos nuevos; no se reinterpretan
+silenciosamente las features de un checkpoint anterior.
 Se mantienen contadores/permisos, se reinician rachas de promoción y se guarda antes
 de actuar. Como en todo resume, los optimizadores y el replay RAM se reinician.
 El reporte registra las transiciones de objetivo; pérdidas anteriores y nuevas no
 son directamente comparables. La trayectoria muestra por separado la estimación
 de la elección y la de la ruta visualizada, que puede ser una alternativa.
+
+`python -m model.path_recovery --source CHECKPOINT --output DIRECTORIO_NUEVO`
+permite aislar el aprendizaje del evaluador con el mundo congelado. Usa semillas
+de entrenamiento y desarrollo disjuntas, compara con azar y comprueba que la
+evaluación no cambie pesos. `--fresh-path-value --path-objective-version 4`
+inicializa el evaluador de contraste; `--hindsight --predicted-inputs` activa sus
+dos aumentos. `--policy planner --epsilon .25` recoge partidas de la política
+actual con exploración; por defecto recoge acciones aleatorias. `--episodes 0`
+solo evalúa. El reporte contabiliza por separado todas las partidas, acciones y
+actualizaciones de esta recuperación. Su checkpoint no sustituye directamente
+al del currículo: no contiene los contadores ni permisos de la campaña original.
+
+La recuperación del 16/10/2026 en `sc01-v1`, nivel 1, pasó de 7/32 a 25/32
+victorias en el mismo conjunto adicional de desarrollo (azar: 10/32), con el
+mundo congelado durante el diagnóstico y entrenamiento del evaluador. Supuso
+1.536 partidas reales adicionales y 29.084 acciones, separadas de las curvas de
+la campaña. Las evaluaciones de ocho partidas siguen oscilando; no son resultados
+de competición ni prueban descubrimiento autónomo de objetivos. Semillas,
+contadores y huellas de los checkpoints: [evidencia](path_recovery_evidence.json).
+Tras reanudar la campaña con el predictor aprendiendo, las primeras 88 partidas
+terminadas dieron 67 victorias y las tres evaluaciones fijas fueron 5/8, 6/8 y
+5/8. Encoder y decoder conservaron sus pesos durante esa verificación.
 `--encoder-learning-rate-after-predictor 3e-6` también admite un cambio explícito
 al reanudar. El valor debe ser positivo y no mayor que el LR de representación.
 Se guarda en el checkpoint y se hereda al omitir la opción; checkpoints antiguos

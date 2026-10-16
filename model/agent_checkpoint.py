@@ -125,13 +125,18 @@ def load(path, *, device='cpu', compile_model=None, seed=None, max_actions=None,
             if name not in {'proposal_policy', 'path_evaluator'}:
                 raise ValueError(f'Unknown active component: {name}')
             cls = ProposalPolicy if name == 'proposal_policy' else PathValue
-            module = cls(**saved['config']).to(device)
+            upgraded_path = name == 'path_evaluator' and saved['config'].get('objective_version') == 2 and migrate_path_value
             legacy_path = name == 'path_evaluator' and 'objective_version' not in saved['config']
-            if legacy_path:
+            component_config = dict(saved['config'])
+            if upgraded_path or legacy_path:
+                component_config['objective_version'] = 3
+            module = cls(**component_config).to(device)
+            if legacy_path or upgraded_path:
                 if not migrate_path_value or resume_runtime:
                     raise ValueError('Legacy PathValue needs explicit migrate_path_value=True (no live carry)')
                 module.load_legacy_features(saved['weights'])
                 module.migrated_from_legacy = True
+                module.previous_objective_version = saved['config'].get('objective_version', 1)
             else:
                 module.load_state_dict(saved['weights'], strict=True)
             components[name] = module

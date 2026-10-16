@@ -1,0 +1,205 @@
+{
+  "scope": "sc01-v1 / level 1 / synthetic development with teacher-supplied visual goals",
+  "date": "2026-10-16",
+  "baseline_commit": "574e8fe93bff8ad067040cd6df5eb6cac2abde63",
+  "baseline_action": 122398,
+  "baseline_checkpoint_sha256": "3392c0e1f1c28af0bd45f96f95ab9c881f882eaa026d119a5eb91e228153d20d",
+  "adopted_checkpoint_sha256": "bcdcfeca8fff2c9a7c2e441eab193f7217f0410f973d1a99064ae9894d8f30e2",
+  "world_weights_unchanged_during_recovery": true,
+  "development": {
+    "seed_start": 7600001,
+    "seed_step": 2,
+    "episodes": 32,
+    "reused_for_development": true,
+    "results": [
+      {
+        "policy": "original",
+        "wins": 7,
+        "episodes": 32,
+        "winning_seeds": [
+          7600007,
+          7600033,
+          7600041,
+          7600049,
+          7600055,
+          7600057,
+          7600063
+        ],
+        "total_actions": 717
+      },
+      {
+        "policy": "random",
+        "wins": 10,
+        "episodes": 32,
+        "winning_seeds": [
+          7600001,
+          7600029,
+          7600031,
+          7600033,
+          7600039,
+          7600047,
+          7600051,
+          7600055,
+          7600059,
+          7600063
+        ],
+        "total_actions": 714
+      },
+      {
+        "policy": "recovered",
+        "wins": 25,
+        "episodes": 32,
+        "winning_seeds": [
+          7600001,
+          7600003,
+          7600005,
+          7600007,
+          7600009,
+          7600013,
+          7600015,
+          7600017,
+          7600019,
+          7600023,
+          7600027,
+          7600029,
+          7600033,
+          7600037,
+          7600039,
+          7600041,
+          7600043,
+          7600045,
+          7600049,
+          7600051,
+          7600053,
+          7600055,
+          7600057,
+          7600061,
+          7600063
+        ],
+        "total_actions": 353
+      }
+    ]
+  },
+  "continued_fixed_eight": [
+    {
+      "episodes": 0,
+      "wins": 5
+    },
+    {
+      "episodes": 64,
+      "wins": 6
+    },
+    {
+      "episodes": 128,
+      "wins": 5
+    },
+    {
+      "episodes": 192,
+      "wins": 4
+    },
+    {
+      "episodes": 256,
+      "wins": 7
+    },
+    {
+      "episodes": 320,
+      "wins": 6
+    },
+    {
+      "episodes": 384,
+      "wins": 6
+    },
+    {
+      "episodes": 448,
+      "wins": 3
+    },
+    {
+      "episodes": 512,
+      "wins": 6
+    }
+  ],
+  "additional_training": {
+    "training_episodes": 1536,
+    "training_actions": 29084,
+    "path_updates": 6144,
+    "phases": [
+      {
+        "name": "contrast",
+        "episodes": 256,
+        "actions": 5999,
+        "updates": 1024,
+        "first_seed": 3800000,
+        "last_seed": 3800510
+      },
+      {
+        "name": "calibration",
+        "episodes": 512,
+        "actions": 11832,
+        "updates": 2048,
+        "first_seed": 3801024,
+        "last_seed": 3802046
+      },
+      {
+        "name": "on_policy",
+        "episodes": 256,
+        "actions": 3761,
+        "updates": 1024,
+        "first_seed": 3804000,
+        "last_seed": 3804510
+      },
+      {
+        "name": "continuation",
+        "episodes": 512,
+        "actions": 7492,
+        "updates": 2048,
+        "first_seed": 3804512,
+        "last_seed": 3805534
+      }
+    ]
+  },
+  "regression": {
+    "case": "One real success followed by one real failure at p=0.5, no parameter step",
+    "old_logit_gradient": 0.5,
+    "mixed_replay_logit_gradient": 0.0
+  },
+  "limitations": [
+    "Development cohorts are reused; these are not held-out competition results.",
+    "The synthetic teacher supplies the goal; autonomous goal discovery is not measured.",
+    "Eight-game measurements fluctuate; the loss decrease alone is not evidence of success."
+  ],
+  "live_resume": {
+    "start_action": 122398,
+    "observed_through_action": 123292,
+    "status": "improvement_observed_training_continues",
+    "completed_episodes": 88,
+    "wins": 67,
+    "evaluations": [
+      {
+        "actions": 122641,
+        "successes": 5,
+        "episodes": 8
+      },
+      {
+        "actions": 122909,
+        "successes": 6,
+        "episodes": 8
+      },
+      {
+        "actions": 123155,
+        "successes": 5,
+        "episodes": 8
+      }
+    ],
+    "weight_verification": {
+      "action": 122909,
+      "encoder_unchanged": true,
+      "decoder_unchanged": true,
+      "changed_dynamics_tensors": 147,
+      "path_learning": {
+        "hindsight": true,
+        "predicted_inputs": true
+      },
+      "provenance_preserved": true
+    }
+  }
+}

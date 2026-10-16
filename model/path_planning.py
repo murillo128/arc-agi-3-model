@@ -3,15 +3,16 @@
 The agent accepts only the current visual goal. The synthetic oracle, distance
 and completion predicate are deliberately absent from this module.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
+import random
 
 import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .data import Observation
+from .data import Observation, Episode
 from .learning import State
 from .planning import candidates
 
@@ -32,16 +33,17 @@ class PathConfig:
 
 class PathValue(nn.Module):
     """Estimate success within budget and log1p duration conditional on success."""
-    def __init__(self, latent, memory, width=64, objective_version=2):
+    def __init__(self, latent, memory, width=64, objective_version=4):
         super().__init__()
-        if objective_version != 2:
+        if objective_version not in {2, 3, 4}:
             raise ValueError('Unsupported PathValue objective')
-        self.config = dict(latent=latent, memory=memory, width=width, objective_version=2)
+        self.config = dict(latent=latent, memory=memory, width=width, objective_version=objective_version)
         self.project = nn.Linear(latent, width)
         self.spatial = nn.Sequential(nn.Conv2d(width * 3 + 3, width, 3, padding=1), nn.SiLU(),
             nn.Conv2d(width, width, 3, padding=1), nn.SiLU(), nn.AdaptiveAvgPool2d((4, 4)))
         self.memory = nn.Linear(memory, width)
         self.readout = nn.Sequential(nn.Linear(width * 17, 128), nn.SiLU(), nn.Linear(128, 1))
+        self.normalization = nn.LayerNorm(128) if objective_version >= 3 else nn.Identity()
         self.budget = nn.Linear(1, 128, bias=False)
         self.success = nn.Linear(128, 1)
         nn.init.zeros_(self.budget.weight)
@@ -52,28 +54,40 @@ class PathValue(nn.Module):
 
     def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
         z, h, goal, mask = z.float(), h.float(), goal.float(), mask.float()
+        mask = mask.expand(z.shape[0], -1, -1)
+        if self.config['objective_version'] >= 4:
+            weight = mask.sum(1, keepdim=True).clamp_min(1e-6)
+            center = ((z + goal) * mask).sum(1, keepdim=True) / (2 * weight)
+            z, goal = (z - center) * mask, (goal - center) * mask
+            scale = ((z.square() + goal.square()).mean(-1, keepdim=True).sum(1, keepdim=True)
+                     / (2 * weight)).clamp_min(.0001).sqrt()
+            z, goal = z / scale, goal / scale
         current = self.project(z)
         target = self.project(goal).expand_as(current)
-        mask = mask.expand(z.shape[0], -1, -1)
         x = torch.linspace(-1, 1, columns, device=z.device).repeat(rows)
         y = torch.linspace(-1, 1, rows, device=z.device).repeat_interleave(columns)
         xy = torch.stack((x, y), -1)[None].expand(z.shape[0], -1, -1)
         features = torch.cat((current, target, target - current, mask, xy), -1)
         image = features.transpose(1, 2).reshape(z.shape[0], -1, rows, columns)
-        hidden = self.readout[0](torch.cat((self.spatial(image).flatten(1), self.memory(h)), -1))
-        hidden = F.silu(hidden + self.budget(remaining_budget.float().reshape(-1, 1).log1p()))
+        memory = self.memory(h)
+        if self.config['objective_version'] >= 4:
+            memory = memory.tanh()
+        hidden = self.readout[0](torch.cat((self.spatial(image).flatten(1), memory), -1))
+        hidden = F.silu(self.normalization(hidden + self.budget(remaining_budget.float().reshape(-1, 1).log1p())))
         return self.success(hidden).flatten(), F.softplus(self.readout[-1](hidden)).flatten()
 
     def load_legacy_features(self, weights):
         """Explicit migration: old failure-penalty output is not a success duration."""
         current = self.state_dict()
-        new_keys = {'budget.weight', 'success.weight', 'success.bias'}
-        if set(weights) != set(current) - new_keys:
+        new_keys = {'budget.weight', 'success.weight', 'success.bias',
+                    'normalization.weight', 'normalization.bias'}
+        shared = set(current) - new_keys
+        if set(weights) not in (shared, shared | {'budget.weight', 'success.weight', 'success.bias'}):
             raise ValueError('Unexpected legacy PathValue weights')
         for key, value in weights.items():
-            if value.shape != current[key].shape:
+            if key not in current or value.shape != current[key].shape:
                 raise ValueError(f'Unexpected legacy PathValue shape: {key}')
-            if key not in {'readout.2.weight', 'readout.2.bias'}:
+            if key in shared - {'readout.2.weight', 'readout.2.bias'}:
                 current[key] = value
         self.load_state_dict(current, strict=True)
 
@@ -214,54 +228,155 @@ def real_states(engine, episode):
 
 
 class PathLearner:
-    def __init__(self, planner, learning_rate=3e-4, compile_model=False):
-        self.planner = planner
+    """Fit a bounded mixture of completed real goals, never the last outcome alone."""
+    def __init__(self, planner, learning_rate=1e-4, compile_model=False, *, capacity=64, batch_segments=8, seed=0,
+                 hindsight=False, predicted_inputs=False):
+        if not 1 <= batch_segments <= capacity:
+            raise ValueError('Require 1 <= batch_segments <= capacity')
+        self.planner, self.capacity, self.batch_segments = planner, capacity, batch_segments
+        self.hindsight = hindsight
+        self.predicted_inputs = predicted_inputs
+        self.last_hindsight = 0
+        self.byte_limit = getattr(planner.engine.config, 'replay_bytes', 128 * 1024 * 1024)
+        self.rng, self.segments = random.Random(seed), []
         self.optimizer = torch.optim.AdamW(planner.evaluator.parameters(), lr=learning_rate)
-        # Independent train/inference compile frames avoid requires_grad guards.
         self.readout = torch.compile(self.forward, fullgraph=True, dynamic=True) if compile_model else self.forward
-        self.updates = 0
+        self.updates, self.last_terms = 0, None
 
     def forward(self, z, h, goal, mask, rows, columns, remaining_budget):
         return self.planner.evaluator(z, h, goal, mask, rows, columns, remaining_budget)
 
-    def update(self, episode, start, success, budget, *, passes=4):
-        """Monte Carlo targets from a FINISHED real subgoal segment, no inventions.
+    def status(self):
+        return dict(segments=len(self.segments), successes=sum(s['success'] for s in self.segments),
+                    capacity=self.capacity, batch_segments=self.batch_segments, terms=self.last_terms,
+                    hindsight=self.hindsight, hindsight_examples=self.last_hindsight,
+                    predicted_inputs=self.predicted_inputs)
 
-Success/failure supervises reachability within the episode budget. Duration is
-supervised only on successful segments, including zero at the reached goal.
-Cut-off runs are not failures. States and targets are detached real experience.
+    def update(self, episode, start, success, budget, *, passes=4):
+        """Only observed, finished segments enter replay; callers exclude evaluation.
+
+Raw observations/goals are retained. Every sampled segment gets current encodings
+and recurrent memories; learned tensors are temporary and never replayed stale.
+Each segment has equal BCE weight, regardless of its length. Duration has a
+separate conditional mean over successful segments only.
 """
         if type(success) is not bool:
             raise ValueError('Path targets require a completed real outcome')
         planner, engine = self.planner, self.planner.engine
-        states = real_states(engine, episode)
         end = len(episode.actions)
-        indices = list(range(start, end + 1))
-        indices = [i for i in indices if states[i].z is not None]
-        if not indices:
+        if not 0 <= start <= end <= budget or passes < 1:
+            raise ValueError('Invalid completed goal segment')
+        if any(b.starts_new_level(a) for a,b in zip(episode.observations,episode.observations[1:])):
+            raise ValueError('Cannot replay a segment crossing levels')
+        observations = [replace(o, frames=np.array(o.frames, copy=True),
+            action_input=replace(o.action_input, data=dict(o.action_input.data)) if o.action_input else None)
+            for o in episode.observations]
+        snapshot = Episode(observations, [replace(a, data=dict(a.data)) for a in episode.actions])
+        frame, mask = np.array(planner.goal['frame'],copy=True), np.array(planner.goal['pixel_mask'],copy=True)
+        record = dict(episode=snapshot,start=start,end=end,success=success,budget=budget,frame=frame,mask=mask,
+                      nbytes=snapshot.nbytes+frame.nbytes+mask.nbytes)
+        if record['nbytes'] > self.byte_limit:
+            raise MemoryError('Completed goal exceeds planner replay byte limit')
+        self.segments.append(record)
+        while len(self.segments)>self.capacity or sum(s['nbytes'] for s in self.segments)>self.byte_limit:
+            self.segments.pop(0)
+        # Mixing outcomes prevents a run of failures overwriting every old success.
+        pool=[s for s in self.segments[:-1] if s['frame'].shape==frame.shape]
+        selected=self.rng.sample(pool,min(len(pool),self.batch_segments-1))+[record]
+        engine.model.eval()
+        encoded=[]
+        patch=engine.model.config.patch
+        height,width=frame.shape
+        rows,columns=(height+patch-1)//patch,(width+patch-1)//patch
+        with torch.no_grad(),engine.autocast():
+            self.last_hindsight = 0
+            for item in selected:
+                states=real_states(engine,item['episode'])
+                first_encoded = len(encoded)
+                goal_mask=torch.tensor(item['mask'],device=engine.device,dtype=torch.float32)[None,None]
+                goal_mask=F.avg_pool2d(goal_mask,patch,patch,ceil_mode=True).flatten(2).transpose(1,2)
+                goals = [item]
+                if self.hindsight:
+                    future = [i for i in range(item['start']+1,item['end']+1)
+                              if states[i].z is not None and item['episode'].observations[i].state != 'GAME_OVER']
+                    if future:
+                        end = self.rng.choice(future)
+                        frame = item['episode'].observations[end].final
+                        first = next(i for i in range(item['start'],end+1)
+                                     if item['episode'].observations[i].final is not None and
+                                     np.array_equal(item['episode'].observations[i].final[item['mask']],frame[item['mask']]))
+                        if first > item['start']:
+                            goals.append(dict(item,frame=frame,end=first,success=True))
+                            self.last_hindsight += 1
+                for target in goals:
+                    indices=[i for i in range(target['start'],target['end']+1) if states[i].z is not None]
+                    if not indices:
+                        continue
+                    if self.hindsight:
+                        indices = [indices[-1]] + self.rng.sample(indices[:-1],min(3,len(indices)-1))
+                    else:
+                        indices=self.rng.sample(indices,min(4,len(indices)))
+                    target_obs=Observation(target['frame'][None],(),'NOT_FINISHED',0,0)
+                    goal=engine.encode([target_obs])[0].detach()
+                    encoded.append(dict(z=torch.stack([states[i].z for i in indices]).detach(),
+                        h=torch.cat([states[i].h for i in indices]).detach(),goal=goal,mask=goal_mask,
+                        indices=indices,record=target))
+                if self.predicted_inputs:
+                    needed = sorted({i for entry in encoded[first_encoded:] for i in entry['indices']})
+                    groups = {}
+                    predicted = {0: (states[0].z, states[0].h)}
+                    for i in needed:
+                        if i:
+                            horizons = [n for n in range(1,min(3,i)+1) if states[i-n].z is not None]
+                            if horizons:
+                                groups.setdefault(self.rng.choice(horizons), []).append(i)
+                            else:
+                                predicted[i] = (states[i].z,states[i].h)
+                    for steps, destinations in groups.items():
+                        origins = [i-steps for i in destinations]
+                        z = torch.stack([states[i].z for i in origins])
+                        h = torch.cat([states[i].h for i in origins])
+                        for offset in range(steps):
+                            actions = engine.actions([item['episode'].actions[i+offset] for i in origins])
+                            z,h,_ = engine.predict(z,h,actions,height,width)
+                        for j,i in enumerate(destinations):
+                            predicted[i] = (z[j].detach(),h[j:j+1].detach())
+                    for entry in encoded[first_encoded:]:
+                        indices = entry['indices']
+                        entry['z'] = torch.cat((entry['z'],torch.stack([predicted[i][0] for i in indices])))
+                        entry['h'] = torch.cat((entry['h'],torch.cat([predicted[i][1] for i in indices])))
+                        entry['indices'] = indices * 2
+                # A real raw replay entry must not retain weight-dependent tensors.
+                item['episode'].latent_cache.clear()
+                item['episode'].prepared.clear()
+        if not encoded:
             return None
+        z=torch.cat([v['z'] for v in encoded]);h=torch.cat([v['h'] for v in encoded])
+        goals=torch.cat([v['goal'][None].expand(len(v['indices']),-1,-1) for v in encoded])
+        masks=torch.cat([v['mask'].expand(len(v['indices']),-1,-1) for v in encoded])
+        targets=torch.tensor([float(v['record']['success']) for v in encoded for _ in v['indices']],device=engine.device)
+        durations=torch.tensor([math.log1p(v['record']['end']-i) for v in encoded for i in v['indices']],device=engine.device)
+        budgets=torch.tensor([v['record']['budget']-i for v in encoded for i in v['indices']],device=engine.device)
+        weights=torch.tensor([1/len(v['indices'])/len(encoded) for v in encoded for _ in v['indices']],device=engine.device)
+        positive=targets.bool()
         planner.evaluator.train().requires_grad_(True)
-        patch = engine.model.config.patch
-        height, width = states[0].geometry
-        rows, columns = (height + patch - 1) // patch, (width + patch - 1) // patch
-        losses = []
+        losses=[];terms=[]
         for _ in range(passes):
-            for offset in range(0, len(indices), 16):
-                selected = indices[offset:offset + 16]
-                z = torch.stack([states[i].z for i in selected]).detach()
-                h = torch.cat([states[i].h for i in selected]).detach()
-                target = torch.tensor([math.log1p(end - i) for i in selected], device=engine.device)
-                budgets = torch.tensor([max(0, budget - i) for i in selected], device=engine.device)
-                self.optimizer.zero_grad(set_to_none=True)
-                with engine.autocast():
-                    logits, duration = self.readout(z, h, planner.goal['z'][None], planner.goal['mask'],
-                                                    rows, columns, budgets)
-                loss = F.binary_cross_entropy_with_logits(logits.float(), torch.full_like(logits.float(), float(success)))
-                if success:
-                    loss = loss + F.smooth_l1_loss(duration.float(), target)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(planner.evaluator.parameters(), 1., error_if_nonfinite=True)
-                self.optimizer.step()
-                self.updates += 1
-                losses.append(float(loss.detach()))
-        return sum(losses) / len(losses)
+            self.optimizer.zero_grad(set_to_none=True)
+            with engine.autocast():
+                logits,duration=self.readout(z,h,goals,masks,rows,columns,budgets)
+            classification=(F.binary_cross_entropy_with_logits(logits.float(),targets,reduction='none')*weights).sum()
+            loss=classification
+            duration_loss=None
+            if positive.any():
+                duration_loss=(F.smooth_l1_loss(duration.float()[positive],durations[positive],reduction='none')
+                               *weights[positive]).sum()/weights[positive].sum()
+                loss=loss+duration_loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(planner.evaluator.parameters(),1.,error_if_nonfinite=True)
+            self.optimizer.step();self.updates+=1
+            losses.append(float(loss.detach()))
+            terms.append((float(classification.detach()),float(duration_loss.detach()) if duration_loss is not None else None))
+        self.last_terms=dict(success_bce=sum(t[0] for t in terms)/passes,
+                             successful_duration=sum(t[1] for t in terms)/passes if terms[0][1] is not None else None)
+        return sum(losses)/len(losses)

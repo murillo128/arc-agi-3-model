@@ -299,7 +299,7 @@ def main(argv=None):
     parser.add_argument('--representation-learning-rate', type=float, default=3e-6)
     parser.add_argument('--encoder-learning-rate-after-predictor', type=float,
                         help='Lower encoder LR after first predictor admission; decoder unchanged. Resume inherits checkpoint.')
-    parser.add_argument('--migrate-path-value', action='store_true', help='Reset legacy mixed-cost outputs for success-first training; preserve world weights')
+    parser.add_argument('--migrate-path-value', action='store_true', help='Upgrade old path evaluators to normalized success-first outputs; preserve world weights')
     parser.add_argument('--prediction-delta-loss', choices=('balanced', 'union', 'focal', 'recall_focal'),
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
@@ -310,6 +310,10 @@ def main(argv=None):
                         help='RAM-only real episode capacity; default 0 (disabled), or inherit checkpoint on resume')
     parser.add_argument('--predictor-batch-size', type=int,
                         help='Distinct real episodes per predictor update; default 1, or inherit checkpoint on resume')
+    parser.add_argument('--path-hindsight', action=argparse.BooleanOptionalAction, default=None,
+                        help='Additional goals actually reached in real planner replay; resume inherits policy')
+    parser.add_argument('--path-predicted-inputs', action=argparse.BooleanOptionalAction, default=None,
+                        help='Calibrate predicted inputs against real outcomes; resume inherits policy')
     args = parser.parse_args(argv)
     if args.update_representation_threshold and not args.resume:
         parser.error('--update-representation-threshold requires --resume')
@@ -369,7 +373,7 @@ def main(argv=None):
             if key == 'evaluate_every' and args.update_evaluation_interval:
                 continue
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder', 'migrate_path_value',
-                           'predictor_replay_episodes', 'predictor_batch_size',
+                           'predictor_replay_episodes', 'predictor_batch_size', 'path_hindsight', 'path_predicted_inputs',
                            'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
@@ -436,6 +440,19 @@ def main(argv=None):
         report['resumed_from']['predictor_replay_buffer'] = 'empty'
         if changed_replay:
             report['resumed_from']['predictor_replay'] = dict(old=previous_replay, new=replay_config)
+    previous_path_learning = (restored or {}).get('path_learning', dict(hindsight=False, predicted_inputs=False))
+    path_learning = {name: (previous_path_learning[name] if value is None else value)
+                     for name, value in (('hindsight', args.path_hindsight),
+                                         ('predicted_inputs', args.path_predicted_inputs))}
+    changed_path_learning = path_learning != previous_path_learning
+    report['config'].update({f'path_{name}': value for name, value in path_learning.items()})
+    if args.resume:
+        report['resumed_from']['path_replay_buffer'] = 'empty'
+        if changed_path_learning:
+            report['resumed_from']['path_learning'] = dict(old=previous_path_learning, new=path_learning)
+    recovery = (restored or {}).get('path_recovery')
+    if recovery:
+        report['path_recovery'] = recovery
     previews = PredictionSamples()
     trajectories = PlannerTrajectory(args.output / 'planner_trajectory.json')
     throughput = RecentThroughput()
@@ -502,9 +519,11 @@ def main(argv=None):
                               width=initial.get('outcome_width', 64)).to(args.device)
             evaluator = None
         migrated_path = bool(evaluator is not None and getattr(evaluator, 'migrated_from_legacy', False))
+        path_version = evaluator.config['objective_version'] if evaluator is not None else 4
         if args.resume and migrated_path:
-            report['resumed_from']['path_objective'] = dict(old='failure_penalty', new='success_first', reset_outputs=True)
-        report['config'].update(path_objective_version=2, path_success_margin=PathConfig().success_margin)
+            report['resumed_from']['path_objective'] = dict(old_version=evaluator.previous_objective_version,
+                new_version=path_version, reset_outputs=True)
+        report['config'].update(path_objective_version=path_version, path_success_margin=PathConfig().success_margin)
         engine.optimizer_bits = 8 if args.device == 'cuda' else 32
         previous_loss = engine.config.prediction_delta_loss
         selected_loss = args.prediction_delta_loss or previous_loss
@@ -522,7 +541,7 @@ def main(argv=None):
             at_action = (restored or {}).get('actions', 0)
             changes = [r for r in report.get('objective_changes', []) if r['actions'] <= at_action]
             changes.append(dict(actions=at_action, prediction_delta_loss=selected_loss,
-                                path_objective_version=2, path_heads_reset=migrated_path))
+                                path_objective_version=path_version, path_heads_reset=migrated_path))
             report['objective_changes'] = changes[-32:]
         if args.resume and changed_loss:
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
@@ -547,7 +566,7 @@ def main(argv=None):
         world = OnlinePredictor(engine, None, args.learning_rate, agent.config.path.horizon)
         predictor_replay = (PredictorReplay(engine, **replay_config, horizon=world.horizon, seed=args.seed)
                             if replay_config['episodes'] else None)
-        path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda')
+        path_learner = PathLearner(agent.planner, compile_model=args.device == 'cuda', seed=args.seed, **path_learning)
         factory = Factory(args.game, Path(__file__).resolve().parents[1] / 'games')
         actions, episode_index, planner_actions = 0, 0, dict.fromkeys(curriculum.readiness, 0)
         if restored:
@@ -651,6 +670,8 @@ def main(argv=None):
                 'freeze_representation_after_planner': freeze_after_planner,
                 'encoder_learning_rate_after_predictor': encoder_rate,
                 'predictor_replay': replay_config,
+                'path_learning': path_learning,
+                'path_recovery': recovery,
                 'curriculum': curriculum.snapshot(),
                 'active_pair': active_pair,
                 'manual_controls': list(report['manual_controls']),
@@ -700,10 +721,11 @@ def main(argv=None):
                 path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled,
                 representation_learning_rates=representation.learning_rates,
                 encoder_frozen=representation.freeze_encoder, representation_frozen=representation.frozen,
+                path_replay=path_learner.status(),
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval or changed_loss or migrated_path or changed_freeze or changed_replay
-                            or changed_encoder_rate or changed_planner_freeze):
+                            or changed_encoder_rate or changed_planner_freeze or changed_path_learning):
             save('resume')
         if not args.resume:
             save('initial')
@@ -741,6 +763,7 @@ def main(argv=None):
                 publish(phase='training', game=game, level=level, actions=actions, episodes=episode_index + 1,
                         representation_updates=representation.updates,
                         predictor_updates=world.updates, path_updates=path_learner.updates,
+                        path_replay=path_learner.status(),
                         predictor_enabled=readiness.predictor, planner_enabled=readiness.planner,
                         tps=point['tps'], seconds=seconds, **{k: v for k, v in row.items() if k not in ('counts', 'segment')})
             publish(force=True, phase='warmup' if began_learning is None else 'training', game=game, level=level,

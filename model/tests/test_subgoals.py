@@ -1,6 +1,7 @@
 """Synthetic teacher, real-transition learning and portable goal control contracts."""
 from dataclasses import replace
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
+import io
 import json
 import math
 from pathlib import Path
@@ -119,6 +120,34 @@ def path_agent():
 
 
 class PathTests(unittest.TestCase):
+    def test_recovery_experiment_separates_evaluation_and_preserves_world(self):
+        from model.path_recovery import main
+        agent = path_agent()
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            source = root/'source.pt'
+            agent_checkpoint.save(source, agent)
+            common = ['--source',str(source),'--device','cpu','--evaluation-episodes','1']
+            main(common+['--output',str(root/'control'),'--episodes','0'])
+            control = json.loads((root/'control/report.json').read_text())
+            self.assertEqual(control['training'], [])
+            self.assertEqual(len(control['evaluations']), 2)
+            main(common+['--output',str(root/'candidate'),'--episodes','1','--evaluate-every','1',
+                         '--policy','planner','--epsilon','1','--learning-rate','3e-5',
+                         '--replay-capacity','2','--replay-batch','2'])
+            trained = json.loads((root/'candidate/report.json').read_text())
+            self.assertEqual(len(trained['training']), 1)
+            self.assertEqual(len(trained['evaluations']), 3)
+            train_seeds = {e['seed'] for e in trained['training']}
+            dev_seeds = {e['seed'] for row in trained['evaluations'] for e in row['results']}
+            self.assertFalse(train_seeds & dev_seeds)
+            self.assertEqual(trained['training_actions'], sum(e['actions'] for e in trained['training']))
+            self.assertEqual(trained['replay']['capacity'], 2)
+            self.assertEqual(trained['replay']['batch_segments'], 2)
+            result = agent_checkpoint.load(root/'candidate/latest.pt')
+            self.assertEqual(fingerprint(result.engine.model), fingerprint(agent.engine.model))
+            self.assertNotEqual(fingerprint(result.path_evaluator), fingerprint(agent.path_evaluator))
+
     def test_full_forecast_keeps_short_decision_and_labels_pruned_alternatives(self):
         # State digits record the literal action prefix. A cheap one-step
         # decision must remain selected even when its full preview costs more.
@@ -250,14 +279,15 @@ class PathTests(unittest.TestCase):
         states = [State(torch.zeros(1,1),torch.zeros(1,1),(1,1)) for _ in range(3)]
         for success in (True,False):
             value = Value()
-            engine = SimpleNamespace(device=torch.device('cpu'),model=SimpleNamespace(config=SimpleNamespace(patch=1)),autocast=nullcontext)
-            planner = SimpleNamespace(engine=engine,evaluator=value,goal=dict(z=torch.zeros(1,1),mask=torch.ones(1,1,1)))
+            engine = path_agent().engine
+            planner = SimpleNamespace(engine=engine,evaluator=value,
+                goal=dict(frame=obs(1).final, pixel_mask=np.ones((4,4),dtype=bool)))
             learner = PathLearner(planner)
             with patch('model.path_planning.real_states',return_value=states):
                 loss = learner.update(episode,1,success,2,passes=1)
             expected = math.log(2) + ((.5*math.log(2)**2)/2 if success else 0)
             self.assertAlmostEqual(loss, expected, places=6)
-            self.assertEqual(value.budgets, [[1,0]])
+            self.assertEqual(sorted(value.budgets[0]), [0,1])
             self.assertGreater(float(value.success.detach()) * (1 if success else -1), 0)
             if success:
                 self.assertGreater(float(value.duration.detach()), 0)
@@ -273,7 +303,7 @@ class PathTests(unittest.TestCase):
             saved = checkpoint.load(filename)
             value = saved['components']['path_evaluator']
             del value['config']['objective_version']
-            for key in ('budget.weight','success.weight','success.bias'):
+            for key in ('budget.weight','success.weight','success.bias','normalization.weight','normalization.bias'):
                 del value['weights'][key]
             value['weights']['readout.2.weight'].fill_(9)
             value['weights']['readout.2.bias'].fill_(8)
@@ -288,6 +318,147 @@ class PathTests(unittest.TestCase):
             agent_checkpoint.save(filename,migrated)
             reloaded=agent_checkpoint.load(filename)
             self.assertEqual(fingerprint(reloaded.path_evaluator),fingerprint(migrated.path_evaluator))
+
+    def test_version_two_control_loads_exactly_and_upgrade_is_explicit(self):
+        agent = path_agent()
+        agent.path_evaluator = PathValue(agent.engine.model.config.latent,
+            agent.engine.model.config.memory, width=4, objective_version=2)
+        with tempfile.TemporaryDirectory() as temp:
+            filename = Path(temp)/'v2.pt'
+            agent_checkpoint.save(filename, agent)
+            control = agent_checkpoint.load(filename)
+            self.assertEqual(fingerprint(control.path_evaluator), fingerprint(agent.path_evaluator))
+            upgraded = agent_checkpoint.load(filename, migrate_path_value=True)
+            self.assertEqual(upgraded.path_evaluator.config['objective_version'], 3)
+            self.assertEqual(fingerprint(upgraded.engine.model), fingerprint(agent.engine.model))
+            self.assertEqual(fingerprint(upgraded.path_evaluator.project), fingerprint(agent.path_evaluator.project))
+            self.assertIsInstance(upgraded.path_evaluator.normalization, nn.LayerNorm)
+            agent_checkpoint.save(filename, upgraded)
+            reloaded = agent_checkpoint.load(filename)
+            self.assertEqual(fingerprint(reloaded.path_evaluator), fingerprint(upgraded.path_evaluator))
+
+    def test_goal_contrast_preserves_relative_changes_and_ignores_shared_offset(self):
+        torch.manual_seed(23)
+        value = PathValue(4,4,width=4,objective_version=4)
+        nn.init.normal_(value.success.weight)
+        nn.init.normal_(value.readout[-1].weight)
+        z, goal = torch.randn(1,4,4), torch.randn(1,4,4)
+        h, mask, budget = torch.zeros(1,4), torch.tensor([[[1.],[1.],[0.],[1.]]]), torch.tensor([8])
+        evaluate = lambda a,b: torch.stack(value(a,h,b,mask,2,2,budget))
+        original = evaluate(z,goal)
+        # Shared per-channel background offsets and common scales should not
+        # drown the state-goal difference. A goal-only change must remain visible.
+        offset = torch.tensor([10.,-5.,4.,3.])
+        torch.testing.assert_close(evaluate(z*3+offset,goal*3+offset),original,rtol=1e-5,atol=1e-5)
+        other = z.clone();other[:,2]=1000
+        torch.testing.assert_close(evaluate(other,goal),original,rtol=0,atol=0)
+        self.assertGreater(float((evaluate(z,goal+offset)-original).abs().max()),1e-3)
+        zero = torch.zeros_like(z)
+        self.assertTrue(torch.isfinite(evaluate(zero,zero)).all())
+        self.assertGreater(float((evaluate(zero,torch.ones_like(goal))-evaluate(zero,zero)).abs().max()),1e-3)
+
+    def test_completed_replay_mixes_outcomes_and_owns_bounded_raw_experience(self):
+        class Value(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.logit = nn.Parameter(torch.tensor(0.))
+                self.duration = nn.Parameter(torch.tensor(0.))
+            def forward(self,z,h,goal,mask,rows,columns,budget):
+                self.inputs = z.detach().clone(), goal.detach().clone()
+                return self.logit.expand(len(z)), self.duration.expand(len(z))
+        agent = path_agent()
+        value = Value()
+        planner = SimpleNamespace(engine=agent.engine, evaluator=value,
+            goal=dict(frame=obs(1).final.copy(), pixel_mask=np.ones((4,4),dtype=bool)))
+        learner = PathLearner(planner, learning_rate=0., capacity=2, batch_segments=2)
+        episode = Episode([obs(1),obs(2)], [Action(1)])
+        learner.update(episode,0,True,8,passes=1)
+        saved_frame = learner.segments[0]['episode'].observations[0].frames.copy()
+        episode.observations[0].frames.fill(7)
+        planner.goal['frame'].fill(4)
+        np.testing.assert_array_equal(learner.segments[0]['episode'].observations[0].frames, saved_frame)
+        self.assertTrue((learner.segments[0]['frame'] == 1).all())
+        # One success and one failure with equal segment weight have cancelling
+        # BCE gradients at p=.5. Last-episode-only training instead pushes down.
+        # A changed encoder now returns different, literal feature values.
+        # Both stored observations AND their stored goal must be re-encoded.
+        def changed_encoding(observations, **kwargs):
+            return [torch.full((1,agent.engine.model.config.latent),100.+float(o.final[0,0]))
+                    for o in observations]
+        with patch.object(agent.engine, 'encode', side_effect=changed_encoding):
+            learner.update(Episode([obs(3),obs(4),obs(5)], [Action(1),Action(2)]),0,False,8,passes=1)
+        features, goals = value.inputs
+        self.assertEqual(set(zip(features[:,0,0].tolist(),goals[:,0,0].tolist())),
+                         {(101.,101.),(102.,101.),(103.,104.),(104.,104.),(105.,104.)})
+        self.assertAlmostEqual(float(value.logit.grad), 0., places=6)
+        self.assertAlmostEqual(learner.last_terms['success_bce'], math.log(2), places=6)
+        self.assertLess(float(value.duration.grad), 0.)
+        self.assertEqual(learner.status()['successes'], 1)
+        self.assertTrue(all(s['episode'].device_bytes == 0 for s in learner.segments))
+        learner.update(Episode([obs(6)], []),0,False,8,passes=1)
+        self.assertEqual(learner.status()['segments'], 2)
+        self.assertEqual(learner.status()['successes'], 0)
+
+    def test_hindsight_uses_reached_nonfailure_frames_without_relabeling_original(self):
+        class Value(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.logit = nn.Parameter(torch.tensor(0.))
+                self.duration = nn.Parameter(torch.tensor(0.))
+            def forward(self,z,h,goal,mask,rows,columns,budget):
+                return self.logit.expand(len(z)), self.duration.expand(len(z))
+        agent = path_agent()
+        value = Value()
+        planner = SimpleNamespace(engine=agent.engine, evaluator=value,
+            goal=dict(frame=obs(9).final.copy(), pixel_mask=np.ones((4,4),dtype=bool)))
+        learner = PathLearner(planner, learning_rate=0., hindsight=True)
+        # The original goal 9 failed. Frame 2 was really reached in one action;
+        # GAME_OVER frame 3 must not become a successful auxiliary target.
+        episode = Episode([obs(1),obs(2),replace(obs(3),state='GAME_OVER')], [Action(1),Action(2)])
+        loss = learner.update(episode,0,False,8,passes=1)
+        self.assertAlmostEqual(loss, math.log(2)+math.log(2)**2/4, places=6)
+        self.assertAlmostEqual(float(value.logit.grad), 0., places=6)
+        self.assertEqual(learner.status()['successes'], 0)
+        self.assertEqual(learner.status()['hindsight_examples'], 1)
+        self.assertFalse(learner.segments[0]['success'])
+        self.assertTrue((learner.segments[0]['frame'] == 9).all())
+        # An already reached auxiliary goal supplies no evidence of movement.
+        learner = PathLearner(planner, learning_rate=0., hindsight=True)
+        learner.update(Episode([obs(1),obs(1),replace(obs(1),state='GAME_OVER')],
+                               [Action(1),Action(2)]),0,False,8,passes=1)
+        self.assertEqual(learner.status()['hindsight_examples'], 0)
+
+    def test_predicted_inputs_use_executed_prefixes_but_real_labels_and_no_world_gradients(self):
+        class Value(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.logit = nn.Parameter(torch.tensor(0.))
+                self.batch = None
+            def forward(self,z,h,goal,mask,rows,columns,budget):
+                self.batch = (z.detach().clone(),budget.tolist())
+                return self.logit.expand(len(z)), torch.zeros(len(z))
+        agent = path_agent()
+        value = Value()
+        planner = SimpleNamespace(engine=agent.engine, evaluator=value,
+            goal=dict(frame=obs(9).final, pixel_mask=np.ones((4,4),dtype=bool)))
+        learner = PathLearner(planner,learning_rate=0.,predicted_inputs=True)
+        episode = Episode([obs(1),obs(2),obs(3)],[Action(1),Action(2)])
+        states = [State(torch.full((1,1),float(i*10)),torch.zeros(1,1),(4,4)) for i in range(3)]
+        def predict(z,h,actions,height,width):
+            self.assertFalse(torch.is_grad_enabled())
+            return z+actions[:,:8].argmax(-1)[:,None,None],h,z
+        with patch('model.path_planning.real_states',return_value=states), patch.object(agent.engine,'predict',side_effect=predict):
+            loss = learner.update(episode,0,False,8,passes=1)
+        z,budgets = value.batch
+        self.assertEqual(len(z),6)
+        self.assertEqual(budgets[:3],budgets[3:])
+        paired = {8-budget:(float(real),float(predicted)) for real,predicted,budget in zip(z[:3],z[3:],budgets[:3])}
+        self.assertEqual(paired[0],(0.,0.))
+        self.assertEqual(paired[1],(10.,1.))
+        self.assertIn(paired[2],((20.,12.),(20.,3.)))
+        self.assertAlmostEqual(loss,math.log(2),places=6)
+        self.assertAlmostEqual(float(value.logit.grad),.5,places=6)
+        self.assertTrue(all(p.grad is None for p in agent.engine.model.parameters()))
 
     def test_gate_updates_dynamics_only_and_goal_learning_keeps_world(self):
         agent = path_agent()

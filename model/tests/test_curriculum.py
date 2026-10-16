@@ -641,6 +641,8 @@ class CurriculumTests(unittest.TestCase):
             saved = checkpoint.load(root/'run/latest.pt')
             row = saved['training_progress']['curriculum']['levels'][0]
             row.update(predictor=True, planner=True, representation_passes=3, prediction_passes=3)
+            recovery = dict(training_episodes=10, training_actions=25, path_updates=40)
+            saved['training_progress']['path_recovery'] = recovery
             checkpoint.write(root/'run/latest.pt',saved)
             old = agent_checkpoint.load(root/'run/latest.pt')
             expected = fingerprint(old.engine.model), fingerprint(old.path_evaluator)
@@ -669,10 +671,13 @@ class CurriculumTests(unittest.TestCase):
             with patch('model.subgoal_training.play',side_effect=observe_start), \
                  patch('model.subgoal_training.agent_checkpoint.save',side_effect=capture_save):
                 main([*args,'--actions','6','--resume','--representation-error','0.10',
-                      '--update-representation-threshold'])
+                      '--update-representation-threshold','--path-hindsight','--path-predicted-inputs'])
             self.assertEqual(starts[0],expected)
             report = json.loads(report_path.read_text())
             self.assertEqual(report['progress']['actions'],6)
+            self.assertEqual(report['path_recovery'], recovery)
+            self.assertTrue(report['progress']['path_replay']['hindsight'])
+            self.assertTrue(report['progress']['path_replay']['predicted_inputs'])
             self.assertEqual(report['progress']['representation_updates'],6)
             self.assertEqual(report['progress']['predictor_updates'],2)
             self.assertGreater(report['progress']['path_updates'],0)
@@ -719,6 +724,9 @@ class CurriculumTests(unittest.TestCase):
             self.assertEqual([permissions[k] for k in
                               ('representation_passes','prediction_passes','promotion_passes')],[0,0,0])
             saved = checkpoint.load(root/'run/latest.pt')
+            self.assertEqual(saved['training_progress']['path_learning'], dict(hindsight=True, predicted_inputs=True))
+            self.assertEqual(saved['training_progress']['path_recovery'], recovery)
+            self.assertNotIn('path_learning', report['resumed_from'])
             self.assertEqual(saved['training_progress']['curriculum']['thresholds'],report['config']['curriculum'])
             unchanged = report_path.read_bytes()
             with self.assertRaises(SystemExit), patch('sys.stderr', new=io.StringIO()) as stderr:
