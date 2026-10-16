@@ -43,6 +43,7 @@ Load skills lazily by role:
 - event-driven epic initialization/scheduling: `skills/codex-epic-scheduler/SKILL.md`;
 - explicit manual multi-issue orchestration: `skills/codex-issue-orchestrator/SKILL.md`;
 - derived wiki curation: `skills/repository-wiki-curation/SKILL.md`.
+- configured model training and verified weight releases: `skills/arc3-training/SKILL.md`.
 
 The generic launcher for an execution target is the same. After launch, read the controlling issue: when it declares `execution_mode: epic-dag`, route to `codex-epic-scheduler`; otherwise route to `spec-driven-codex-loop`. Keep this decision in agent instructions, not duplicated in the launcher workflow.
 

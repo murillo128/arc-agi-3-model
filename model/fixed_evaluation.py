@@ -47,6 +47,8 @@ def random_cohort(path, metadata, collect, training_action):
             episode, result = collect(seed)
             entries.append(dict(seed=seed, episode=pack_episode(episode),
                 result={k: result[k] for k in ('success', 'reason', 'actions', 'segments', 'decision_ms')}))
+            if 'access_actions' in result:
+                entries[-1]['result']['access_actions'] = result['access_actions']
         payload = dict(version=1, metadata=metadata, collected_at_action=training_action, entries=entries)
         checkpoint.write(path, payload)
     if [r['seed'] for r in payload['entries']] != metadata['seeds']:

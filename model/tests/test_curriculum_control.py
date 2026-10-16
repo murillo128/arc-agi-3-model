@@ -118,6 +118,21 @@ class CurriculumControlTests(unittest.TestCase):
         self.systemctl.assert_called_with(['systemctl', '--user', 'show', '--property=MainPID', '--value', '--', 'test-curriculum.service'],
                                           capture_output=True, text=True, timeout=2, check=True)
 
+    def test_ordered_cross_game_advance_and_world_only_phase_limit(self):
+        self.data['progress']['representation_level'] = dict(game='aa01', level=2)
+        self.data['curriculum'] = dict(ordered_stages=[dict(game='aa01', level=2), dict(game='sc01-v1', level=1)],
+            levels=[dict(game='aa01', level=2, source='sdk', objective='world_model',
+                         unlocked=True, predictor=True, planner=False),
+                    dict(game='sc01-v1', level=1, unlocked=False)])
+        self.write_report()
+        state = self.state()
+        self.assertFalse(state['phase'], 'World-only stage has no planner phase to enable')
+        self.assertTrue(state['level'], 'Next configured stage can belong to another game')
+        with self.post('level') as response:
+            self.assertEqual(response.status, 202)
+        self.wait_for(lambda: (self.output / 'signals').exists())
+        self.assertEqual((self.output / 'signals').read_text().strip(), str(signal.SIGHUP))
+
     def test_rejects_bad_token_operation_wrong_run_stopped_and_unavailable_advances(self):
         for operation, token, code in (('phase', '', 403), ('phase', 'wrong', 403), ('kill', self.token, 400)):
             with self.assertRaises(HTTPError) as error:

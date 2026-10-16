@@ -196,7 +196,10 @@ function renderObservationContext(){
     $('observation-context').textContent='Interacción actual';
     $('observation-detail').textContent=p.game?`${p.game} / nivel ${fmt(p.level)}`:'Esperando una observación…';
     $('goal-context').textContent=p.goal||'Objetivo actual';
-    $('goal-detail').textContent='Imagen del profesor. Cuadrícula: zona excluida del objetivo.';
+    const curriculum=displayedReport?.curriculum;
+    $('goal-detail').textContent=curriculum?.ordered_stages?.[curriculum.index]?.objective==='world_model'
+      ?'Etapa sin profesor de subobjetivos: se aprende la dinámica con acciones aleatorias.'
+      :'Imagen del profesor. Cuadrícula: zona excluida del objetivo.';
     return;
   }
   picture('observation',frameImage(frame));picture('goal',frameImage(frame.goalImage));
@@ -495,7 +498,7 @@ function renderPlannerSuccess(report) {
   const keys=pairs.map(pair), selector=$('planner-success-level');
   if(!keys.includes(successPairSelection))successPairSelection=null;
   const latest=report.curriculum?.unlocked?.[report.config?.game];
-  const current=pair(report.config?.evaluation_protocol==='current_level_cached_v1'&&latest
+  const current=pair(!report.config?.training_plan&&report.config?.evaluation_protocol==='current_level_cached_v1'&&latest
     ?{game:report.config.game,level:latest}:report.progress||{});
   const selected=successPairSelection||(keys.includes(current)?current:keys[0]);
   const signature=JSON.stringify(keys);
@@ -538,31 +541,32 @@ function render(report) {
   const p=report.progress||{}, c=report.config||{};
   const representationFrozen=p.representation_frozen===true;
   const encoderFrozen=representationFrozen||(p.encoder_frozen??c.freeze_encoder)===true;
-  const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',failed:'Detenido por error'};
+  const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',converged:'Currículo superado',budget_exhausted:'Presupuesto agotado · currículo pendiente',failed:'Detenido por error'};
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
   $('connection').className=report.status==='failed'||report.age_seconds>60?'warn':'';
   $('freshness').textContent=`Última escritura hace ${fmt(report.age_seconds)} s · consulta cada 2 s`;
   const initialization=c.initialization==='random'?' · Inicializado desde cero':c.initialization==='checkpoint'?' · Pesos preentrenados':'';
-  $('run-info').textContent=`${c.game||'Una configuración'} · semilla ${fmt(c.seed)} · currículo acumulativo${initialization}`;
+  $('run-info').textContent=`${p.game||c.game||'Una configuración'} · semilla ${fmt(c.seed)} · ${c.training_plan?'currículo configurado':'currículo acumulativo'}${initialization}`;
   const curriculum=report.curriculum, limits=curriculum?.thresholds||{};
   const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
   $('curriculum-panel').hidden=!curriculum;
-  $('curriculum-summary').textContent=curriculum?`Etapa ${fmt(curriculum.stage)} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: niveles 1–${n}`).join(' · '):'';
+  $('curriculum-summary').textContent=curriculum?`Etapa ${fmt(curriculum.stage)}${curriculum.ordered_stages?` / ${curriculum.ordered_stages.length}`:''} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: ${curriculum.ordered_stages?'nivel':'niveles 1–'}${n}`).join(' · '):'';
   const control=report.manual_controls?.at(-1);
   const results={advanced:'aplicado',already_planner:'ya estaba en planner',last_level:'ya está abierto el último nivel',budget_exhausted:'presupuesto terminado'};
   $('manual-controls').textContent=control
     ? `Última petición manual: ${control.operation==='phase'?'fase':'nivel'} · ${control.game} / ${control.level} · ${control.phase} · ${results[control.result]||control.result} · acción ${fmt(control.actions)}. No acredita una evaluación aprobada.`
     : 'Sin avances manuales registrados.';
-  $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. Avance: además éxito ≥ ${pct(limits.success)} en TODOS los niveles desbloqueados del juego. Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
+  const worldOnly=curriculum?.ordered_stages?.[curriculum.index]?.objective==='world_model';
+  $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. ${worldOnly?'Etapa de modelo del mundo: calidad predictiva; sin profesor de subobjetivos ni entrenamiento del planner.':`Avance: además éxito ≥ ${pct(limits.success)} en el nivel activo de evaluación.`} Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
   const focusedControl=[phaseButton,levelButton].includes(document.activeElement)?document.activeElement:null;
   curriculumCells=[];
   $('curriculum-rows').replaceChildren(...(curriculum?.levels||[]).map(row=>{
-    const m=row.measurements||{}, tr=document.createElement('tr');
-    const next=!row.unlocked?'Nivel bloqueado':row.planner?'Planner activo':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${limits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${limits.patience}`;
+    const m=row.measurements||{}, tr=document.createElement('tr'), rowLimits=row.thresholds||limits;
+    const next=!row.unlocked?'Nivel pendiente':row.objective==='world_model'&&row.predictor?'Validando predictor':row.planner?'Planner activo':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${rowLimits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${rowLimits.patience}`;
     const active=!row.unlocked?'Pendiente':c.freeze_representation_after_planner&&row.planner
       ? 'Predictor + planner · representación congelada'
       : row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
-    for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}
+    for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,rowLimits.patience)} / ${rowLimits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}
     curriculumCells.push({game:row.game,level:row.level,unlocked:row.unlocked,levelCell:tr.children[0],phaseCell:tr.children[1]});
     return tr;
   }));
@@ -738,7 +742,7 @@ function renderControls(state){
   const target=state?.target;
   const active=curriculumCells.find(row=>row.game===target?.game&&row.level===target?.level&&row.unlocked);
   // Level advance unlocks the next curriculum level, even when practicing an older one.
-  const frontier=curriculumCells.filter(row=>row.game===target?.game&&row.unlocked)
+  const frontier=displayedReport?.curriculum?.ordered_stages?active:curriculumCells.filter(row=>row.game===target?.game&&row.unlocked)
     .reduce((last,row)=>!last||row.level>last.level?row:last,null);
   for(const [button,cell] of [[phaseButton,active?.phaseCell],[levelButton,frontier?.levelCell]]){
     const parent=cell||controlParking;
