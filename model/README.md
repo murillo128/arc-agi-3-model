@@ -289,6 +289,30 @@ de cierre de su partida, cuando se publican. Datos ausentes no son
 ceros, y bloques sin cambios se marcan aparte. Las evaluaciones tienen sus propios
 contadores, nunca suman acciones de aprendizaje.
 
+La cabecera y la gráfica de velocidad muestran acciones de entrenamiento por
+segundo en los **últimos 60 segundos** de reloj (ventana menor al arrancar).
+Incluyen el tiempo de evaluación, guardado y pausas; excluyen la compilación
+inicial anterior a la primera acción. El contador se reinicia al reanudar el
+proceso y llega a cero tras 60 segundos sin acciones. El campo `recent_tps`
+identifica esta métrica: el dashboard no reutiliza como recientes los valores
+acumulados de informes antiguos.
+
+**Subobjetivos y Path Planner → Trayectoria real del planner** reproduce una
+partida terminada con sus acciones y todos los frames de animación devueltos
+por el entorno. Se distinguen entrenamiento/evaluación y las acciones del
+planner frente a exploración aleatoria. No se capturan las evaluaciones de la
+política aleatoria ni se generan imágenes para el visor. Reproducir, avanzar
+o mover la barra mantiene la muestra; la casilla de actualización automática
+permite recibir otra. Se conserva una sola trayectoria completa en
+`planner_trajectory.json`, sustituida como máximo cada dos segundos al finalizar
+una partida, sin guardar un archivo histórico ni añadir datos al checkpoint.
+El reporte incluye solo su identificador/contexto y `/api/trajectory` sirve
+exclusivamente la muestra que coincide con ese identificador. Los frames se
+guardan como bytes de paleta en base64; una trayectoria que exceda 4 MiB de
+frames o 128 acciones se omite entera, con un aviso, sin truncarla. Un error de
+escritura conserva la muestra anterior y no detiene el entrenamiento. Al
+reanudar se descarta la referencia a la muestra del proceso anterior.
+
 Cada gráfica de pérdida permite desplegar los componentes de la última
 actualización, con sus pesos ya aplicados: su suma coincide con el total. La
 representación distingue CE, delta, overlap, reconstrucción local y regularizadores

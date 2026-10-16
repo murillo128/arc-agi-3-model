@@ -34,6 +34,7 @@ from .metrics import delta_counts
 from .path_planning import PathConfig, PathValue, PathLearner, real_states
 from .planning import GoalValue
 from .prediction_samples import PredictionSamples
+from .training_telemetry import PlannerTrajectory, RecentThroughput
 from .latent_diagnostics import LatentProbe, summarize_latents
 
 def error_counts(before, actual, predicted):
@@ -115,7 +116,7 @@ def summarize_quality(summaries, previous_anchors=None):
 
 def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilon=0.,
          random_policy=False, progress=None, action_limit=None, representation=None, quality_horizon=None,
-         sample=None, predictor_replay=None):
+         sample=None, predictor_replay=None, trajectory=None):
     """A synthetic teacher supplies only one visual goal to the shared agent.
 
     Evaluation calls omit all learners. Goal predicates/distances are used only
@@ -145,7 +146,8 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
         active_goal_index = goal_index
         before, state = env.observation, agent.state
         begin = time.monotonic()
-        if random_policy or rng.random() < epsilon:
+        exploring = random_policy or rng.random() < epsilon
+        if exploring:
             action = random_action(before, rng)
             agent.pending_action = action
         else:
@@ -226,7 +228,8 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
                     segments.append(dict(goal=reached.id, success=True, actions=0, minimum_actions=0,
                         excess_actions=0, reward=0, loss=extra_loss))
                     goal_index += 1
-        row = dict(action=position + 1, goal_index=active_goal_index + 1, goals=len(goals),
+        row = dict(action=position + 1, action_source='exploration' if exploring else 'planner',
+            goal_index=active_goal_index + 1, goals=len(goals),
             goal=goal.label, minimum_actions=minimum, goal_actions=len(episode.actions) - start,
             delta_error=error, counts=counts, predictor_loss=losses, path_loss=path_loss,
             representation_loss=representation_loss,
@@ -253,9 +256,12 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
     else:
         if count < steps:
             end_reason = 'interrupted'
-    return dict(success=end_reason == 'success', reason=end_reason, actions=len(episode.actions),
+    result = dict(success=end_reason == 'success', reason=end_reason, actions=len(episode.actions),
                 segments=segments, counts=totals, decision_ms=decision_ms / max(1, len(episode.actions)), records=records,
                 quality=None if quality is None else quality.result())
+    if trajectory is not None and not random_policy:
+        trajectory(episode, records, result)
+    return result
 
 
 def main(argv=None):
@@ -428,6 +434,10 @@ def main(argv=None):
         if changed_replay:
             report['resumed_from']['predictor_replay'] = dict(old=previous_replay, new=replay_config)
     previews = PredictionSamples()
+    trajectories = PlannerTrajectory(args.output / 'planner_trajectory.json')
+    throughput = RecentThroughput()
+    report.pop('planner_trajectory', None)
+    report.pop('trajectory_error', None)
     last_write, started = 0., time.monotonic()
     checkpoint_requests = saved_requests = 0
     control_requests = []
@@ -466,6 +476,9 @@ def main(argv=None):
         report['updated_at'] = time.time()
         report['curriculum'] = curriculum.snapshot()
         report['prediction_sample'] = previews.draw()
+        report['planner_trajectory'] = trajectories.metadata
+        report['trajectory_error'] = trajectories.error
+        report['progress']['recent_tps'] = throughput.value()
         write_report(path, report)
         print(json.dumps({'event': 'subgoal_progress', **{k: v for k, v in report['progress'].items()
             if k not in ('observation', 'goal_frame', 'goal_mask')}}, allow_nan=False), flush=True)
@@ -576,7 +589,10 @@ def main(argv=None):
                             random_policy=mode == 'random', progress=progress,
                             sample=lambda before, actual, predicted, **meta: previews.add(
                                 before, actual, predicted, phase='evaluation', training_action=actions, **meta),
-                            quality_horizon=agent.config.path.horizon if mode == 'random' else None))
+                            quality_horizon=agent.config.path.horizon if mode == 'random' else None,
+                            trajectory=lambda episode, records, result: trajectories.add(
+                                episode, records, result, game=game, level=level, episode_seed=seed,
+                                phase='evaluation', split=split, training_action=actions)))
                     if mode == 'random':
                         quality, current_anchors = summarize_quality(
                             summaries, anchors.get(pair) if split == 'dev' else None)
@@ -693,6 +709,7 @@ def main(argv=None):
                 if began_learning is None:
                     began_learning = time.monotonic()
                 seconds = time.monotonic() - began_learning
+                recent_tps = throughput.record()
                 point = dict(actions=actions, game=game, level=level, stage=curriculum.stage,
                     error=row['delta_error'], path_loss=row['path_loss'],
                     predictor_loss=(row['predictor_loss'] or {}).get('total'),
@@ -701,7 +718,8 @@ def main(argv=None):
                     representation_terms=(row['representation_loss'] or {}).get('terms'),
                     representation_updates=representation.updates,
                     predictor_updates=world.updates, path_updates=path_learner.updates,
-                    counts=row['counts'], tps=(actions - process_start_actions - 1) / seconds if seconds else None)
+                    counts=row['counts'], recent_tps=recent_tps,
+                    tps=(actions - process_start_actions - 1) / seconds if seconds else None)
                 report['curves'].append(point)
                 report['curves'] = report['curves'][-4096:]
                 publish(phase='training', game=game, level=level, actions=actions, episodes=episode_index + 1,
@@ -718,6 +736,9 @@ def main(argv=None):
                 random_policy=not readiness.planner, epsilon=epsilon, progress=progress,
                 sample=lambda before, actual, predicted, **meta: previews.add(
                     before, actual, predicted, phase='training', training_action=actions + 1, **meta),
+                trajectory=lambda episode, records, result: trajectories.add(
+                    episode, records, result, game=game, level=level, episode_seed=seed,
+                    phase='training', training_action=actions),
                 action_limit=args.actions - actions)
             report['episodes'].append(dict(game=game, level=level, end_action=actions,
                 **{k: v for k, v in result.items() if k not in ('records', 'quality')}))

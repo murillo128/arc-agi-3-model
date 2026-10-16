@@ -171,6 +171,89 @@ function predictionSample(sample) {
     ? `Error de esta muestra: ${fmt(100*sample.wrong/sample.union,2)} % · ${fmt(sample.wrong)} / ${fmt(sample.union)} píxeles cambiados en cualquiera de los dos deltas.`
     : 'Sin cambios reales ni predichos en esta acción.';
 }
+const trajectoryPlayer={sample:null,frames:[],position:0,playing:false,timer:null,fetching:false};
+function stopTrajectory(){
+  trajectoryPlayer.playing=false;
+  clearTimeout(trajectoryPlayer.timer);
+}
+function renderTrajectory(){
+  const player=trajectoryPlayer, sample=player.sample, frame=player.frames[player.position];
+  $('trajectory-viewer').hidden=!sample;
+  if(!sample){picture('trajectory-frame',null);return;}
+  const reasons={success:'Nivel resuelto',game_over:'Game over',budget:'Límite de acciones',interrupted:'Interrumpida',unreachable_subgoal:'Objetivo inaccesible'};
+  $('trajectory-info').textContent=`${sample.game} / nivel ${sample.level} · partida ${sample.episode_seed} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · ${sample.actions} acciones · ${reasons[sample.reason]||sample.reason} · capturada en acción ${fmt(sample.training_action)}`;
+  $('trajectory-play').textContent=player.playing?'Pausar':'Reproducir';
+  $('trajectory-prev').disabled=player.position===0;
+  $('trajectory-next').disabled=player.position===player.frames.length-1;
+  $('trajectory-position').max=String(player.frames.length-1);
+  $('trajectory-position').value=String(player.position);
+  const image=Array.from({length:frame.height},(_,y)=>Array.from({length:frame.width},(_,x)=>frame.pixels.charCodeAt(frame.offset+y*frame.width+x)));
+  picture('trajectory-frame',image);
+  const command=frame.action;
+  const action=command?`Acción ${frame.step}/${sample.actions} · ACTION${command.id}${command.id===6?` (${command.data.x}, ${command.data.y})`:''} · ${frame.source==='planner'?'Planner':'Exploración aleatoria'}`:'Estado inicial';
+  $('trajectory-step').textContent=`${action} · frame ${player.position+1}/${player.frames.length}${frame.goal?' · '+frame.goal:''}`;
+  $('trajectory-position').setAttribute('aria-valuetext',$('trajectory-step').textContent);
+}
+function unpackTrajectory(sample){
+  const frames=[];
+  for(const [step,entry] of [{frames:sample.initial},...sample.steps].entries()){
+    const [count,height,width]=entry.frames.shape, pixels=atob(entry.frames.pixels);
+    if(![count,height,width].every(n=>Number.isInteger(n)&&n>0)||pixels.length!==count*height*width)throw Error('Frames incompletos');
+    for(let i=0;i<count;i++)frames.push({...entry,step,width,height,pixels,offset:i*height*width});
+  }
+  if(frames.length!==sample.frame_count||sample.steps.length!==sample.actions)throw Error('Trayectoria incompleta');
+  return frames;
+}
+async function refreshTrajectory(metadata){
+  const player=trajectoryPlayer;
+  $('trajectory-warning').textContent=displayedReport?.trajectory_error||'';
+  if(!metadata){
+    stopTrajectory();player.sample=null;player.frames=[];renderTrajectory();
+    $('trajectory-info').textContent=displayedReport?.trajectory_error||'Esperando una trayectoria terminada con el planner activo…';
+    return;
+  }
+  if($('path').hidden||!$('trajectory-live').checked||player.fetching||player.sample?.id===metadata.id)return;
+  player.fetching=true;
+  try{
+    const response=await fetch('api/trajectory',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+    if(!response.ok)throw Error('HTTP '+response.status);
+    const sample=(await response.json()).trajectory;
+    if(displayedReport?.planner_trajectory?.id!==metadata.id||!$('trajectory-live').checked)return;
+    if(!sample||sample.id!==metadata.id){$('trajectory-info').textContent='Esperando la nueva muestra completa…';return;}
+    const frames=unpackTrajectory(sample);
+    stopTrajectory();player.sample=sample;player.frames=frames;player.position=0;renderTrajectory();
+  }catch(error){$('trajectory-info').textContent='No se pudo cargar la trayectoria: '+error.message;}
+  finally{player.fetching=false;}
+}
+function trajectoryTick(){
+  const player=trajectoryPlayer;
+  if(!player.playing)return;
+  if($('path').hidden||player.position>=player.frames.length-1){stopTrajectory();renderTrajectory();return;}
+  player.position++;renderTrajectory();
+  player.timer=setTimeout(trajectoryTick,250);
+}
+$('trajectory-live').checked=true;
+$('trajectory-live').addEventListener('change',()=>{
+  stopTrajectory();renderTrajectory();refreshTrajectory(displayedReport?.planner_trajectory);
+});
+$('trajectory-play').addEventListener('click',()=>{
+  if(!trajectoryPlayer.sample)return;
+  $('trajectory-live').checked=false;
+  if(trajectoryPlayer.playing)stopTrajectory();
+  else{
+    if(trajectoryPlayer.position===trajectoryPlayer.frames.length-1)trajectoryPlayer.position=0;
+    trajectoryPlayer.playing=true;trajectoryPlayer.timer=setTimeout(trajectoryTick,250);
+  }
+  renderTrajectory();
+});
+function seekTrajectory(position){
+  if(!trajectoryPlayer.sample)return;
+  $('trajectory-live').checked=false;stopTrajectory();
+  trajectoryPlayer.position=Math.max(0,Math.min(trajectoryPlayer.frames.length-1,position));renderTrajectory();
+}
+$('trajectory-prev').addEventListener('click',()=>seekTrajectory(trajectoryPlayer.position-1));
+$('trajectory-next').addEventListener('click',()=>seekTrajectory(trajectoryPlayer.position+1));
+$('trajectory-position').addEventListener('input',()=>seekTrajectory(Number($('trajectory-position').value)));
 function deltaRates(rows) {
   return Object.fromEntries(deltaKinds.map(([,key])=>{
     const values=rows.map(r=>r.counts?.[key]).filter(finite);
@@ -311,7 +394,7 @@ function render(report) {
     : c.predictor_replay_episodes>0 ? `Replay: hasta ${fmt(c.predictor_replay_episodes)} partidas · lote objetivo ${fmt(c.predictor_batch_size)}`
     : 'Sin replay · una transición por actualización';
   predictionSample(report.prediction_sample);
-  $('tps').textContent=fmt(p.tps,2);
+  $('tps').textContent=fmt(p.recent_tps,2);
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
     : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
@@ -382,7 +465,7 @@ function render(report) {
     : p.sigreg_enabled===true
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
-  plot('speed',[series('Acciones/s','tps')],{unit:'acciones/s'});
+  plot('speed',[series('Acciones/s · últimos 60 s','recent_tps')],{unit:'acciones/s'});
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
@@ -405,6 +488,7 @@ for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
   if(name==='world'&&displayedReport)render(displayedReport);
+  if(name==='path')refreshTrajectory(displayedReport?.planner_trajectory);
 });
 let controlState=null, controlBusy=false, controlError='';
 const phaseButton=$('advance-phase'), levelButton=$('advance-level');
@@ -456,5 +540,5 @@ async function advanceCurriculum(operation){
 }
 phaseButton.addEventListener('click',()=>advanceCurriculum('phase'));
 levelButton.addEventListener('click',()=>advanceCurriculum('level'));
-async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 poll();

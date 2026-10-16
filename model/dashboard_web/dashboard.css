@@ -143,3 +143,14 @@ a { color: #77dabb; font-size: 13px; }
 .curriculum-action:disabled { opacity: .4; cursor: not-allowed; }
 .curriculum-action:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
 @media (pointer: coarse) { .curriculum-action { min-height: 44px; padding-inline: 14px; } }
+.trajectory-preview { margin-bottom: 16px; }
+.trajectory-live { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 16px; color: #a8bbb5; }
+.trajectory-live input, .trajectory-timeline input { accent-color: #77dabb; }
+#trajectory-frame { display: block; width: min(100%, 380px); margin: 0 auto 16px; }
+.trajectory-toolbar { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.trajectory-toolbar button { min-height: 40px; padding: 8px 14px; border: 1px solid #3b6255; border-radius: 999px; background: #1c332b; color: #9ce4cd; font: inherit; font-size: 12px; cursor: pointer; }
+.trajectory-toolbar button:hover:not(:disabled) { background: #284c3e; }
+.trajectory-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+.trajectory-toolbar button:focus-visible, .trajectory-timeline input:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
+.trajectory-timeline { display: grid; gap: 8px; margin-top: 16px; color: #a8bbb5; font-size: 12px; }
+.trajectory-timeline input { width: 100%; }

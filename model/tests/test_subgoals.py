@@ -199,6 +199,26 @@ class PathTests(unittest.TestCase):
         self.assertEqual(result['segments'], [])
         self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), weights)
 
+    def test_executed_planner_preview_preserves_actions_and_excludes_random_evaluation(self):
+        agent = path_agent()
+        factory = Factory('sc01-v1', Path('games'))
+        weights = fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)
+        captures = []
+        capture = lambda episode, records, result: captures.append((episode, records, result))
+        with patch.object(agent, 'act', return_value=Action(4)):
+            result = play(agent, factory, 1, 22, 8, action_limit=1, trajectory=capture)
+        self.assertEqual(len(captures), 1)
+        episode, records, captured = captures[0]
+        self.assertIs(captured, result)
+        self.assertEqual(episode.actions, [Action(4)])
+        self.assertEqual(records[0]['action_source'], 'planner')
+        np.testing.assert_array_equal(episode.observations[-1].final, agent.observation.final)
+        play(agent, factory, 1, 23, 8, action_limit=1, random_policy=True, trajectory=capture)
+        self.assertEqual(len(captures), 1)
+        play(agent, factory, 1, 24, 8, action_limit=1, epsilon=1., trajectory=capture)
+        self.assertEqual(captures[-1][1][0]['action_source'], 'exploration')
+        self.assertEqual((fingerprint(agent.engine.model), fingerprint(agent.path_evaluator)), weights)
+
     def test_dashboard_selects_only_new_report_and_redacts_paths(self):
         with tempfile.TemporaryDirectory() as temp:
             file = Path(temp) / 'report.json'

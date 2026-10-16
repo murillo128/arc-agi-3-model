@@ -20,20 +20,22 @@ function element() {
 const nodes = new Map([...html.matchAll(/id="([^"]+)"/g)].map(m=>[m[1],element()]));
 const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:.1,
     evaluation_pairs:[{game:'a',level:1},{game:'b',level:1}]},
-  progress:{phase:'training',actions:32,total_actions:65536,predictor_updates:1,path_updates:0,tps:2},
-  curves:[{actions:1,predictor_loss:2,path_loss:null,tps:2,counts:{wrong:5,union:10,invented:2,missed:3,color:0,correct:5}},
-    {actions:32,predictor_loss:null,path_loss:0,tps:2,counts:{wrong:15,union:90,invented:10,missed:5,color:0,correct:75}}],
+  progress:{phase:'training',actions:32,total_actions:65536,predictor_updates:1,path_updates:0,tps:99,recent_tps:2},
+  curves:[{actions:1,predictor_loss:2,path_loss:null,tps:99,recent_tps:2,counts:{wrong:5,union:10,invented:2,missed:3,color:0,correct:5}},
+    {actions:32,predictor_loss:null,path_loss:0,tps:99,recent_tps:2,counts:{wrong:15,union:90,invented:10,missed:5,color:0,correct:75}}],
   episodes:[{game:'a',level:1,end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
   evaluations:[]};
 let offline=false;
 let controls;
 let controlReply;
+let trajectoryReply={ok:true,json:async()=>({trajectory:null})};
+let trajectoryRequests=0;
 const controlRequests=[];
 let gpu={devices:[{index:0,name:'Test GPU',utilization_percent:73,temperature_c:71}]};
-const context=vm.createContext({console,AbortSignal,setTimeout(){},
+const context=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(){},atob:value=>Buffer.from(value,'base64').toString('binary'),
   fixture:report,
   document:{getElementById:id=>nodes.get(id),createElement:element,createElementNS:element},
-  fetch:async(url,options)=>{if(offline)throw Error('offline');if(options?.method==='POST'){
+  fetch:async(url,options)=>{if(offline)throw Error('offline');if(url==='api/trajectory'){trajectoryRequests++;return trajectoryReply;}if(options?.method==='POST'){
     controlRequests.push({url,options});return controlReply;
   }return {ok:true,json:async()=>({subgoals:report,gpu,curriculum_control:controls})};}});
 const text=id=>nodes.get(id).textContent;
@@ -58,7 +60,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('predictor-replay'),'Sin replay · una transición por actualización');
   assert.equal(text('path-updates'),'0');
   assert.equal(text('tps'),'2');
-  assert.equal(nodes.get('speed-legend').children[0].textContent,'Acciones/s: 2 acciones/s');
+  assert.equal(nodes.get('speed-legend').children[0].textContent,'Acciones/s · últimos 60 s: 2 acciones/s');
   assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Media de actualizaciones · hasta 512 acciones: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Actualización individual: 2');
   assert.match(nodes.get('loss-legend').children[1].title,/acción 1$/,'missing latest sample does not fabricate a zero');
@@ -553,6 +555,55 @@ const text=id=>nodes.get(id).textContent;
   controls={...controls,phase:false,level:false,result:{status:'error',message:'El entrenador se detuvo.'}};
   await vm.runInContext('poll()',context);
   assert.equal(text('control-status'),'El entrenador se detuvo.');
+  // Real palette bytes: initial white/gray, then two animation frames.
+  const packed=(values,shape)=>({shape,pixels:Buffer.from(values).toString('base64')});
+  const trajectory={kind:'planner_trajectory',id:'one',game:'sc01-v1',level:1,episode_seed:42,
+    phase:'evaluation',actions:1,frame_count:3,reason:'game_over',
+    initial:packed([0,1],[1,1,2]),steps:[{action:{id:4,data:{}},source:'planner',goal:'Cruzar',frames:packed([2,3,4,5],[2,1,2])}]};
+  report.planner_trajectory={id:'one'};
+  trajectoryReply={ok:true,json:async()=>({trajectory})};
+  nodes.get('path').hidden=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(trajectoryRequests,0,'hidden tab does not download frames');
+  nodes.get('path').hidden=false;
+  await vm.runInContext('poll()',context);
+  assert.equal(trajectoryRequests,1);
+  assert.match(text('trajectory-info'),/Evaluación.*1 acciones.*Game over/);
+  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#ffffff','#cccccc']);
+  await vm.runInContext('poll()',context);
+  assert.equal(trajectoryRequests,1,'same sample is not downloaded twice');
+  nodes.get('trajectory-next').listeners.click();
+  assert.equal(nodes.get('trajectory-live').checked,false,'manual inspection holds the sample');
+  assert.match(text('trajectory-step'),/Acción 1\/1 · ACTION4 · Planner · frame 2\/3/);
+  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#999999','#666666']);
+  nodes.get('trajectory-play').listeners.click();
+  vm.runInContext('trajectoryTick()',context);
+  assert.deepEqual(nodes.get('trajectory-frame').context.pixels.map(p=>p.color),['#333333','#000000']);
+  report.planner_trajectory={id:'two'};
+  await vm.runInContext('poll()',context);
+  assert.equal(trajectoryRequests,1,'polling cannot interrupt playback');
+  nodes.get('trajectory-position').value='0';nodes.get('trajectory-position').listeners.input();
+  assert.match(text('trajectory-step'),/Estado inicial/);
+  const nextTrajectory={...trajectory,id:'two',phase:'training',steps:[{...trajectory.steps[0],source:'exploration'}]};
+  trajectoryReply={ok:true,json:async()=>({trajectory:nextTrajectory})};
+  nodes.get('trajectory-live').checked=true;
+  await vm.runInContext('poll()',context);
+  assert.equal(trajectoryRequests,2);
+  nodes.get('trajectory-next').listeners.click();
+  assert.match(text('trajectory-step'),/Exploración aleatoria/);
+  report.planner_trajectory={id:'three'};nodes.get('trajectory-live').checked=true;
+  trajectoryReply={ok:false,status:503};
+  await vm.runInContext('poll()',context);
+  assert.match(text('trajectory-info'),/No se pudo cargar.*503/);
+  assert.doesNotMatch(text('connection'),/Sin conexión/);
+  trajectoryReply={ok:true,json:async()=>({trajectory:null})};
+  await vm.runInContext('poll()',context);
+  assert.match(text('trajectory-info'),/Esperando la nueva muestra completa/);
+  delete report.planner_trajectory;
+  delete report.progress.recent_tps;report.progress.tps=99;
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('trajectory-viewer').hidden,true);
+  assert.equal(text('tps'),'—','never relabel legacy cumulative TPS as recent');
   controls={...controls,phase:false,level:false,result:{status:'applied',event:{result:'last_level',level:5,phase:'planner'}}};
   await vm.runInContext('poll()',context);
   assert.match(text('control-status'),/El último nivel ya estaba abierto/);

@@ -631,6 +631,21 @@ def subgoal_snapshot(path):
         return {'kind': 'synthetic_subgoals', 'status': 'waiting', 'message': str(error), 'progress': {}}
 
 
+def trajectory_snapshot(report_path):
+    """Only the one sidecar belonging to the report's published sample."""
+    try:
+        metadata = subgoal_snapshot(report_path).get('planner_trajectory')
+        if not metadata:
+            return None
+        path = report_path.with_name('planner_trajectory.json')
+        if path.stat().st_size > MAX_READ:
+            return None
+        data = json.loads(path.read_text())
+        return data if data.get('kind') == 'planner_trajectory' and data.get('id') == metadata['id'] else None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None):
     gpu = GpuMonitor()
     if curriculum_service and not subgoal_report:
@@ -686,6 +701,9 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                     state['campaign'] = campaign.snapshot()
                 state['gpu'] = gpu.snapshot()
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
+                mime = 'application/json; charset=utf-8'
+            elif route == '/api/trajectory' and subgoal_report:
+                data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
             elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js'):
                 name = 'index.html' if route == '/' else route[1:]
