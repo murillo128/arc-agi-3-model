@@ -170,6 +170,52 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('progress'),/partida 1\/2 · acción 7/);
   assert.equal(nodes.get('evaluation-rows').children[0].children[6].textContent,'20 %');
 
+  // Success uses completed development episodes, independently per level/policy.
+  // Literal wins establish percentages, including genuine zero and full success.
+  report.config.success=.8;
+  const winRow=(actions,policy,successes,episodes=8,level=1,split='dev')=>
+    ({actions,policy,successes,episodes,level,split,game:'a',delta_error:.2});
+  report.evaluations=[winRow(20,'random',3),winRow(200,'path_mpc',3),
+    winRow(100,'random',3),winRow(100,'path_mpc',0),winRow(200,'random',4),
+    winRow(300,'random',3),winRow(300,'path_mpc',2,2),
+    winRow(400,'path_mpc',8,8,1,'final'),winRow(500,'unknown',8),
+    winRow(100,'path_mpc',1,2,2),winRow(100,'random',0,8,2)];
+  await vm.runInContext('poll()',context);
+  const successLabels=()=>nodes.get('planner-success-legend').children.map(n=>n.textContent);
+  const winPoints=()=>circles('planner-success').map(n=>n.children[0].textContent);
+  assert.deepEqual(successLabels(),['Planner: 100 %','Azar: 37,5 %','Límite · Éxito del currículo: 80 %']);
+  assert.deepEqual(winPoints(),[
+    'Planner: 0 · acción 100 · 0/8 victorias','Planner: 37,5 · acción 200 · 3/8 victorias',
+    'Planner: 100 · acción 300 · 2/2 victorias','Azar: 37,5 · acción 100 · 3/8 victorias',
+    'Azar: 50 · acción 200 · 4/8 victorias','Azar: 37,5 · acción 300 · 3/8 victorias']);
+  assert.match(text('planner-success-summary'),/Planner: 2\/2 victorias · acción 300/);
+  assert.equal(nodes.get('planner-success-level').children.length,2);
+  report.evaluations.push(winRow(200,'path_mpc',4),winRow(400,'path_mpc',0,0),
+    winRow(500,'path_mpc',9),winRow(600,'path_mpc',null));
+  await vm.runInContext('poll()',context);
+  assert.equal(winPoints().length,6,'invalid/empty counts are absent, not measured zeros');
+  assert.equal(winPoints()[1],'Planner: 50 · acción 200 · 4/8 victorias','latest repeated sweep wins');
+
+  const successSelector=nodes.get('planner-success-level');
+  successSelector.value=JSON.stringify(['a',2]);successSelector.listeners.change();
+  assert.deepEqual(winPoints(),['Planner: 50 · acción 100 · 1/2 victorias','Azar: 0 · acción 100 · 0/8 victorias']);
+  report.evaluations.push(winRow(200,'path_mpc',2,2,2));
+  await vm.runInContext('poll()',context);
+  assert.equal(successSelector.value,JSON.stringify(['a',2]),'polling keeps the selected level');
+  assert.equal(winPoints()[1],'Planner: 100 · acción 200 · 2/2 victorias');
+  report.evaluations.push(winRow(100,'random',3,8,3));
+  await vm.runInContext('poll()',context);
+  successSelector.value=JSON.stringify(['a',3]);successSelector.listeners.change();
+  assert.equal(successLabels()[0],'Planner: —','random-only history is not planner success');
+  assert.deepEqual(winPoints(),['Azar: 37,5 · acción 100 · 3/8 victorias']);
+  report.evaluations=[];
+  await vm.runInContext('poll()',context);
+  assert.equal(winPoints().length,0,'new empty reports clear success history');
+  assert.equal(successSelector.value,'');
+  assert.equal(successSelector.disabled,true);
+  assert.match(text('planner-success-summary'),/Planner: sin evaluación disponible/);
+  delete report.config.success;
+
   // Only the same complete, fixed-random development coverage is comparable.
   // Different pixel/action counts must not change each level's equal weight.
   const evaluation=(actions,game,error,extra={})=>({actions,split:'dev',policy:'random',game,level:1,

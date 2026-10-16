@@ -333,6 +333,48 @@ function fixedEvaluations(report) {
   }
   return {points,expected:expected.size,pending};
 }
+let successPairSelection=null, successOptionsKey='';
+function renderPlannerSuccess(report) {
+  const pair=r=>JSON.stringify([r.game,r.level]);
+  const rows=(report.evaluations||[]).filter(r=>r.split==='dev'&&['path_mpc','random'].includes(r.policy)
+    &&typeof r.game==='string'&&r.game&&Number.isInteger(r.level)&&r.level>0&&finite(r.actions)&&r.actions>=0);
+  const pairs=[...new Map(rows.map(r=>[pair(r),r])).values()]
+    .sort((a,b)=>a.game.localeCompare(b.game)||a.level-b.level);
+  const keys=pairs.map(pair), selector=$('planner-success-level');
+  if(!keys.includes(successPairSelection))successPairSelection=null;
+  const current=pair(report.progress||{}), selected=successPairSelection||(keys.includes(current)?current:keys[0]);
+  const signature=JSON.stringify(keys);
+  if(signature!==successOptionsKey) {
+    successOptionsKey=signature;
+    selector.replaceChildren(...pairs.map(r=>{const option=document.createElement('option');
+      option.value=pair(r);option.textContent=`${r.game} / nivel ${r.level}`;return option;}));
+  }
+  selector.value=selected||'';selector.disabled=pairs.length<2;
+  const byAction=new Map();
+  for(const row of rows.filter(r=>pair(r)===selected)) {
+    if(!byAction.has(row.actions))byAction.set(row.actions,new Map());
+    byAction.get(row.actions).set(row.policy,row); // A repeated sweep replaces its earlier measurement.
+  }
+  const valid=r=>r&&Number.isInteger(r.episodes)&&r.episodes>0&&Number.isInteger(r.successes)
+    &&r.successes>=0&&r.successes<=r.episodes;
+  let sweeps=[...byAction].sort((a,b)=>a[0]-b[0]);
+  const firstPlanner=sweeps.findIndex(([,policies])=>valid(policies.get('path_mpc')));
+  // Earlier random-only evaluations would compress the planner's history to a sliver.
+  if(firstPlanner>=0)sweeps=sweeps.slice(firstPlanner);
+  const series=[['Planner','path_mpc'],['Azar','random']].map(([name,policy])=>({name,
+    points:sweeps.map(([actions,policies])=>{const r=policies.get(policy);
+      return [actions,valid(r)?100*r.successes/r.episodes:null,valid(r)?`${r.successes}/${r.episodes} victorias`:''];})}));
+  const success=report.curriculum?.thresholds?.success??report.config?.success;
+  plot('planner-success',series,{percent:true,responsive:true,
+    thresholds:finite(success)&&success>=0&&success<=1?[{name:'Éxito del currículo',value:100*success,colorIndex:2}]:[],
+    empty:'Pendiente de evaluaciones de éxito de este nivel'});
+  $('planner-success-summary').textContent=series.map(s=>{const last=s.points.findLast(p=>finite(p[1]));
+    return last?`${s.name}: ${last[2]} · acción ${fmt(last[0])}`:`${s.name}: sin evaluación disponible`;}).join(' · ');
+}
+$('planner-success-level').addEventListener('change',()=>{
+  successPairSelection=$('planner-success-level').value;
+  if(displayedReport)renderPlannerSuccess(displayedReport);
+});
 let displayedReport;
 let curriculumCells=[];
 function render(report) {
@@ -466,6 +508,7 @@ function render(report) {
     ? 'SIGReg activo · fase inicial de representación'
     : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
   plot('speed',[series('Acciones/s · últimos 60 s','recent_tps')],{unit:'acciones/s'});
+  renderPlannerSuccess(report);
   plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Actualización individual','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action})));
@@ -488,7 +531,10 @@ for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
   if(name==='world'&&displayedReport)render(displayedReport);
-  if(name==='path')refreshTrajectory(displayedReport?.planner_trajectory);
+  if(name==='path'){
+    if(displayedReport)renderPlannerSuccess(displayedReport);
+    refreshTrajectory(displayedReport?.planner_trajectory);
+  }
 });
 let controlState=null, controlBusy=false, controlError='';
 const phaseButton=$('advance-phase'), levelButton=$('advance-level');

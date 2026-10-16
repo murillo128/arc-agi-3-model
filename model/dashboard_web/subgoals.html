@@ -44,6 +44,13 @@
 </div></section>
 <section id="path" role="tabpanel" aria-labelledby="tab-path" hidden><p class="muted">El profesor suministra un objetivo cada vez, incluso en los niveles con varios subobjetivos. El aprendizaje del planner empieza tras validar la predicción a tres pasos. El agente busca acciones con su predictor. El coste aprendido usa las acciones restantes reales y añade un presupuesto completo por fracaso.</p>
 <div class="metrics summary-metrics"><article><h2>Partidas terminadas</h2><strong id="episodes">—</strong><small id="successes"></small></article><article><h2>Subobjetivos alcanzados</h2><strong id="subgoals">—</strong><small id="goal-label"></small></article></div>
+<article class="chart-card fixed-evaluation">
+<h3>Éxito del planner <span>% de niveles resueltos · mayor es mejor</span></h3>
+<label>Juego / nivel <select id="planner-success-level" aria-label="Nivel de la gráfica de éxito"></select></label>
+<p>Victorias / partidas evaluadas, con pesos congelados y las mismas semillas. Cada nivel se muestra por separado. Desde la primera evaluación del planner; antes, solo la referencia al azar. Eje horizontal: acciones de entrenamiento.</p>
+<div id="planner-success-legend" class="legend"></div><p id="planner-success-summary" class="muted" aria-live="polite"></p>
+<svg id="planner-success" viewBox="0 0 700 280" role="img" aria-label="Porcentaje de éxito del planner y de la política aleatoria por nivel"></svg>
+<p>Resolver el nivel cuenta como victoria. Se siguen proporcionando subobjetivos sintéticos. El umbral de éxito es uno de los requisitos del currículo; también se exige calidad de predicción y evaluaciones consecutivas.</p></article>
 <article class="chart-card trajectory-preview"><h3>Trayectoria real del planner <span>Una muestra completa · como máximo cada 2 s</span></h3>
 <p id="trajectory-info" class="muted" role="status">Esperando una trayectoria terminada con el planner activo…</p>
 <p id="trajectory-warning" class="warn" role="status"></p>

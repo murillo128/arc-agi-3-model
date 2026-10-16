@@ -297,6 +297,16 @@ proceso y llega a cero tras 60 segundos sin acciones. El campo `recent_tps`
 identifica esta métrica: el dashboard no reutiliza como recientes los valores
 acumulados de informes antiguos.
 
+**Subobjetivos y Path Planner → Éxito del planner** compara el porcentaje de
+niveles resueltos (`100 × victorias / partidas`) del planner y del azar en las
+evaluaciones fijas de desarrollo. El selector separa cada juego/nivel; el eje
+horizontal cuenta acciones de entrenamiento. Cuando hay mediciones del planner,
+la gráfica empieza en la primera para que su evolución sea legible. Las leyendas
+y los puntos muestran los denominadores y la acción de cada medición; un cero
+medido se conserva y una evaluación ausente no se rellena. Las evaluaciones
+finales y las partidas de entrenamiento no se mezclan en estas curvas. La línea
+del umbral de éxito no sustituye los demás requisitos de promoción del currículo.
+
 **Subobjetivos y Path Planner → Trayectoria real del planner** reproduce una
 partida terminada con sus acciones y todos los frames de animación devueltos
 por el entorno. Se distinguen entrenamiento/evaluación y las acciones del
