@@ -120,6 +120,47 @@ def path_agent():
 
 
 class PathTests(unittest.TestCase):
+    def test_tuning_metrics_keep_failures_and_common_winners(self):
+        from model.path_tuning import summarize
+        baseline = [dict(seed=s, success=won, actions=n) for s,won,n in
+                    ((1,True,10),(2,True,20),(3,False,30),(4,False,40))]
+        candidate = [dict(seed=s, success=won, actions=n) for s,won,n in
+                     ((1,True,6),(2,False,40),(3,True,4),(4,False,35))]
+        row = summarize(candidate, baseline)
+        self.assertEqual(row, dict(episodes=4, successes=2, total_actions=85,
+            successful_actions=10, mean_successful_actions=5., common_successes=1,
+            common_actions=6, baseline_common_actions=10, gained=[3], lost=[2]))
+        failed = [dict(seed=r['seed'],success=False,actions=30) for r in baseline]
+        self.assertIsNone(summarize(failed, baseline)['mean_successful_actions'])
+        with self.assertRaisesRegex(ValueError, 'identical episode seeds'):
+            summarize(candidate[:-1], baseline)
+        with self.assertRaisesRegex(ValueError, 'identical episode seeds'):
+            summarize(candidate, baseline[:-1]+[baseline[0]])
+
+    def test_tuning_uses_same_seeds_and_preserves_checkpoint(self):
+        from model.path_tuning import main
+        agent = path_agent()
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
+            root = Path(temp)
+            source = root/'source.pt'
+            agent_checkpoint.save(source, agent)
+            original = source.read_bytes()
+            with patch('model.path_tuning.play', wraps=play) as playing:
+                main(['--source',str(source),'--output',str(root/'comparison'),
+                      '--levels','1','--episodes','1','--margins','.02','.05',
+                      '--horizons','2','1','--epsilons','.2','.1','--device','cpu'])
+            self.assertEqual([c.kwargs['epsilon'] for c in playing.call_args_list], [.2,.1]*4)
+            report = json.loads((root/'comparison/report.json').read_text())
+            rows = report['evaluations']
+            self.assertEqual([r['margin'] for r in rows], [.02,.02,.05,.05]*2)
+            self.assertEqual([r['horizon'] for r in rows], [2,2,2,2,1,1,1,1])
+            self.assertEqual([r['results'][0]['seed'] for r in rows], [7420001]*8)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertFalse((root/'comparison/latest.pt').exists())
+            with self.assertRaises(SystemExit), patch('sys.stderr',new=io.StringIO()):
+                main(['--source',str(source),'--output',str(root/'invalid'),'--margins','nan'])
+            self.assertFalse((root/'invalid').exists())
+
     def test_recovery_experiment_separates_evaluation_and_preserves_world(self):
         from model.path_recovery import main
         agent = path_agent()

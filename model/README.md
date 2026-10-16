@@ -133,6 +133,38 @@ restante condicionada al éxito). Los empates numéricos de duración (1e-6 acci
 se aleatorizan con el RNG de la partida; no se prefiere A1 por orden de enumeración.
 La probabilidad procede de la política de recogida y puede estar mal calibrada o
 explotar errores del predictor. No sustituye la confirmación real del profesor.
+
+`model.path_tuning` compara márgenes sobre un checkpoint fijo y las mismas semillas
+de desarrollo, sin entrenar ni generar pesos. Por ejemplo, tras copiar el checkpoint
+a una ruta estable fuera de Git:
+
+```sh
+.venv/bin/python -m model.path_tuning --source /tmp/planner-fixed.pt \
+  --output /tmp/planner-margin-screen --levels 1 2 --margins .02 .05 .10 \
+  --episodes 16 --dev-offset 710000
+```
+
+El primer margen es la referencia. `--horizons 3 2` compara también profundidad de
+búsqueda sin modificar los horizontes de entrenamiento; la primera combinación es
+la referencia de cada nivel. `--epsilons .2 .1` compara exploración aleatoria con
+los mismos pesos; por defecto es cero como en la evaluación fija del planner.
+El informe conserva semillas, hash del checkpoint,
+victorias ganadas/perdidas, acciones totales, acciones de partidas exitosas y acciones
+en las mismas partidas ganadas por ambos candidatos. Reducir sólo la media de los
+éxitos puede ocultar que ahora fracasan las partidas largas. Un candidato debe
+confirmarse frente a la referencia en otro conjunto de desarrollo (`--dev-offset`
+distinto); estas comparaciones no demuestran equivalencia estadística ni cambian
+el currículo o la configuración del entrenamiento activo.
+
+En la comparación del checkpoint de la acción 126984 no se adoptó ningún ajuste
+global. Ampliar el margen de .02 a .03 sumó una victoria en cada nivel de la muestra
+de confirmación, pero no acortó ninguna de las rutas exitosas compartidas. Un
+horizonte de dos perdió una victoria del nivel 1 en el cribado. Bajar exploración
+de .20 a .10 redujo acciones en algunos éxitos, pero en la confirmación del nivel 1
+bajó de 21/32 a 17/32 victorias (nivel 2: 22/32 con ambas). Se conservaron los
+parámetros activos; los resultados completos por semilla están en
+[`path_tuning_evidence.json`](path_tuning_evidence.json).
+
 Reward mostrado: `-(acciones - mínimo inicial) - 128 * fracaso`; se conserva como
 métrica histórica, no como criterio de selección ni target de PathValue.
 Un corte administrativo queda censurado, no se etiqueta como fracaso.
