@@ -8,10 +8,11 @@ activación y resultados. Un solo juego (`sc01-v1`), hasta 262.144 acciones real
 sin barrido de variantes. `subgoal_config.json` fija los tamaños y la receta
 del modelo, sin depender de checkpoints previos para inicializarlo.
 
-**Activación acumulativa, nunca fases que sustituyen al aprendizaje anterior:**
+**Activación acumulativa de predictor y planner, con representación congelable:**
 
 1. Por defecto, encoder y decoder aprenden desde la primera acción real y siguen
-   durante toda la campaña. El experimento opcional `--freeze-encoder` fija sólo
+   durante toda la campaña salvo que se active la congelación al admitir el planner.
+   El experimento opcional `--freeze-encoder` fija sólo
    el encoder y mantiene el aprendizaje del decoder.
    Reconstrucción de las dos últimas observaciones:
    CE de colores, delta visual y overlap, tanto con el decoder contextual como
@@ -19,14 +20,22 @@ del modelo, sin depender de checkpoints previos para inicializarlo.
    información visual en z sin depender de la corrección contextual del decoder.
    SIGReg (peso 0,002) se usa sólo antes de la primera activación del predictor.
    Desde esa activación se apaga para todo el encoder compartido, incluso al
-   abrir niveles nuevos o reanudar. La reconstrucción continúa sin congelarse.
+   abrir niveles nuevos o reanudar.
    En este arranque desde cero, AdamW LR 3e-5 mediante
    `--representation-learning-rate 3e-5`; se evalúan calidad y deriva antes de
    admitir el predictor. La campaña añade `--encoder-learning-rate-after-predictor 3e-6`:
-   desde la primera admisión, sólo el encoder baja a 3e-6; el decoder conserva 3e-5.
+   en la fase predictor, sólo el encoder baja a 3e-6; el decoder conserva 3e-5.
    Son grupos separados del mismo optimizador, sin reiniciar sus momentos al
-   cambiar la tasa. La reducción se mantiene en niveles nuevos y al reanudar.
+   cambiar la tasa. Con la política por nivel, un nivel nuevo empieza con ambos a 3e-5.
    Las tasas son hipótesis de la campaña, no una garantía de convergencia.
+   La campaña activa también usa `--freeze-representation-after-planner`: durante
+   las partidas de un nivel con planner se congelan **encoder y decoder**.
+   Al practicar un nivel nuevo vuelven a aprender, conservando los pesos.
+   Los niveles anteriores siguen practicándose según su propia fase.
+   Mientras están congelados, se detienen reconstrucción, regularizadores e invalidaciones del caché de z;
+   las evaluaciones y vistas de reconstrucción siguen disponibles. Predictor y
+   PathValue continúan aprendiendo. La memoria h aún se reconstruye con el predictor
+   actualizado, y el replay sigue siendo secuencial; esto no elimina todo su coste.
 2. El predictor se incorpora cuando la reconstrucción es ≤10 % y la deriva relativa
    del latente es ≤15 % en tres evaluaciones consecutivas del nivel. Desde entonces
    aprende **en cada acción válida**, aunque su error instantáneo sea pequeño.
@@ -69,7 +78,7 @@ puede seleccionarse para otra campaña, pero no se intercalan ambos juegos.
 Primero nivel 1; después 1+2; después 1+2+3, etc. Se alternan partidas nuevas
 entre los niveles desbloqueados del juego elegido, con parámetros aleatorios. No se
 borran pesos al avanzar; la experiencia temporal sí se descarta en cada partida.
-Para abrir un nivel nuevo se exige calidad de representación/predicción y ≥80 %
+El avance automático a otro nivel exige calidad de representación/predicción y ≥80 %
 de éxito del planner en **todos** los niveles ya abiertos de ese juego durante
 tres evaluaciones consecutivas. No basta una media global ni agotar un presupuesto.
 
@@ -84,7 +93,7 @@ a cada horizonte. Una predicción exacta sin cambios tiene error cero, pero no
 sustituye la cobertura de transiciones con cambios. Para tareas que terminan sin
 cambiar píxeles, se admite una evaluación enteramente estática solo si incluye
 una terminación nativa observada; se decide por evidencia pública, no por el juego.
-El éxito del planner sigue siendo obligatorio para avanzar. La confirmación final utiliza
+El éxito del planner sigue siendo obligatorio para avanzar automáticamente. La confirmación final utiliza
 otras semillas y no modifica permisos ni currículo.
 
 Calidad, deriva y activaciones usan la misma frecuencia. La deriva mide cambios
@@ -165,6 +174,16 @@ reinicia las rachas de cualificación y se guarda antes de entrenar. El dashboar
 muestra las tasas efectivas; un encoder congelado sigue excluido del optimizador.
 Los momentos de Adam y el replay en RAM se reinician al reabrir el proceso, como
 en las demás reanudaciones; reducir la tasa dentro del proceso no los reinicia.
+`--freeze-representation-after-planner` se guarda y hereda desde el checkpoint;
+los checkpoints antiguos sin la opción mantienen su comportamiento anterior.
+La fase se selecciona para cada partida: representación, predictor o planner,
+según los permisos de ese nivel. Se restaura el nivel activo al reanudar.
+Los cambios de fase dentro del proceso conservan los momentos del optimizador.
+Sin esta política, la reducción de LR del encoder sigue siendo global tras
+la primera admisión del predictor, como en las versiones anteriores. `--no-freeze-representation-after-planner`
+al reanudar la desactiva explícitamente, respetando después las opciones de LR
+y congelación sólo del encoder. Las pérdidas de reconstrucción no calculadas
+se registran como ausentes, no como ceros.
 `--freeze-encoder` fija sólo el encoder: el decoder y el predictor siguen
 aprendiendo con las mismas pérdidas. No se optimizan ni regularizan los pesos
 del encoder. El modo queda en el checkpoint y se hereda con `--resume`; los
@@ -194,7 +213,26 @@ Para un proceso lanzado desde un shell, usa `kill -USR1 <PID>`. El log confirma
 el guardado con `checkpoint_saved`, `reason: "signal"` y el contador de acciones;
 `report.json` actualiza `checkpoint_action` y `last_checkpoint`. El campo
 `checkpoint_signal: "SIGUSR1"` indica que esta versión tiene instalado el handler.
-No enviar esta señal a procesos antiguos que no lo tengan. Se mantiene el formato
+También hay dos controles manuales (se aplican al terminar la partida o evaluación):
+
+```sh
+# Una fase: representación -> predictor -> planner, en el nivel de entrenamiento actual.
+systemctl --user kill --kill-whom=main --signal=SIGUSR2 arc3-curriculum.service
+# Abrir el siguiente nivel y practicarlo en la próxima partida.
+systemctl --user kill --kill-whom=main --signal=SIGHUP arc3-curriculum.service
+```
+
+Durante una evaluación, la fase se refiere al último nivel de **entrenamiento**,
+no al nivel que se está evaluando. Un avance de nivel seguido de otro de fase
+actúa sobre el nivel recién abierto. Se conservan las prácticas de niveles previos.
+Estas peticiones saltan los gates explícitamente: no inventan mediciones ni rachas
+aprobadas. Se registran en `manual_controls` (últimas 128), en el dashboard y en
+el checkpoint antes de la siguiente acción; `control_signals` indica disponibilidad.
+La señal sólo encola; si llega durante una escritura se atiende en el siguiente
+punto seguro. Las señales POSIX pueden agruparse: espera la confirmación antes de
+repetir. Si ya está en planner, en el último nivel o sin presupuesto, se registra
+sin avanzar. Una escritura fallida detiene el proceso y conserva el checkpoint anterior.
+No enviar estas señales a procesos antiguos que no tengan los handlers. Se mantiene el formato
 portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador.
 
 ```sh
@@ -202,6 +240,8 @@ portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador
   --game sc01-v1 \
   --init-config model/subgoal_config.json \
   --representation-learning-rate 3e-5 \
+  --encoder-learning-rate-after-predictor 3e-6 \
+  --freeze-representation-after-planner \
   --output model/runs/curriculum/current
 .venv/bin/python -m model.dashboard \
   --subgoal-report model/runs/curriculum/current/report.json

@@ -254,6 +254,8 @@ let displayedReport;
 function render(report) {
   displayedReport=report;
   const p=report.progress||{}, c=report.config||{};
+  const representationFrozen=p.representation_frozen===true;
+  const encoderFrozen=representationFrozen||(p.encoder_frozen??c.freeze_encoder)===true;
   const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',failed:'Detenido por error'};
   $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
   $('connection').className=report.status==='failed'||report.age_seconds>60?'warn':'';
@@ -264,18 +266,27 @@ function render(report) {
   const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
   $('curriculum-panel').hidden=!curriculum;
   $('curriculum-summary').textContent=curriculum?`Etapa ${fmt(curriculum.stage)} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: niveles 1–${n}`).join(' · '):'';
+  const control=report.manual_controls?.at(-1);
+  const results={advanced:'aplicado',already_planner:'ya estaba en planner',last_level:'ya está abierto el último nivel',budget_exhausted:'presupuesto terminado'};
+  $('manual-controls').textContent=control
+    ? `Última petición manual: ${control.operation==='phase'?'fase':'nivel'} · ${control.game} / ${control.level} · ${control.phase} · ${results[control.result]||control.result} · acción ${fmt(control.actions)}. No acredita una evaluación aprobada.`
+    : 'Sin avances manuales registrados.';
   $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. Avance: además éxito ≥ ${pct(limits.success)} en TODOS los niveles desbloqueados del juego. Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
   $('curriculum-rows').replaceChildren(...(curriculum?.levels||[]).map(row=>{
     const m=row.measurements||{}, tr=document.createElement('tr');
-    const next=!row.unlocked?'Nivel bloqueado':row.planner?'Todos activos':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${limits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${limits.patience}`;
-    const active=!row.unlocked?'Pendiente':row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
+    const next=!row.unlocked?'Nivel bloqueado':row.planner?'Planner activo':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${limits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${limits.patience}`;
+    const active=!row.unlocked?'Pendiente':c.freeze_representation_after_planner&&row.planner
+      ? 'Predictor + planner · representación congelada'
+      : row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
     for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,limits.patience)} / ${limits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;
   }));
   $('representation-updates').textContent=fmt(p.representation_updates);
-  const encoderFrozen=(p.encoder_frozen??c.freeze_encoder)===true;
-  $('representation-update-scope').textContent=encoderFrozen
+  $('representation-update-scope').textContent=representationFrozen ? 'Encoder y decoder congelados'
+    : encoderFrozen
     ? 'Decoder · encoder congelado' : 'Encoder y decoder · cada acción real';
-  $('world-training-scope').textContent=(encoderFrozen
+  $('world-training-scope').textContent=(representationFrozen
+    ? 'Encoder y decoder congelados en este nivel con planner. En niveles nuevos vuelven a aprender.'
+    : encoderFrozen
     ? 'Encoder congelado: los latentes se mantienen fijos para una misma observación. El decoder sigue aprendiendo.'
     : 'Encoder y decoder aprenden desde el principio.')
     +' El predictor se añade cuando la representación está preparada. Las evaluaciones no actualizan pesos.';
@@ -284,7 +295,9 @@ function render(report) {
   $('notice').hidden=!report.error;$('notice').textContent=report.error||'';
   $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
-  $('gate').textContent=p.predictor_enabled?'Activo · cada acción junto a representación':'Pendiente de representación estable';
+  $('gate').textContent=p.predictor_enabled
+    ? representationFrozen?'Activo · representación congelada':'Activo · cada acción junto a representación'
+    : 'Pendiente de representación estable';
   const replay=p.predictor_replay;
   $('predictor-replay').textContent=replay
     ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} partidas · ${fmt(replay.transitions)} transiciones · lote ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
@@ -355,7 +368,9 @@ function render(report) {
     ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
     : lossMode==='balanced' ? 'NLL activa: grupos equilibrados de píxeles cambiados y estáticos.'
     : 'Este reporte no identifica el modo de NLL.';
-  $('representation-regularization').textContent=encoderFrozen
+  $('representation-regularization').textContent=representationFrozen
+    ? 'Encoder y decoder congelados · reconstrucción detenida'
+    : encoderFrozen
     ? 'Encoder congelado · regularización del encoder desactivada · decoder sigue aprendiendo'
     : p.sigreg_enabled===true
     ? 'SIGReg activo · fase inicial de representación'

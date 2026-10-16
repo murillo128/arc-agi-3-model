@@ -172,10 +172,10 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
         if quality is not None:
             quality.observe(episode, state, agent.state, counts)
         representation_loss = None
-        if not boundary and representation is not None:
+        if not boundary and representation is not None and not representation.frozen:
             representation_loss = representation.update(episode.observations[-2:], preview=capture)
         elif capture is not None:
-            # Frozen evaluations have no representation update to reuse. Decode
+            # Frozen representation/evaluation has no update to reuse. Decode
             # the same previous latent, without touching weights or random state.
             with torch.no_grad(), agent.engine.autocast():
                 reconstructed = agent.engine.decode(state.z[None], *before.final.shape).argmax(-1)[0]
@@ -295,6 +295,8 @@ def main(argv=None):
                         help='Override predictor NLL, including on resume; otherwise inherit checkpoint/config')
     parser.add_argument('--freeze-encoder', action=argparse.BooleanOptionalAction, default=None,
                         help='Freeze only the encoder; decoder keeps learning. Resume inherits the saved mode unless overridden')
+    parser.add_argument('--freeze-representation-after-planner', action=argparse.BooleanOptionalAction, default=None,
+                        help='Freeze encoder/decoder on planner levels; train again on new levels. Resume inherits policy')
     parser.add_argument('--predictor-replay-episodes', type=int,
                         help='RAM-only real episode capacity; default 0 (disabled), or inherit checkpoint on resume')
     parser.add_argument('--predictor-batch-size', type=int,
@@ -359,7 +361,7 @@ def main(argv=None):
                 continue
             if key not in ('resume', 'actions', 'source', 'output', 'prediction_delta_loss', 'freeze_encoder',
                            'predictor_replay_episodes', 'predictor_batch_size',
-                           'encoder_learning_rate_after_predictor') and previous != value:
+                           'encoder_learning_rate_after_predictor', 'freeze_representation_after_planner') and previous != value:
                 parser.error(f'Cannot change {key} while resuming this run')
         saved = checkpoint.load(args.output / 'latest.pt')
         restored = saved['training_progress']
@@ -404,6 +406,13 @@ def main(argv=None):
     report['config']['encoder_learning_rate_after_predictor'] = encoder_rate
     if args.resume and changed_encoder_rate:
         report['resumed_from']['encoder_learning_rate_after_predictor'] = dict(old=previous_encoder_rate, new=encoder_rate)
+    previous_planner_freeze = (restored or {}).get('freeze_representation_after_planner', False)
+    freeze_after_planner = (previous_planner_freeze if args.freeze_representation_after_planner is None
+                            else args.freeze_representation_after_planner)
+    changed_planner_freeze = freeze_after_planner != previous_planner_freeze
+    report['config']['freeze_representation_after_planner'] = freeze_after_planner
+    if args.resume and changed_planner_freeze:
+        report['resumed_from']['freeze_representation_after_planner'] = dict(old=previous_planner_freeze, new=freeze_after_planner)
     previous_replay = (restored or {}).get('predictor_replay', dict(episodes=0, batch_size=1))
     replay_config = dict(episodes=(previous_replay['episodes'] if args.predictor_replay_episodes is None
                                   else args.predictor_replay_episodes),
@@ -421,6 +430,11 @@ def main(argv=None):
     previews = PredictionSamples()
     last_write, started = 0., time.monotonic()
     checkpoint_requests = saved_requests = 0
+    control_requests = []
+    report['manual_controls'] = list((restored or {}).get('manual_controls', []))
+    active_pair = tuple((restored or {}).get('active_pair', (args.game, curriculum.unlocked[args.game])))
+    if active_pair not in curriculum.pairs:
+        parser.error('Saved active training level is not unlocked')
 
     def request_checkpoint(signum, frame):
         # No disk/CUDA work in a signal handler. Count requests so a signal
@@ -428,10 +442,19 @@ def main(argv=None):
         nonlocal checkpoint_requests
         checkpoint_requests += 1
 
-    checkpoint_signal = getattr(signal, 'SIGUSR1', None)
-    previous_handler = (signal.signal(checkpoint_signal, request_checkpoint)
-                        if checkpoint_signal is not None else None)
-    report['checkpoint_signal'] = 'SIGUSR1' if checkpoint_signal is not None else None
+    def request_control(signum, frame):
+        control_requests.append('phase' if signum == signal.SIGUSR2 else 'level')
+
+    previous_handlers = {}
+    report['control_signals'] = {}
+    for name, operation, handler in (('SIGUSR1', 'checkpoint', request_checkpoint),
+                                    ('SIGUSR2', 'phase', request_control),
+                                    ('SIGHUP', 'level', request_control)):
+        number = getattr(signal, name, None)
+        if number is not None:
+            previous_handlers[number] = signal.signal(number, handler)
+            report['control_signals'][operation] = name
+    report['checkpoint_signal'] = report['control_signals'].get('checkpoint')
 
     def publish(force=False, **values):
         nonlocal last_write
@@ -478,7 +501,7 @@ def main(argv=None):
             report['resumed_from']['prediction_delta_loss'] = dict(old=previous_loss, new=selected_loss)
         if args.resume and changed_freeze:
             report['resumed_from']['freeze_encoder'] = dict(old=previous_freeze, new=freeze_encoder)
-        if args.resume and (changed_loss or changed_freeze or changed_replay or changed_encoder_rate):
+        if args.resume and (changed_loss or changed_freeze or changed_replay or changed_encoder_rate or changed_planner_freeze):
             for state in curriculum.readiness.values():
                 state.representation_passes = state.prediction_passes = state.promotion_passes = 0
         if evaluator is None:
@@ -517,6 +540,17 @@ def main(argv=None):
         next_checkpoint = (actions // args.checkpoint_every + 1) * args.checkpoint_every
         process_start_actions = actions
         began_learning = None
+
+        def select_representation_phase():
+            if any(state.predictor for state in curriculum.readiness.values()):
+                representation.activate_predictor()
+            if freeze_after_planner:
+                state = curriculum.readiness[active_pair]
+                representation.select_level(predictor=state.predictor, planner=state.planner)
+            publish(force=True, sigreg_enabled=representation.sigreg_enabled,
+                    representation_frozen=representation.frozen, encoder_frozen=representation.freeze_encoder,
+                    representation_learning_rates=representation.learning_rates,
+                    representation_level=dict(game=active_pair[0], level=active_pair[1]))
 
         def evaluate(split):
             # Freeze the coverage of this sweep; promotion happens AFTER it.
@@ -563,15 +597,12 @@ def main(argv=None):
                     publish(force=True)
                 if split == 'dev':
                     readiness.observe(quality, success, gates)
-                    if readiness.predictor:
-                        representation.activate_predictor()
-                    publish(force=True, sigreg_enabled=representation.sigreg_enabled,
-                            representation_learning_rates=representation.learning_rates)
             if split == 'dev':
                 promotions = curriculum.advance()
                 if promotions:
                     report.setdefault('promotions', []).append(dict(actions=actions, levels=promotions))
                 publish(force=True)
+                select_representation_phase()
             save_requested()
 
         def save(reason='scheduled'):
@@ -585,9 +616,12 @@ def main(argv=None):
                 'actions': actions, 'updates': world.updates, 'representation_updates': representation.updates,
                 'path_updates': path_learner.updates, 'episodes': episode_index,
                 'freeze_encoder': freeze_encoder,
+                'freeze_representation_after_planner': freeze_after_planner,
                 'encoder_learning_rate_after_predictor': encoder_rate,
                 'predictor_replay': replay_config,
                 'curriculum': curriculum.snapshot(),
+                'active_pair': active_pair,
+                'manual_controls': list(report['manual_controls']),
                 'planner_actions': [dict(game=g, level=n, actions=count)
                                    for (g, n), count in planner_actions.items()]})
             saved_requests = requests
@@ -598,17 +632,46 @@ def main(argv=None):
             publish(force=True, phase=previous_phase)
 
         def save_requested():
+            nonlocal active_pair
+            # Consume a snapshot: new signals during IO wait for another boundary.
+            requests = control_requests[:]
+            del control_requests[:len(requests)]
+            for operation in requests:
+                game, level = active_pair
+                state = curriculum.readiness[active_pair]
+                old_phase = 'planner' if state.planner else 'predictor' if state.predictor else 'representation'
+                result = 'budget_exhausted'
+                if actions < args.actions:
+                    if operation == 'phase':
+                        result = 'advanced' if curriculum.advance_phase(active_pair) else 'already_planner'
+                    else:
+                        new_pair = curriculum.advance_level(game)
+                        result = 'advanced' if new_pair else 'last_level'
+                        if new_pair:
+                            active_pair = new_pair
+                new_state = curriculum.readiness[active_pair]
+                event = dict(actions=actions, operation=operation, result=result, game=game,
+                             old_level=level, level=active_pair[1], old_phase=old_phase,
+                             phase='planner' if new_state.planner else 'predictor' if new_state.predictor else 'representation')
+                report['manual_controls'].append(event)
+                report['manual_controls'] = report['manual_controls'][-128:]
+                print(json.dumps(dict(event='curriculum_control', **event)), flush=True)
+            if requests:
+                select_representation_phase()
+                save('manual_control')
+                return
             if checkpoint_requests != saved_requests:
                 save()
 
+        select_representation_phase()
         publish(force=True, predictor_updates=world.updates, representation_updates=representation.updates,
                 path_updates=path_learner.updates, sigreg_enabled=representation.sigreg_enabled,
                 representation_learning_rates=representation.learning_rates,
-                encoder_frozen=freeze_encoder,
+                encoder_frozen=representation.freeze_encoder, representation_frozen=representation.frozen,
                 predictor_replay=(dict(predictor_replay.status(), actual_batch_size=0) if predictor_replay else None))
         if args.resume and (args.update_representation_threshold or args.update_latent_drift_threshold
                             or args.update_evaluation_interval or changed_loss or changed_freeze or changed_replay
-                            or changed_encoder_rate):
+                            or changed_encoder_rate or changed_planner_freeze):
             save('resume')
         if not args.resume:
             save('initial')
@@ -616,6 +679,8 @@ def main(argv=None):
         save_requested()
         while actions < args.actions:
             pair = curriculum.next_pair()
+            active_pair = pair
+            select_representation_phase()
             game, level = pair
             readiness = curriculum.readiness[pair]
             seed = episode_seeds('train', 1, offset=args.seed * 10000 + episode_index)[0]
@@ -676,8 +741,8 @@ def main(argv=None):
         publish(force=True, phase='failed')
         raise
     finally:
-        if checkpoint_signal is not None:
-            signal.signal(checkpoint_signal, previous_handler)
+        for number, handler in previous_handlers.items():
+            signal.signal(number, handler)
 
 
 if __name__ == '__main__':

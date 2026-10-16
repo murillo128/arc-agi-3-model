@@ -38,15 +38,15 @@ class LevelReadiness:
     measurements: dict = field(default_factory=dict)
 
     def observe(self, quality, success, config):
-        """Only a completed development evaluation can grant permissions."""
+        """Automatic permissions require a completed development evaluation."""
         self.measurements = dict(quality, success=success)
         recon, drift = quality.get('reconstruction_error'), quality.get('latent_drift')
         evidence = quality.get('samples', 0) >= config.minimum_samples
         stable = measured(drift) and drift <= config.latent_drift
         good_rep = evidence and measured(recon) and recon <= config.representation_open and stable
         self.representation_passes = self.representation_passes + 1 if good_rep else 0
-        # Permissions latch: opening a later learner NEVER freezes an earlier
-        # one. A later regression prevents promotion, not continued learning.
+        # Permissions latch; a later regression prevents promotion. The trainer
+        # separately owns the optional representation freeze at planner admission.
         if self.representation_passes >= config.patience:
             self.predictor = True
         one, rollout = quality.get('prediction_error'), quality.get('rollout_error')
@@ -76,6 +76,7 @@ class Curriculum:
                           for level in range(1, n + 1)}
         self.episode_counts = dict.fromkeys(self.readiness, 0)
         self.stage = 1
+        self.preferred_pair = None
 
     @property
     def pairs(self):
@@ -84,9 +85,32 @@ class Curriculum:
     def next_pair(self):
         # Fresh episodes, balanced across unlocked levels. Scheduling counts are
         # reset at promotion so the new level cannot monopolize the next stage.
-        pair = min(self.pairs, key=self.episode_counts.get)
+        pair = self.preferred_pair or min(self.pairs, key=self.episode_counts.get)
+        self.preferred_pair = None
         self.episode_counts[pair] += 1
         return pair
+
+    def advance_phase(self, pair):
+        """Explicit operator override; never invent quality or passed checks."""
+        state = self.readiness[pair]
+        if state.planner:
+            return False
+        if state.predictor:
+            state.planner = True
+        else:
+            state.predictor = True
+        return True
+
+    def advance_level(self, game):
+        """Unlock and schedule the next level, retaining cumulative practice."""
+        n = self.unlocked[game]
+        if n == self.levels[game]:
+            return None
+        self.unlocked[game] = n + 1
+        self.stage += 1
+        self.episode_counts = dict.fromkeys(self.readiness, 0)
+        self.preferred_pair = (game, n + 1)
+        return self.preferred_pair
 
     def advance(self):
         promoted = []
@@ -104,6 +128,7 @@ class Curriculum:
 
     def snapshot(self):
         return dict(stage=self.stage, unlocked=dict(self.unlocked), thresholds=asdict(self.config),
+                    preferred_pair=self.preferred_pair,
                     levels=[dict(game=g, level=n, unlocked=n <= self.unlocked[g],
                                  episodes=self.episode_counts[g, n], **asdict(state))
                             for (g, n), state in self.readiness.items()])
@@ -121,6 +146,10 @@ class Curriculum:
                 or any(not 1 <= n <= self.levels[g] for g, n in snapshot['unlocked'].items())):
             raise ValueError('Checkpoint curriculum does not match this run')
         self.stage, self.unlocked = snapshot['stage'], dict(snapshot['unlocked'])
+        preferred = snapshot.get('preferred_pair')
+        self.preferred_pair = tuple(preferred) if preferred else None
+        if self.preferred_pair is not None and self.preferred_pair not in self.pairs:
+            raise ValueError('Preferred training level is not unlocked')
         for pair, row in rows.items():
             self.readiness[pair] = LevelReadiness(**{k: row[k] for k in LevelReadiness.__dataclass_fields__})
             if snapshot['thresholds'] != asdict(self.config):

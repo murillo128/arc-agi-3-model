@@ -23,6 +23,9 @@ class OnlineRepresentation:
             raise ValueError('Post-predictor encoder LR must be positive and no greater than representation LR')
         self.engine = engine
         self.freeze_encoder = freeze_encoder
+        self.encoder_frozen_by_option = freeze_encoder
+        self.base_learning_rate = learning_rate
+        self.frozen = False
         self.encoder_learning_rate_after_predictor = encoder_learning_rate_after_predictor
         groups = [dict(name='decoder', params=list(engine.model.decoder.parameters()))]
         if not freeze_encoder:
@@ -38,7 +41,17 @@ class OnlineRepresentation:
 
     @property
     def learning_rates(self):
+        if self.frozen:
+            return dict(encoder=None, decoder=None)
         return {'encoder': None, **{g['name']: g['lr'] for g in self.optimizer.param_groups}}
+
+    def freeze(self):
+        """Stop representation learning without changing weights or cached z."""
+        self.frozen = self.freeze_encoder = True
+        self.sigreg_enabled = False
+        for module in (self.engine.model.encoder, self.engine.model.decoder):
+            module.requires_grad_(False).eval()
+            module.zero_grad(set_to_none=True)
 
     def activate_predictor(self):
         """Latch the shared representation phase without rebuilding optimizer state."""
@@ -48,6 +61,20 @@ class OnlineRepresentation:
                 if group['name'] == 'encoder':
                     group['lr'] = self.encoder_learning_rate_after_predictor
 
+    def select_level(self, *, predictor, planner):
+        """Select a level's phase, retaining weights and optimizer moments."""
+        if planner:
+            self.freeze()
+            return
+        self.frozen = False
+        self.freeze_encoder = self.encoder_frozen_by_option
+        for group in self.optimizer.param_groups:
+            group['lr'] = self.base_learning_rate
+        if predictor:
+            self.activate_predictor()
+        # SIGReg stays disabled once any predictor has been admitted. update()
+        # sets gradient ownership when this level actually trains again.
+
     def update(self, observations, *, preview=None):
         """Reconstruct the last two real observations on EVERY learning action.
 
@@ -55,6 +82,8 @@ class OnlineRepresentation:
         reconstruct from z without the decoder's contextual correction. No
         next-frame prediction or imagined target enters this optimizer.
         """
+        if self.frozen:
+            return None
         observations = [o for o in observations[-2:] if o.final is not None]
         if not observations or len({o.final.shape for o in observations}) != 1:
             return None

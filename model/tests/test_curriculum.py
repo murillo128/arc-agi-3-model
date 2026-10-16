@@ -35,6 +35,104 @@ GOOD = dict(reconstruction_error=.005, latent_drift=.01, prediction_error=.05,
 
 
 class CurriculumTests(unittest.TestCase):
+    def test_planner_freeze_skips_representation_then_new_level_trains_again(self):
+        agent = path_agent()
+        e = agent.engine
+        e.config = replace(e.config, freeze_representation=False)
+        representation = OnlineRepresentation(e, 3e-5, encoder_learning_rate_after_predictor=3e-6)
+        predictor, planner = OnlinePredictor(e, None, horizon=2), PathLearner(agent.planner)
+        # Prime Adam moments, then freeze without changing their state.
+        representation.update([obs(1), obs(3)])
+        moments = {p: {k: v.clone() for k, v in s.items()}
+                   for p, s in representation.optimizer.state.items()}
+        episode = Episode([obs(1), obs(3)], [Action(1)])
+        latent = real_states(e, episode)[-1].z.clone()
+        epoch = e._latent_cache_epoch
+        original = {n: fingerprint(getattr(e.model, n)) for n in ('encoder', 'decoder', 'dynamics')}
+        value = fingerprint(agent.path_evaluator)
+        representation.select_level(predictor=True, planner=True)
+        self.assertEqual(representation.learning_rates, dict(encoder=None, decoder=None))
+        # Frozen update is a no-op even for direct callers; play must skip it.
+        self.assertIsNone(representation.update([]))
+        with patch.object(representation, 'update', side_effect=AssertionError('frozen forward')), \
+             patch('games.square_cross.v1.sc01.generate_scene', return_value=fixture()):
+            result = play(agent, Factory('sc01-v1', Path('games')), 1, 123, 2,
+                          representation=representation, world=predictor, learner=planner, random_policy=True)
+        self.assertEqual(representation.updates, 1)
+        self.assertEqual(e._latent_cache_epoch, epoch)
+        self.assertTrue(torch.equal(real_states(e, episode)[-1].z, latent))
+        self.assertTrue(all(r['representation_loss'] is None for r in result['records']))
+        for name in ('encoder', 'decoder'):
+            self.assertEqual(fingerprint(getattr(e.model, name)), original[name])
+            self.assertTrue(all(p.grad is None for p in getattr(e.model, name).parameters()))
+        self.assertNotEqual(fingerprint(e.model.dynamics), original['dynamics'])
+        self.assertNotEqual(fingerprint(agent.path_evaluator), value)
+        representation.select_level(predictor=False, planner=False)
+        self.assertEqual(representation.learning_rates, dict(encoder=3e-5, decoder=3e-5))
+        self.assertFalse(representation.sigreg_enabled)
+        for p, state in moments.items():
+            for key, tensor in state.items():
+                self.assertTrue(torch.equal(representation.optimizer.state[p][key], tensor))
+        representation.update([obs(1), obs(3)])
+        for name in ('encoder', 'decoder'):
+            self.assertNotEqual(fingerprint(getattr(e.model, name)), original[name])
+        self.assertGreater(e._latent_cache_epoch, epoch)
+        representation.select_level(predictor=True, planner=False)
+        self.assertEqual(representation.learning_rates, dict(encoder=3e-6, decoder=3e-5))
+        explicit = OnlineRepresentation(e, freeze_encoder=True)
+        explicit.select_level(predictor=True, planner=True)
+        explicit.select_level(predictor=False, planner=False)
+        self.assertTrue(explicit.freeze_encoder)
+        self.assertEqual(explicit.learning_rates, dict(encoder=None, decoder=3e-6))
+
+    def test_planner_freeze_admission_resume_override_and_legacy_compatibility(self):
+        with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()), \
+             patch('games.square_cross.v1.sc01.generate_scene', return_value=fixture()):
+            root = Path(temp)
+            config = root / 'config.json'
+            config.write_text(json.dumps({'network': asdict(path_agent().engine.model.config)}))
+            args = ['--init-config', str(config), '--output', str(root / 'run'), '--device', 'cpu',
+                    '--steps', '2', '--evaluate-every', '2', '--evaluation-episodes', '1', '--patience', '1']
+            phases = []
+            def capture(*pos, **kw):
+                if kw.get('representation'):
+                    phases.append(kw['representation'].frozen)
+                return play(*pos, **kw)
+            pending = dict(GOOD, latent_drift=None)
+            with patch('model.subgoal_training.play', side_effect=capture), \
+                 patch('model.subgoal_training.summarize_quality',
+                       side_effect=[(pending, []), (GOOD, []), (GOOD, []), (GOOD, [])]):
+                main([*args, '--actions', '4', '--freeze-representation-after-planner'])
+            self.assertEqual(phases, [False, True])
+            latest = root / 'run/latest.pt'
+            saved = checkpoint.load(latest)
+            self.assertEqual(saved['training_progress']['representation_updates'], 2)
+            before = agent_checkpoint.load(latest, device='cpu')
+            original_save = agent_checkpoint.save
+            def check_save(path, agent, **kw):
+                if kw['training_progress']['actions'] == 6:
+                    # Override save before any extra learning must keep weights/counters.
+                    self.assertEqual(fingerprint(agent.engine.model), fingerprint(before.engine.model))
+                    self.assertEqual(kw['training_progress']['representation_updates'], 2)
+                    self.assertEqual(kw['training_progress']['path_updates'], saved['training_progress']['path_updates'])
+                original_save(path, agent, **kw)
+            phases.clear()
+            with patch('model.subgoal_training.play', side_effect=capture):
+                main([*args, '--resume', '--actions', '6'])
+            self.assertEqual(phases, [True])
+            saved = checkpoint.load(latest)
+            before = agent_checkpoint.load(latest, device='cpu')
+            self.assertTrue(saved['training_progress']['freeze_representation_after_planner'])
+            with patch.object(agent_checkpoint, 'save', side_effect=check_save):
+                main([*args, '--resume', '--actions', '8', '--no-freeze-representation-after-planner'])
+            self.assertEqual(checkpoint.load(latest)['training_progress']['representation_updates'], 4)
+            # An old checkpoint without the option keeps representation trainable.
+            saved = checkpoint.load(latest)
+            saved['training_progress'].pop('freeze_representation_after_planner')
+            checkpoint.write(latest, saved)
+            main([*args, '--resume', '--actions', '10'])
+            self.assertEqual(checkpoint.load(latest)['training_progress']['representation_updates'], 6)
+
     def test_encoder_rate_resume_override_inherits_checkpoint_without_losing_weights(self):
         with tempfile.TemporaryDirectory() as temp, redirect_stdout(io.StringIO()):
             root = Path(temp)

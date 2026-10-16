@@ -218,7 +218,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "One portable Agent: observe, imagine, act, set_goal(image,mask). The training controller is outside inference. Encoder/decoder learn from the start; predictor and then PathValue are admitted per level after repeated fixed development checks. Activation is cumulative: earlier learners continue. Frozen evaluation updates no weights. Synthetic teacher exposes one current goal; private predicates and distances never enter search. Checkpoint saves all active modules and curriculum progress. SIGUSR1 queues an additional atomic save at the next completed episode/evaluation boundary, then training continues; optimizer moments are not stored.",
+      "description": "One portable Agent: observe, imagine, act, set_goal(image,mask). The training controller is outside inference. Encoder/decoder learn from the start; predictor and then PathValue are admitted per level after repeated fixed development checks. Activation is cumulative: earlier learners continue. Frozen evaluation updates no weights. Synthetic teacher exposes one current goal; private predicates and distances never enter search. Checkpoint saves all active modules and curriculum progress. SIGUSR1 queues an additional atomic save at the next completed episode/evaluation boundary. SIGUSR2 advances the current training level by one phase; SIGHUP unlocks and schedules the next level. Manual overrides are checkpointed before the next action with a separate audit trail, never fabricated quality checks; optimizer moments are not stored.",
       "children": [
         "world.representation",
         "world_model",
@@ -396,7 +396,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Shared trainable representation and current-episode memory. Encoder and decoder update on each real learning action even after predictor and planner activation. After encoder updates invalidate detached z caches, re-encode real history and current goal, and rebuild h. Predictor-only updates rebuild h; reset discards the episode. No across-game replay.",
+      "description": "Shared trainable representation and current-episode memory. Encoder and decoder update on real learning actions, except during planner-level episodes when the optional per-level freeze policy is enabled. After encoder updates invalidate detached z caches, re-encode real history and current goal, and rebuild h. Predictor-only updates rebuild h; reset discards the episode. No across-game replay.",
       "children": [
         "observation",
         "world.encoder",
@@ -105880,7 +105880,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "AdamW LR 3e-5, clip norm 1. CUDA torch.compile, BF16, 8-bit optimizer moments; CPU float32 AdamW. One update per valid real action once admitted. Only dynamics parameters receive this step. The representation and planner optimizers are independent and remain active.",
+      "description": "AdamW LR 3e-5, clip norm 1. CUDA torch.compile, BF16, 8-bit optimizer moments; CPU float32 AdamW. One update per valid real action once admitted. Only dynamics parameters receive this step. The representation and planner optimizers are independent; representation steps pause on planner levels when the per-level freeze policy is enabled.",
       "parent_id": "world.learner"
     },
     {
@@ -106703,7 +106703,7 @@
       "id": "training.curriculum",
       "label": "Cumulative Curriculum & Activation",
       "kind": "operation",
-      "description": "Select exactly one game per campaign (sc01-v1 by default); training, evaluation and previews use only that game. Start at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; retain weights when advancing. The active campaign initializes encoder, decoder, predictor and PathValue from scratch using subgoal_config.json; counters and permissions start at zero. Encoder/decoder always learn. Admit predictor at reconstruction <=10% and latent drift <=15%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
+      "description": "Select exactly one game per campaign (sc01-v1 by default); training, evaluation and previews use only that game. Start at level 1; then 1+2, then 1+2+3. Balance fresh episodes across unlocked levels; retain weights when advancing. The active campaign initializes encoder, decoder, predictor and PathValue from scratch using subgoal_config.json; counters and permissions start at zero. Encoder/decoder learn on representation/predictor levels; the optional planner freeze policy suspends both on planner levels and thaws them on new levels. Admit predictor at reconstruction <=10% and latent drift <=15%, then planner at one/three-step error <=10%; three consecutive development checks. Permissions latch and never disable earlier learners. Promote only with current quality plus >=80% planner success in ALL unlocked levels of that game for three checks. Regressions delay promotion. Defaults configurable, no activation by elapsed action budget.",
       "ports": [
         {
           "id": "quality",
@@ -106750,7 +106750,7 @@
       "id": "training.representation",
       "label": "Representation Learner",
       "kind": "operation",
-      "description": "OnlineRepresentation: every real action, including after predictor/planner admission. Shared encoder and decoder on the latest two real observations. Absolute color CE + balanced net delta NLL + soft overlap; repeat this reconstruction through the local readout with weight 1, bypassing contextual decoder corrections but using the same z and classifier. SIGReg weight 0.002 only during the initial representation-only phase; disable globally at the first predictor admission and keep disabled on later levels/resume. Variance-floor weight is 0 for this two-observation online recipe. Log weighted contributions separately; their sum is the total loss. AdamW starts at 3e-5 for encoder and decoder. Active encoder_learning_rate_after_predictor=3e-6 lowers only the encoder group at first predictor admission; decoder stays at 3e-5. Preserve optimizer moments during this in-process change. The global phase persists through curriculum admissions on later levels/resume. Report effective rates. Clip 1; CUDA BF16/torch.compile and 8-bit moments, CPU float32. No dynamics/PathValue gradients. Invalidate inference latents and re-encode the current goal/history afterwards.",
+      "description": "OnlineRepresentation: every real action except on planner-admitted levels when freeze_representation_after_planner is enabled (active campaign). Freeze encoder AND decoder only while training a planner-admitted level; thaw on new representation/predictor levels with base/reduced encoder LR respectively; restore the active level on resume; skip reconstruction optimizer/regularizers and preserve observed latent caches. Predictor and PathValue continue learning. Recurrent h still uses current dynamics. Keep reconstruction previews and evaluation read-only. Missing reconstruction updates are not zero losses. Legacy policy without this option continues representation learning. Shared encoder and decoder on the latest two real observations. Absolute color CE + balanced net delta NLL + soft overlap; repeat this reconstruction through the local readout with weight 1, bypassing contextual decoder corrections but using the same z and classifier. SIGReg weight 0.002 only during the initial representation-only phase; disable globally at the first predictor admission and keep disabled on later levels/resume. Variance-floor weight is 0 for this two-observation online recipe. Log weighted contributions separately; their sum is the total loss. AdamW starts at 3e-5 for encoder and decoder. Active encoder_learning_rate_after_predictor=3e-6 lowers only the encoder group at first predictor admission; decoder stays at 3e-5. Preserve optimizer moments during this in-process change. Without the per-level freeze policy the reduced encoder LR remains global; with it, select base/reduced/frozen representation learning per training level. SIGReg remains globally disabled after first predictor admission. Report effective rates. Clip 1; CUDA BF16/torch.compile and 8-bit moments, CPU float32. No dynamics/PathValue gradients. Invalidate inference latents and re-encode the current goal/history afterwards.",
       "ports": [
         {
           "id": "real_batch",
