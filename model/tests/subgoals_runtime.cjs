@@ -23,11 +23,16 @@ const report = {status:'running', age_seconds:1, config:{seed:0,predictor_error:
   episodes:[{game:'a',level:1,end_action:32,success:true,segments:[{success:true,actions:3,minimum_actions:2,reward:-1}]}],
   evaluations:[]};
 let offline=false;
+let controls;
+let controlReply;
+const controlRequests=[];
 let gpu={devices:[{index:0,name:'Test GPU',utilization_percent:73,temperature_c:71}]};
 const context=vm.createContext({console,AbortSignal,setTimeout(){},
   fixture:report,
   document:{getElementById:id=>nodes.get(id),createElement:element,createElementNS:element},
-  fetch:async()=>{if(offline)throw Error('offline');return {ok:true,json:async()=>({subgoals:report,gpu})};}});
+  fetch:async(url,options)=>{if(offline)throw Error('offline');if(options?.method==='POST'){
+    controlRequests.push({url,options});return controlReply;
+  }return {ok:true,json:async()=>({subgoals:report,gpu,curriculum_control:controls})};}});
 const text=id=>nodes.get(id).textContent;
 (async()=>{
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),context);
@@ -506,6 +511,43 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(circles('latent-diversity').length,0);
   assert.equal(nodes.get('latent-rank-legend').children[0].textContent,'Rango efectivo: —');
   assert.equal(nodes.get('evaluation-rows').children.length,0);
+  assert.equal(nodes.get('advance-phase').disabled,true,'read-only dashboards cannot send controls');
+  assert.equal(nodes.get('advance-level').disabled,true);
+  controls={token:'session-token',target:{game:'sc01-v1',level:1},phase:true,level:true,pending:null,result:null};
+  await vm.runInContext('poll()',context);
+  assert.equal(text('control-target'),'Nivel de entrenamiento: sc01-v1 / 1');
+  assert.equal(nodes.get('advance-phase').disabled,false);
+  let finishRequest;
+  controlReply=new Promise(resolve=>{finishRequest=resolve;});
+  const click=nodes.get('advance-phase').listeners.click();
+  assert.equal(nodes.get('advance-phase').disabled,true,'disable before awaiting HTTP');
+  assert.equal(nodes.get('advance-level').disabled,true);
+  await nodes.get('advance-phase').listeners.click();
+  assert.equal(controlRequests.length,1,'double click cannot send twice');
+  assert.equal(controlRequests[0].url,'api/curriculum');
+  assert.equal(controlRequests[0].options.headers['X-Curriculum-Token'],'session-token');
+  assert.deepEqual(JSON.parse(controlRequests[0].options.body),{operation:'phase'});
+  controls={...controls,phase:false,level:false,pending:{operation:'phase'}};
+  finishRequest({ok:true,json:async()=>controls});await click;
+  assert.match(text('control-status'),/fase pendiente/);
+  await vm.runInContext('poll()',context);
+  assert.equal(nodes.get('advance-phase').disabled,true,'poll preserves pending requests');
+  controls={...controls,phase:true,level:true,pending:null,result:{status:'applied',event:{result:'advanced',level:1,phase:'predictor'}}};
+  await vm.runInContext('poll()',context);
+  assert.match(text('control-status'),/Avance aplicado · nivel 1 · fase predictor/);
+  controlReply={ok:false,json:async()=>({error:'Entrenador detenido'})};
+  await nodes.get('advance-level').listeners.click();
+  assert.deepEqual(JSON.parse(controlRequests[1].options.body),{operation:'level'});
+  assert.match(text('control-status'),/Entrenador detenido.*no se reenviará automáticamente/);
+  assert.equal(nodes.get('advance-level').disabled,true);
+  controls={...controls,phase:false,level:false,result:{status:'error',message:'El entrenador se detuvo.'}};
+  await vm.runInContext('poll()',context);
+  assert.equal(text('control-status'),'El entrenador se detuvo.');
+  controls={...controls,phase:false,level:false,result:{status:'applied',event:{result:'last_level',level:5,phase:'planner'}}};
+  await vm.runInContext('poll()',context);
+  assert.match(text('control-status'),/El último nivel ya estaba abierto/);
+  assert.equal(nodes.get('advance-phase').disabled,true);
+  assert.equal(nodes.get('advance-level').disabled,true);
   offline=true;await vm.runInContext('poll()',context);
   assert.match(text('connection'),/Sin conexión.*offline/);
   assert.equal(text('gpu-status'),'GPU · datos no disponibles','connection failure clears stale GPU readings');

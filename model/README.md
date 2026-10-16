@@ -247,6 +247,16 @@ portátil descrito arriba: guarda pesos y progreso, sin momentos del optimizador
   --subgoal-report model/runs/curriculum/current/report.json
 ```
 
+Para habilitar **Avanzar fase** y **Siguiente nivel** en la pestaña Currículo,
+arranca el dashboard con `--curriculum-service arc3-curriculum.service` además de
+`--subgoal-report`. Sin esa opción continúa siendo de sólo lectura. Los botones
+usan los controles del entrenador activo, muestran la petición pendiente y el
+resultado registrado; se desactivan mientras esperan o cuando el avance no procede.
+Se comprueba que el servicio corresponde al reporte mostrado. No reinician el
+entrenamiento ni cambian pesos desde el servidor web. El backend requiere Linux
+con pidfd y el mismo usuario del servicio. Sólo hay que reiniciar el dashboard
+para habilitarlos; no es necesario reiniciar el entrenador que ya admite señales.
+
 LMEX sigue `model/runs/curriculum/current/latest.pt`; el sincronizador reutiliza el
 `architecture.json` del repositorio. El checkpoint `path_mpc` necesita que su
 llamador proporcione el objetivo con `Agent.set_goal`: no descubre objetivos.

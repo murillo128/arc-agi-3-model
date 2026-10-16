@@ -1,7 +1,8 @@
-"""Read-only live dashboard for the trainer's existing JSON-line log.
+"""Live dashboard for the trainer's existing logs/reports.
 
 Run with python -m model.dashboard --log model/runs/exploration/run.log.
-No torch imports, training-process hooks, or persistent dashboard storage.
+Read-only by default; explicit curriculum service enables two signal controls.
+No torch imports or persistent dashboard storage.
 """
 import argparse
 from collections import deque
@@ -15,6 +16,8 @@ import subprocess
 import threading
 import time
 from urllib.parse import urlsplit
+
+from .curriculum_control import CurriculumControl
 
 
 MAX_READ = 8 * 1024 * 1024
@@ -628,14 +631,55 @@ def subgoal_snapshot(path):
         return {'kind': 'synthetic_subgoals', 'status': 'waiting', 'message': str(error), 'progress': {}}
 
 
-def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None):
+def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None):
     gpu = GpuMonitor()
+    if curriculum_service and not subgoal_report:
+        raise ValueError('Curriculum controls require a subgoal report')
+    control = CurriculumControl(curriculum_service, subgoal_report) if curriculum_service else None
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if urlsplit(self.path).path != '/api/curriculum' or control is None:
+                self.send_error(404)
+                return
+            if not control.authorized(self.headers.get('X-Curriculum-Token')):
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 256 or self.headers.get('Content-Type') != 'application/json':
+                    raise ValueError('Envía una operación JSON válida.')
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict) or set(body) != {'operation'} or body['operation'] not in ('phase', 'level'):
+                    raise ValueError('Operación de currículo no válida.')
+            except (ValueError, TypeError):
+                self.send_json(400, {'error': 'Operación de currículo no válida.'})
+                return
+            try:
+                state = control.request(body['operation'], subgoal_snapshot(subgoal_report))
+                self.send_json(202, state)
+            except (OSError, ValueError, IndexError, StopIteration, subprocess.SubprocessError):
+                self.send_json(409, {'error': 'No se pudo solicitar el avance. Comprueba el estado del entrenador.'})
+
+        def send_json(self, status, payload):
+            data = json.dumps(payload, allow_nan=False).encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
         def do_GET(self):
             route = urlsplit(self.path).path
             if route == '/api/state':
                 state = {'subgoals': subgoal_snapshot(subgoal_report)} if subgoal_report else monitor.snapshot()
+                if control is not None:
+                    state['curriculum_control'] = control.snapshot(state['subgoals'])
                 if behavior is not None and subgoal_report is None:
                     state['behavior'] = behavior.snapshot()
                 if campaign is not None and subgoal_report is None:
@@ -680,12 +724,15 @@ def main():
     parser.add_argument('--campaign-log', type=Path, help='Independent architecture comparison JSON-line log')
     parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
     parser.add_argument('--subgoal-report', type=Path, help='Select the new synthetic-subgoal run for the entire dashboard')
+    parser.add_argument('--curriculum-service', help='Opt in to phase/level controls for this systemd user service')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
     args = parser.parse_args()
     if not args.log and not args.subgoal_report:
         parser.error('Select --log or --subgoal-report')
+    if args.curriculum_service and not args.subgoal_report:
+        parser.error('--curriculum-service requires --subgoal-report')
     if args.subgoal_report and any((args.log, args.behavior_log, args.campaign_log, args.campaign_report)):
         parser.error('--subgoal-report selects one run; do not combine it with legacy log selectors')
     if not 2 <= args.max_points <= 10000:
@@ -693,7 +740,7 @@ def main():
     monitor = LogMonitor(args.log, args.max_points) if args.log else None
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
     campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
-    with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report) as server:
+    with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report, args.curriculum_service) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

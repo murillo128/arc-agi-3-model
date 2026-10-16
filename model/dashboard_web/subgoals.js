@@ -399,5 +399,43 @@ for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
   if(name==='world'&&displayedReport)render(displayedReport);
 });
-async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);}catch(error){gpuStatus(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+let controlState=null, controlBusy=false, controlError='';
+function renderControls(state){
+  controlState=state||null;
+  $('advance-phase').disabled=controlBusy||!state?.phase;
+  $('advance-level').disabled=controlBusy||!state?.level;
+  const target=state?.target;
+  $('control-target').textContent=target?.game&&target?.level?`Nivel de entrenamiento: ${target.game} / ${target.level}`:'';
+  const pending=state?.pending;
+  const result=state?.result;
+  let message=state?'El cambio se aplica al terminar la partida o evaluación en curso.':'Controles no habilitados en este dashboard.';
+  if(state?.message)message=state.message;
+  if(result?.status==='applied'){
+    const event=result.event;
+    const outcome={advanced:'Avance aplicado',already_planner:'El nivel ya estaba en fase planner',last_level:'El último nivel ya estaba abierto',budget_exhausted:'El presupuesto de entrenamiento ha terminado'};
+    message=`${outcome[event.result]||event.result} · nivel ${event.level} · fase ${event.phase}.`;
+  }
+  if(result?.status==='error')message=result.message;
+  if(pending)message=`Avance de ${pending.operation==='phase'?'fase':'nivel'} pendiente: esperando a que termine la partida o evaluación.`;
+  if(controlBusy)message='Enviando petición…';
+  if(controlError)message=controlError;
+  $('control-status').textContent=message;
+}
+async function advanceCurriculum(operation){
+  if(controlBusy||!controlState?.[operation])return;
+  const token=controlState.token;
+  controlBusy=true;controlError='';renderControls(controlState);
+  try{
+    const response=await fetch('api/curriculum',{method:'POST',headers:{'Content-Type':'application/json','X-Curriculum-Token':token},body:JSON.stringify({operation}),signal:AbortSignal.timeout(10000)});
+    if(!response.ok){let reason='No se pudo solicitar el avance.';try{reason=(await response.json()).error||reason;}catch{}throw Error(reason);}
+    controlState=await response.json();
+  }catch(error){
+    // Never retry an uncertain signal delivery. Polling recovers server state.
+    controlError=`${error.message} Consultando el estado; no se reenviará automáticamente.`;
+    controlState=null;
+  }finally{controlBusy=false;renderControls(controlState);}
+}
+$('advance-phase').addEventListener('click',()=>advanceCurriculum('phase'));
+$('advance-level').addEventListener('click',()=>advanceCurriculum('level'));
+async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 poll();

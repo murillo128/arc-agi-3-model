@@ -134,3 +134,9 @@ a { color: #77dabb; font-size: 13px; }
 .probe-legend-1 { color: #f7bd76; }
 .probe-legend-2 { color: #b4a5ff; }
 .probe-legend-3 { color: #7cceff; }
+
+.curriculum-controls { margin: 20px 0; }
+.curriculum-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.curriculum-buttons button { padding: 10px 16px; border: 1px solid #77dabb; border-radius: 7px; background: #23483d; color: #e7efec; font: inherit; cursor: pointer; }
+.curriculum-buttons button:disabled { opacity: .45; cursor: not-allowed; }
+.curriculum-buttons button:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
