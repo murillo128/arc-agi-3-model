@@ -483,7 +483,7 @@ function render(report) {
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,r.policy,`${r.successes}/${r.episodes}`,`${r.subgoals}/${r.attempted_subgoals}`,`${fmt(r.delta_error*100,2)} %`,fmt(r.real_actions),fmt(r.decision_ms,2)]){const td=document.createElement('td');td.textContent=value;tr.append(td);}return tr;}));
 }
-const tabs=['world','curriculum','path','evaluation'];
+const tabs=['world','path','evaluation','curriculum'];
 for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
