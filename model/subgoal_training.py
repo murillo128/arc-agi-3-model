@@ -215,14 +215,22 @@ def play(agent, factory, level, seed, steps, *, world=None, learner=None, epsilo
             agent.state = refreshed[-1]
             agent.set_goal(goal.frame, goal.mask)
         if not boundary and world is not None and error is not None:
-            refreshed = refreshed or real_states(agent.engine, episode)
-            rollout = None
-            if len(episode.actions) >= world.horizon:
-                anchor = len(episode.actions) - world.horizon
-                rollout = (refreshed[anchor], episode.actions[anchor:], episode.observations[anchor].final)
+            if predictor_replay is not None and refreshed is None:
+                # Preserve cache admission BEFORE record attaches the episode
+                # to the shared replay budget. Otherwise later cache misses can
+                # batch different frames together and change BF16 results.
+                with torch.no_grad(), agent.engine.autocast():
+                    agent.engine.encode_detached_episode(episode)
             if predictor_replay is not None and predictor_replay.record(episode):
+                # Replay rebuilds each selected prefix with current weights,
+                # including this endpoint. A separate rebuild here is unused.
                 losses = world.update_batch(predictor_replay.examples(predictor_replay.sample()))
             else:
+                refreshed = refreshed or real_states(agent.engine, episode)
+                rollout = None
+                if len(episode.actions) >= world.horizon:
+                    anchor = len(episode.actions) - world.horizon
+                    rollout = (refreshed[anchor], episode.actions[anchor:], episode.observations[anchor].final)
                 losses = world.update(refreshed[-2], action, before.final, after, refreshed[-1].z, error,
                                       rollout=rollout)
             if losses is not None:
@@ -545,7 +553,7 @@ def main(argv=None):
         report['planner_trajectory'] = trajectories.metadata
         report['trajectory_error'] = trajectories.error
         report['progress']['recent_tps'] = throughput.value()
-        write_report(path, report)
+        write_report(path, report, compact=True)
         print(json.dumps({'event': 'subgoal_progress', **{k: v for k, v in report['progress'].items()
             if k not in ('observation', 'goal_frame', 'goal_mask')}}, allow_nan=False), flush=True)
 

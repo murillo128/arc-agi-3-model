@@ -12,12 +12,25 @@ from unittest.mock import patch
 import torch
 
 from model.campaign import (CONTROLS, WORLD_VARIANTS, compare, evaluate_cell_world,
-                            imagination_gate, main, quotas, world_config)
+                            imagination_gate, main, quotas, world_config, write_report)
 from model.config import TrainConfig
 from model.planning import OutcomeValue, PlanConfig, fingerprint
 
 
 class CampaignProtocol(unittest.TestCase):
+    def test_compact_report_preserves_payload_and_rejects_invalid_numbers_atomically(self):
+        payload = dict(label='Éxito', rows=[dict(loss=.125, missing=None, success=True)])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'report.json'
+            for compact in (False, True):
+                write_report(path, payload, compact=compact)
+                self.assertEqual(json.loads(path.read_text()), payload)
+                before = path.read_bytes()
+                with self.assertRaises(ValueError):
+                    write_report(path, dict(loss=float('nan')), compact=compact)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse(path.with_suffix('.tmp').exists())
+
     def test_budget_is_total_across_ten_pairs_not_per_pair(self):
         pairs = [(game, level) for game in ('a', 'b') for level in range(1, 6)]
         assigned = quotas(16384, pairs)

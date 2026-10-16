@@ -1,0 +1,366 @@
+{
+  "kind": "training_throughput",
+  "baseline_commit": "31195a4f4a04cb23bc3437de07344382dc27c836",
+  "source_checkpoint": "fd21a0df879ab95fa8c29154f527a0e8c33c71fb3e20bc915199fe08799b2b54",
+  "checkpoint_action": 134246,
+  "hardware": "RTX 4070 Ti 12 GB",
+  "torch": "2.6.0+cu124",
+  "cuda": "12.4",
+  "method": {
+    "total_training_actions": 256,
+    "warmup_actions": 64,
+    "measured_actions": 192,
+    "profiler": false,
+    "synchronize_categories": false,
+    "periodic_evaluation_included": true,
+    "final_evaluation_excluded": true,
+    "optimizer_replay": "fresh in both isolated resumes",
+    "production_paused_during_comparison": true
+  },
+  "before": {
+    "completed": 256,
+    "measured_actions": 192,
+    "wall_seconds": 71.55291697800567,
+    "cpu_seconds": 73.55598785999999,
+    "categories": {
+      "training/trajectory": {
+        "calls": 84,
+        "seconds": 0.2159430889878422,
+        "cpu_seconds": 0.21597277699976303
+      },
+      "between/dashboard_write": {
+        "calls": 41,
+        "seconds": 4.341944438987412,
+        "cpu_seconds": 4.3569433340000785
+      },
+      "training/environment": {
+        "calls": 204,
+        "seconds": 0.057118791111861356,
+        "cpu_seconds": 0.05721358900001405
+      },
+      "training/perception": {
+        "calls": 204,
+        "seconds": 0.8043312260269886,
+        "cpu_seconds": 0.8045204440001896
+      },
+      "training/planner": {
+        "calls": 154,
+        "seconds": 4.729015252058161,
+        "cpu_seconds": 4.729788738999844
+      },
+      "training/prediction_preview": {
+        "calls": 192,
+        "seconds": 0.9320987060345942,
+        "cpu_seconds": 0.9323016639999935
+      },
+      "training/memory": {
+        "calls": 1237,
+        "seconds": 18.06864327986841,
+        "cpu_seconds": 18.07154629099989
+      },
+      "training/predictor_forward": {
+        "calls": 768,
+        "seconds": 10.05794862001494,
+        "cpu_seconds": 10.059744696000138
+      },
+      "training/backward": {
+        "calls": 812,
+        "seconds": 15.802100923086982,
+        "cpu_seconds": 15.803380966000049
+      },
+      "training/predictor_other": {
+        "calls": 192,
+        "seconds": 3.8517025180190103,
+        "cpu_seconds": 3.8515001149997943
+      },
+      "training/path_learning": {
+        "calls": 11,
+        "seconds": 1.7771710660017561,
+        "cpu_seconds": 1.7776752109997176
+      },
+      "training/dashboard_write": {
+        "calls": 23,
+        "seconds": 2.4415466239879606,
+        "cpu_seconds": 2.434228173000008
+      },
+      "between/prediction_preview": {
+        "calls": 211,
+        "seconds": 0.9576127548789373,
+        "cpu_seconds": 1.593600132000148
+      },
+      "between/quality": {
+        "calls": 211,
+        "seconds": 1.0344918450864498,
+        "cpu_seconds": 1.7173297519998698
+      },
+      "between/quality_recording": {
+        "calls": 8,
+        "seconds": 0.8424327040411299,
+        "cpu_seconds": 1.2851579619999711
+      },
+      "evaluation/environment": {
+        "calls": 119,
+        "seconds": 0.03257758708787151,
+        "cpu_seconds": 0.03262035800005947
+      },
+      "evaluation/perception": {
+        "calls": 119,
+        "seconds": 0.45701781603565905,
+        "cpu_seconds": 0.4571608680000736
+      },
+      "evaluation/planner": {
+        "calls": 111,
+        "seconds": 3.3892686070030322,
+        "cpu_seconds": 3.3898164689998964
+      },
+      "evaluation/prediction_preview": {
+        "calls": 111,
+        "seconds": 0.5261343510064762,
+        "cpu_seconds": 0.5262844120001375
+      },
+      "evaluation/trajectory": {
+        "calls": 4,
+        "seconds": 0.00691161400754936,
+        "cpu_seconds": 0.006912536000015734
+      },
+      "evaluation/dashboard_write": {
+        "calls": 2,
+        "seconds": 0.21413068601395935,
+        "cpu_seconds": 0.21278294999999048
+      }
+    },
+    "peak_gpu_allocated": 2443829760,
+    "peak_gpu_reserved": 2604662784
+  },
+  "after": {
+    "completed": 256,
+    "measured_actions": 192,
+    "wall_seconds": 63.28489915499813,
+    "cpu_seconds": 65.28176830599999,
+    "categories": {
+      "training/trajectory": {
+        "calls": 54,
+        "seconds": 0.1264095809601713,
+        "cpu_seconds": 0.12646504400011338
+      },
+      "between/dashboard_write": {
+        "calls": 41,
+        "seconds": 1.0512860210001236,
+        "cpu_seconds": 1.070197207999911
+      },
+      "training/environment": {
+        "calls": 204,
+        "seconds": 0.05660155300574843,
+        "cpu_seconds": 0.05677287999988323
+      },
+      "training/perception": {
+        "calls": 204,
+        "seconds": 0.8035019640956307,
+        "cpu_seconds": 0.8037504439998884
+      },
+      "training/planner": {
+        "calls": 154,
+        "seconds": 4.869175125029869,
+        "cpu_seconds": 4.870103934999918
+      },
+      "training/prediction_preview": {
+        "calls": 192,
+        "seconds": 0.9627052700379863,
+        "cpu_seconds": 0.9630718470000232
+      },
+      "training/memory": {
+        "calls": 1045,
+        "seconds": 13.020609599043382,
+        "cpu_seconds": 13.02306253599997
+      },
+      "training/predictor_forward": {
+        "calls": 768,
+        "seconds": 11.23325228394242,
+        "cpu_seconds": 11.23539852000036
+      },
+      "training/backward": {
+        "calls": 812,
+        "seconds": 15.93712278152816,
+        "cpu_seconds": 15.924044052999847
+      },
+      "training/predictor_other": {
+        "calls": 192,
+        "seconds": 2.5614812754647573,
+        "cpu_seconds": 2.56113475699982
+      },
+      "training/path_learning": {
+        "calls": 11,
+        "seconds": 1.746583912987262,
+        "cpu_seconds": 1.7467595610000899
+      },
+      "training/dashboard_write": {
+        "calls": 21,
+        "seconds": 0.54219308795291,
+        "cpu_seconds": 0.5405451699999162
+      },
+      "between/prediction_preview": {
+        "calls": 211,
+        "seconds": 0.9477532519376837,
+        "cpu_seconds": 1.6037697449999655
+      },
+      "between/quality": {
+        "calls": 211,
+        "seconds": 1.022086705052061,
+        "cpu_seconds": 1.6877401829998746
+      },
+      "between/quality_recording": {
+        "calls": 8,
+        "seconds": 0.8348275149764959,
+        "cpu_seconds": 1.2736813270001903
+      },
+      "evaluation/environment": {
+        "calls": 119,
+        "seconds": 0.03206507911090739,
+        "cpu_seconds": 0.03213697299992191
+      },
+      "evaluation/perception": {
+        "calls": 119,
+        "seconds": 0.45510975483921356,
+        "cpu_seconds": 0.4551928359999238
+      },
+      "evaluation/planner": {
+        "calls": 111,
+        "seconds": 3.387038296001265,
+        "cpu_seconds": 3.3874806620000015
+      },
+      "evaluation/prediction_preview": {
+        "calls": 111,
+        "seconds": 0.5206920049531618,
+        "cpu_seconds": 0.5208786980000468
+      },
+      "evaluation/trajectory": {
+        "calls": 4,
+        "seconds": 0.006804147007642314,
+        "cpu_seconds": 0.0068048120000128165
+      },
+      "evaluation/dashboard_write": {
+        "calls": 2,
+        "seconds": 0.0509067669918295,
+        "cpu_seconds": 0.05090828299998407
+      }
+    },
+    "peak_gpu_allocated": 2395678208,
+    "peak_gpu_reserved": 2501902336
+  },
+  "blocks": [
+    {
+      "start": 64,
+      "end": 128,
+      "before": {
+        "seconds": 17.534130916988943,
+        "tps": 3.6500240760715403
+      },
+      "after2": {
+        "seconds": 15.055856154998764,
+        "tps": 4.250837636938439
+      }
+    },
+    {
+      "start": 128,
+      "end": 192,
+      "before": {
+        "seconds": 23.61900799200521,
+        "tps": 2.7096819655450113
+      },
+      "after2": {
+        "seconds": 20.79419132399198,
+        "tps": 3.077782588551924
+      }
+    },
+    {
+      "start": 192,
+      "end": 256,
+      "before": {
+        "seconds": 30.399770789998,
+        "tps": 2.1052790312832554
+      },
+      "after2": {
+        "seconds": 27.433705325005576,
+        "tps": 2.3328966773461906
+      }
+    }
+  ],
+  "equivalence": {
+    "tensors_checked": 539,
+    "actions": 256,
+    "progress_identical": true,
+    "parameter_roundoff": {
+      "name": "dynamics.local.blocks.0.conv2.bias",
+      "elements_different": 46,
+      "max_abs": 1.862645149230957e-09,
+      "max_ulps": 5.0,
+      "equal_at_forward_bf16": true
+    }
+  },
+  "changed_training_metrics": 0,
+  "gpu_trace": {
+    "actions": 8,
+    "instrumented": true,
+    "kernel_total_ms": 1336.4800049999515,
+    "exclusive_kernel_categories": {
+      "training/backward": {
+        "kernel_ms": 538.8455499999629,
+        "kernels": 57168
+      },
+      "training/predictor_forward": {
+        "kernel_ms": 218.56604099999245,
+        "kernels": 26688
+      },
+      "training/planner": {
+        "kernel_ms": 194.84770199999946,
+        "kernels": 6433
+      },
+      "training/memory": {
+        "kernel_ms": 183.03132199999743,
+        "kernels": 11228
+      },
+      "training/path_learning": {
+        "kernel_ms": 80.03021299999935,
+        "kernels": 7978
+      },
+      "training/predictor_other": {
+        "kernel_ms": 42.47317499999989,
+        "kernels": 1456
+      },
+      "training/prediction_preview": {
+        "kernel_ms": 25.239877999999933,
+        "kernels": 3104
+      },
+      "training/perception": {
+        "kernel_ms": 24.340215000000043,
+        "kernels": 2716
+      },
+      "other": {
+        "kernel_ms": 15.651752999999966,
+        "kernels": 1916
+      },
+      "training/trajectory": {
+        "kernel_ms": 13.454156000000003,
+        "kernels": 920
+      }
+    },
+    "warning": "Separate trace with profiler overhead; annotation times overlap and are not GPU utilization."
+  },
+  "json_serialization": {
+    "pretty": {
+      "median_ms": 99.2647925086203,
+      "bytes": 5769511
+    },
+    "compact": {
+      "median_ms": 24.06387350492878,
+      "bytes": 3588775
+    }
+  },
+  "rejected_candidate": "Encoding after replay.record changed cache admission and BF16 batching; divergence at action 140. Retained pre-record encoding in final candidate.",
+  "validation": {
+    "cpu_tests": 84,
+    "dashboard_node_contracts": true,
+    "visual_tests": false
+  },
+  "tps_improvement_percent": 13.064756258451826
+}

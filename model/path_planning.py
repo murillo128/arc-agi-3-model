@@ -220,9 +220,13 @@ def real_states(engine, episode):
         zs = engine.encode_detached_episode(episode)
         h = torch.zeros(1, engine.model.config.memory, device=engine.device)
         result = [State(zs[0], h, episode.observations[0].final.shape)]
+        # One host-to-device transfer for the prefix. Memory still advances
+        # sequentially with current dynamics; no weight-dependent h is cached.
+        valid = [action for action, z in zip(episode.actions, zs) if z is not None]
+        commands = iter(engine.actions(valid)) if valid else iter(())
         for action, z, obs in zip(episode.actions, zs[1:], episode.observations[1:]):
             if result[-1].z is not None:
-                h, _ = engine.advance(result[-1].z[None], h, engine.actions([action]))
+                h, _ = engine.advance(result[-1].z[None], h, next(commands)[None])
             result.append(State(z, h.float(), obs.final.shape if obs.final is not None else result[-1].geometry))
     return result
 

@@ -1,5 +1,6 @@
 """Real-prefix ownership, current recurrent context and one averaged batch step."""
 from contextlib import nullcontext, redirect_stdout
+from dataclasses import replace
 import io
 import json
 from pathlib import Path
@@ -16,7 +17,7 @@ from model import agent_checkpoint, checkpoint
 from model.config import TrainConfig
 from model.data import Action, Episode, Observation
 from model.learning import State
-from model.online_learning import OnlinePredictor
+from model.online_learning import OnlinePredictor, OnlineRepresentation
 from model.online_replay import PredictorReplay
 from model.planning import fingerprint
 from model.subgoal_training import main, play
@@ -28,6 +29,37 @@ def observation(color, level=0):
 
 
 class ReplayTests(unittest.TestCase):
+    def test_latest_only_replay_matches_direct_updates_with_frozen_and_moving_encoder(self):
+        # With one replay slot the selected data is exactly the direct real
+        # transition. Rebuilding less history must not change its current-weight
+        # targets or recurrent state, including after a representation update.
+        from model.environment import Factory
+        for frozen in (True, False):
+            results = []
+            for use_replay in (False, True):
+                agent = path_agent()
+                engine = agent.engine
+                engine.config = replace(engine.config, freeze_representation=False)
+                representation = OnlineRepresentation(engine)
+                if frozen:
+                    representation.freeze()
+                predictor = OnlinePredictor(engine, threshold=None, horizon=2)
+                replay = PredictorReplay(engine, episodes=1, batch_size=1, horizon=2) if use_replay else None
+                result = play(agent, Factory('sc01-v1', Path('games')), 1, 123, 3,
+                    world=predictor, representation=representation, predictor_replay=replay,
+                    random_policy=True)
+                results.append((result, fingerprint(engine.model), agent.state))
+                self.assertEqual(predictor.updates, 3)
+                self.assertEqual(representation.updates, 0 if frozen else 3)
+            direct, replayed = results
+            self.assertEqual(direct[1], replayed[1])
+            self.assertEqual(direct[0]['counts'], replayed[0]['counts'])
+            for before, after in zip(direct[0]['records'], replayed[0]['records'], strict=True):
+                self.assertEqual(before['predictor_loss'], after['predictor_loss'])
+                self.assertEqual(before['representation_loss'], after['representation_loss'])
+            torch.testing.assert_close(direct[2].z, replayed[2].z, rtol=0, atol=0)
+            torch.testing.assert_close(direct[2].h, replayed[2].h, rtol=0, atol=0)
+
     def test_observed_prefixes_distinct_episodes_capacity_and_boundary_exclusion(self):
         engine = SimpleNamespace(config=TrainConfig(replay_bytes=100))
         replay = PredictorReplay(engine, episodes=3, batch_size=3, seed=9)

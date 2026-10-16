@@ -431,6 +431,39 @@ proceso y llega a cero tras 60 segundos sin acciones. El campo `recent_tps`
 identifica esta métrica: el dashboard no reutiliza como recientes los valores
 acumulados de informes antiguos.
 
+Para atribuir costes sin alterar la campaña, `model.profile_training` copia
+`latest.pt`, el informe y las grabaciones de evaluación a un directorio nuevo.
+La copia sigue las reglas normales de reanudación: mismos pesos/progreso, pero
+optimizadores y replay de entrenamiento nuevos. Pausa antes las cargas que
+compitan por la GPU. Tras `--`, pasa los argumentos originales del entrenador
+excepto `--output` y `--actions`; por ejemplo, para la configuración anterior:
+
+```sh
+.venv/bin/python -m model.profile_training \
+  --source-run model/runs/curriculum/current \
+  --output model/runs/profile/example --actions 256 --warmup 64 -- \
+  --game sc01-v1 --init-config model/subgoal_config.json \
+  --representation-learning-rate 3e-5 \
+  --encoder-learning-rate-after-predictor 3e-6 \
+  --freeze-representation-after-planner
+```
+
+`timing.json` separa las categorías por tiempo de pared exclusivo, incluidas sus
+esperas. La ventana empieza después del calentamiento y termina al completar el
+presupuesto; incluye evaluaciones periódicas, pero excluye la evaluación final
+posterior. Compara mismos pesos, semillas y opciones, comprobando que no queden
+compilaciones tardías. `--cpu-profile` guarda `cpu.prof`; `--trace-actions 8`
+captura CPU/kernels CUDA antes de la ventana, y `--synchronize` espera en los
+límites de las categorías externas. Estas opciones alteran los tiempos: confirma
+las ganancias sin ellas y no sumes anotaciones GPU anidadas como utilización.
+También admite `--device cpu` entre los argumentos del entrenador.
+
+El entrenamiento publica JSON compacto con el mismo contenido y frecuencia.
+La memoria del replay se reconstruye con pesos actuales, transfiriendo sus
+acciones juntas; se omite una reconstrucción previa que ese replay no utilizaba.
+Las pérdidas del predictor se copian a CPU una vez por lote, sin cambiar sus
+gradientes, pesos relativos ni la acumulación numérica de las métricas.
+
 **Subobjetivos y Path Planner → Éxito del planner** compara el porcentaje de
 niveles resueltos (`100 × victorias / partidas`) del planner y del azar en las
 evaluaciones fijas de desarrollo. El selector separa cada juego/nivel; el eje

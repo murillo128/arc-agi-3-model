@@ -45,9 +45,10 @@ def emit(event, **values):
     print(json.dumps({'event': event, **values}, allow_nan=False), flush=True)
 
 
-def write_report(path, data):
+def write_report(path, data, *, compact=False):
     temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(data, indent=2, allow_nan=False) + '\n')
+    temporary.write_text(json.dumps(data, indent=None if compact else 2,
+        separators=(',', ':') if compact else None, allow_nan=False) + '\n')
     temporary.replace(path)
 
 

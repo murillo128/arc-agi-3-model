@@ -158,16 +158,22 @@ class OnlinePredictor:
         e = self.engine
         trainable(e, 'dynamics')
         self.optimizer.zero_grad(set_to_none=True)
-        means = {}
+        logged = []
         for sample in samples:
             terms = self._loss(**sample)
             (sum(terms.values()) / len(samples)).backward()
-            for name, value in terms.items():
-                means[name] = means.get(name, 0.) + float(value.detach()) / len(samples)
+            logged.extend((name, value.detach()) for name, value in terms.items())
         torch.nn.utils.clip_grad_norm_(e.model.dynamics.parameters(), 1., error_if_nonfinite=True)
         self.optimizer.step()
         self.updates += 1
         trainable(e)
+        # Copy only detached scalars, once per batch instead of synchronizing
+        # CUDA for every term of every example. Keep Python's original ordered
+        # accumulation and missing-rollout denominator exactly as before.
+        values = torch.stack([value for _, value in logged]).cpu().tolist()
+        means = {}
+        for (name, _), value in zip(logged, values):
+            means[name] = means.get(name, 0.) + value / len(samples)
         return dict(total=sum(means.values()), latent=means['latent'], visual=means['delta_nll'],
                     rollout=means.get('rollout'), terms=means, batch_size=len(samples))
 
