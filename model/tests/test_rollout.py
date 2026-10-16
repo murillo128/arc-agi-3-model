@@ -110,8 +110,9 @@ class RolloutTests(unittest.TestCase):
         if visual:
             engine.decode = lambda z, *args, **kwargs: z.mean((1, 2))[:, None, None, None].expand(-1, 4, 4, 16)
         data = Episode([observation(1), observation(4), observation(9)], [Action(1), Action(2)])
-        zero_visual = lambda logits, *args: logits.sum((1, 2, 3)) * 0
-        def visual_endpoint(logits, before, actual, *args):
+        zero_visual = lambda logits, *args, **kwargs: logits.sum((1, 2, 3)) * 0
+        def visual_endpoint(logits, before, actual, *args, mode='balanced'):
+            self.assertEqual(mode, 'balanced')
             self.assertTrue(torch.all(actual == 9))
             # Only the real two-step anchor is 1; the one-step reference is 4.
             return (logits.mean((1, 2, 3)) - 9).square() * (before[:, 0, 0] == 1)

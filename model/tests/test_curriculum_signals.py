@@ -27,6 +27,7 @@ from tests.square_cross_support import fixture
 failure = sys.argv[1] == 'failure'
 handlers = {s: signal.getsignal(s) for s in (signal.SIGUSR1, signal.SIGUSR2, signal.SIGHUP)}
 real_play, real_serialize = training.play, torch.save
+real_quality = training.evaluate_recording
 real_make = training.Factory.make
 episodes, captures = [], []
 sent_eval = sent_final = False
@@ -42,6 +43,8 @@ with tempfile.TemporaryDirectory() as temp:
             '--encoder-learning-rate-after-predictor', '3e-6']
 
     def serialize(payload, stream, *pos, **kw):
+        if payload.get('format') != 'arc3-agent':
+            return real_serialize(payload, stream, *pos, **kw)
         p = payload['training_progress']
         if p['actions'] == 4:
             if failure:
@@ -69,7 +72,6 @@ with tempfile.TemporaryDirectory() as temp:
             return Environment(env.wrapper)
 
     def play(agent, factory, level, *pos, **kw):
-        global sent_eval, sent_final
         representation = kw.get('representation')
         if representation:
             episodes.append((level, representation.frozen, bool(kw.get('world')),
@@ -84,9 +86,14 @@ with tempfile.TemporaryDirectory() as temp:
                     assert checkpoint.load(latest)['training_progress'] == old
                 original_progress(row)
             kw['progress'] = progress
-        elif len(episodes) == 4 and not sent_eval:
-            # Evaluating level 1 while the last training episode was level 2.
-            assert level == 1
+        return real_play(agent, factory, level, *pos, **kw)
+
+    def quality(*pos, **kw):
+        global sent_eval, sent_final
+        result = real_quality(*pos, **kw)
+        if len(episodes) == 4 and not sent_eval:
+            # Quality now replays the highest unlocked level, including when
+            # its random cohort is already cached and play() is not called.
             os.kill(os.getpid(), signal.SIGUSR2)
             os.kill(os.getpid(), signal.SIGHUP)  # already at last level
             sent_eval = True
@@ -94,15 +101,15 @@ with tempfile.TemporaryDirectory() as temp:
         elif len(episodes) == 6 and not sent_final:
             os.kill(os.getpid(), signal.SIGUSR2)
             sent_final = True
-        result = real_play(agent, factory, level, *pos, **kw)
         return result
 
     log = io.StringIO()
     with redirect_stdout(log), \
          patch.dict(training.SYNTHETIC_LEVELS, {'sc01-v1': 2}, clear=True), \
          patch.object(training.Factory, 'make', make), \
-         patch.object(training, 'summarize_quality', return_value=({}, [])), \
-         patch.object(training, 'play', play), patch.object(torch, 'save', serialize):
+         patch.object(training, 'summarize_quality', return_value=({'prediction_error': None, 'samples': 0}, [])), \
+         patch.object(training, 'play', play), \
+         patch.object(training, 'evaluate_recording', quality), patch.object(torch, 'save', serialize):
         try:
             training.main([*args, '--actions', '12', '--freeze-representation-after-planner'])
         except OSError as error:
@@ -120,6 +127,9 @@ with tempfile.TemporaryDirectory() as temp:
         assert report['status'] == 'failed'
         assert captures == [0, 2]
     else:
+        assert sent_eval and sent_final
+        assert {r['level'] for r in report['evaluations']
+                if r['actions'] == 8 and r['policy'] == 'quality_probe'} == {2}
         assert [(n, frozen, world) for n, frozen, world, lr in episodes] == [
             (1, False, False), (1, False, True), (1, True, True),
             (2, False, False), (1, True, True), (1, True, True)], (episodes, report['episodes'], saved['manual_controls'])
@@ -148,8 +158,9 @@ with tempfile.TemporaryDirectory() as temp:
         with redirect_stdout(log), \
              patch.dict(training.SYNTHETIC_LEVELS, {'sc01-v1': 2}, clear=True), \
              patch.object(training.Factory, 'make', make), \
-             patch.object(training, 'summarize_quality', return_value=({}, [])), \
-             patch.object(training, 'play', play):
+             patch.object(training, 'summarize_quality', return_value=({'prediction_error': None, 'samples': 0}, [])), \
+             patch.object(training, 'play', play), \
+             patch.object(training, 'evaluate_recording', quality):
             training.main([*args, '--resume', '--actions', '14'])
         assert episodes[-1][:3] == (2, False, True), episodes[-1]
         assert episodes[-1][3] == dict(encoder=3e-6, decoder=3e-5)

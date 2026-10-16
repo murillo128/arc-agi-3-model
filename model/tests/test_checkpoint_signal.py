@@ -36,7 +36,8 @@ with tempfile.TemporaryDirectory() as temp:
     latest = output / 'latest.pt'
     captures, initial_bytes = [], None
     real_update = training.OnlineRepresentation.update
-    real_save, real_serialize, real_play = agent_checkpoint.save, torch.save, training.play
+    real_save, real_serialize = agent_checkpoint.save, torch.save
+    real_quality = training.evaluate_recording
     sent_during_write = sent_during_evaluation = False
 
     def update(learner, *args, **kwargs):
@@ -51,6 +52,10 @@ with tempfile.TemporaryDirectory() as temp:
 
     def serialize(payload, stream, *args, **kwargs):
         global sent_during_write
+        if payload.get('format') != 'arc3-agent':
+            # Fixed evaluation recordings share atomic serialization, but are
+            # not agent snapshots and have no training-progress counters.
+            return real_serialize(payload, stream, *args, **kwargs)
         if payload['training_progress']['actions'] == 2:
             if failure:
                 stream.write(b'incomplete snapshot')
@@ -76,10 +81,10 @@ with tempfile.TemporaryDirectory() as temp:
         if progress['actions'] == 0:
             initial_bytes = path.read_bytes()
 
-    def play(*args, **kwargs):
+    def quality(*args, **kwargs):
         global sent_during_evaluation
-        result = real_play(*args, **kwargs)
-        if kwargs.get('quality_horizon') and captures[-1] == 6:
+        result = real_quality(*args, **kwargs)
+        if captures[-1] == 6 and not sent_during_evaluation:
             sent_during_evaluation = True
             os.kill(os.getpid(), signal.SIGUSR1)
         return result
@@ -91,7 +96,7 @@ with tempfile.TemporaryDirectory() as temp:
              patch.object(training.OnlineRepresentation, 'update', update), \
              patch.object(agent_checkpoint, 'save', save), \
              patch.object(torch, 'save', serialize), \
-             patch.object(training, 'play', play):
+             patch.object(training, 'evaluate_recording', quality):
             training.main(['--init-config', str(config), '--output', str(output),
                            '--device', 'cpu', '--actions', '6', '--steps', '2',
                            '--evaluate-every', '100', '--checkpoint-every', '100',
