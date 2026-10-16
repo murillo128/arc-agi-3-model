@@ -144,24 +144,89 @@ a { color: #77dabb; font-size: 13px; }
 .curriculum-action:disabled { opacity: .4; cursor: not-allowed; }
 .curriculum-action:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
 @media (pointer: coarse) { .curriculum-action { min-height: 44px; padding-inline: 14px; } }
-/* Shared polish for the incremental-training dashboard. */
+/* One card language across every incremental-training tab. */
+.subgoal-dashboard {
+  --card-surface: #172122;
+  --card-inset: #131d1e;
+  --card-border: #2b3b38;
+  --card-accent: #77dabb;
+  --card-muted: #a8bbb5;
+  background: #101718;
+}
+.subgoal-dashboard [data-tone="latent"] { --card-accent: #b6aaee; }
 .subgoal-dashboard main { max-width: 1560px; padding-top: 30px; }
 .subgoal-dashboard h1 { font-weight: 650; letter-spacing: -.035em; }
-.subgoal-dashboard h3 { font-size: 16px; letter-spacing: -.015em; }
-.subgoal-dashboard article { border-color: #2b3b38; border-radius: 14px; }
-.subgoal-dashboard .chart-card { padding: 22px; }
-.subgoal-dashboard .chart-card p { line-height: 1.65; }
-.subgoal-dashboard .tabs { gap: 4px; margin-top: 24px; }
-.subgoal-dashboard .tabs button { border-radius: 8px 8px 0 0; transition: color .15s, background .15s; }
+.subgoal-dashboard h3 { position: relative; padding-left: 13px; border-left: 0; font-size: 16px; line-height: 1.45; letter-spacing: -.015em; margin-bottom: 12px; }
+.subgoal-dashboard h3::before { content: ''; position: absolute; left: 0; top: 3px; width: 2px; height: 18px; border-radius: 2px; background: var(--card-accent); }
+.subgoal-dashboard h3 span { float: none; display: block; margin-top: 6px; color: var(--card-muted); font-size: 11px; line-height: 1.5; letter-spacing: 0; font-weight: 400; }
+.subgoal-dashboard article { background: var(--card-surface); border-color: var(--card-border); border-radius: 14px; box-shadow: 0 3px 12px #00000010; }
+.subgoal-dashboard .chart-card { padding: 24px; }
+.subgoal-dashboard .chart-card p { min-height: 0; line-height: 1.7; color: var(--card-muted); }
+.subgoal-dashboard .chart-card > p:last-child { margin-bottom: 0; }
+.subgoal-dashboard .charts { gap: 18px; align-items: stretch; }
+.subgoal-dashboard [role="tabpanel"] > .muted { line-height: 1.75; max-width: 1050px; }
+.subgoal-dashboard .tabs { gap: 6px; margin-top: 28px; padding-bottom: 6px; border-color: var(--card-border); }
+.subgoal-dashboard .tabs button { border-radius: 9px; padding: 12px 16px; border-bottom-width: 2px; transition: color .15s, background .15s; }
 .subgoal-dashboard .tabs button:hover { background: #192724; color: #e7efec; }
 .subgoal-dashboard .tabs button[aria-selected="true"] { background: #1b2d28; }
-.subgoal-dashboard .metrics article { background: #172122; }
+.subgoal-dashboard .metrics article { padding: 18px; min-width: 0; }
+.subgoal-dashboard .metrics h2 { position: relative; padding-left: 11px; line-height: 1.5; color: #b4c6c0; font-weight: 500; }
+.subgoal-dashboard .metrics h2::before { content: ''; position: absolute; left: 0; top: 3px; width: 2px; height: 12px; border-radius: 2px; background: var(--card-accent); }
+.subgoal-dashboard .training-metrics h2 { min-height: 3em; margin-bottom: 12px; }
+.subgoal-dashboard .metrics strong { color: #e7f2ed; line-height: 1.15; margin-bottom: 10px; }
+.subgoal-dashboard .metrics small { color: var(--card-muted); line-height: 1.65; }
 .subgoal-dashboard #path .summary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.subgoal-dashboard select { min-height: 38px; max-width: 100%; border-radius: 8px; }
+.subgoal-dashboard select { min-height: 40px; max-width: 100%; border-radius: 9px; padding: 9px 12px; background: var(--card-inset); }
+.subgoal-dashboard .prediction-samples { gap: 14px; margin: 20px 0 16px; }
+.subgoal-dashboard .prediction-samples figure { padding: 12px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-inset); }
+.subgoal-dashboard .prediction-samples figcaption { min-height: 2.8em; margin-bottom: 12px; padding-left: 9px; border-left: 2px solid var(--card-accent); color: #d5e4de; font-size: 12px; line-height: 1.4; font-weight: 500; }
+.subgoal-dashboard .prediction-samples .goal-image { width: 100%; max-width: 224px; height: auto; margin-inline: auto; }
+.subgoal-dashboard .prediction-samples figure p { margin: 12px 0 0; font-size: 11px; }
+.subgoal-dashboard .prediction-preview > p:last-child { padding-top: 16px; border-top: 1px solid var(--card-border); font-size: 11px; }
+.subgoal-dashboard .quality-heading { margin-bottom: 14px; gap: 20px; }
+.subgoal-dashboard .quality-heading h3 { margin-bottom: 0; }
+.subgoal-dashboard #world > .quality-heading { margin-top: 32px; }
+.subgoal-dashboard #world > h3 { margin-top: 30px; }
+/* Detail pass: charts, tables and controls share the same inset surfaces. */
+.subgoal-dashboard .connection { padding: 14px 16px; border: 1px solid var(--card-border); border-radius: 12px; background: var(--card-surface); }
+.subgoal-dashboard .gpu-status { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--card-border); font-size: 12px; line-height: 1.6; }
+.subgoal-dashboard .chart-card > svg { margin-top: 16px; background: var(--card-inset); border: 1px solid #263633; border-radius: 10px; }
+.subgoal-dashboard .chart-card > svg + p { margin-top: 14px; font-size: 11px; }
+.subgoal-dashboard .legend { align-items: center; gap: 7px 10px; min-height: 0; line-height: 1.5; }
+.subgoal-dashboard .legend + .legend { margin-top: 8px; }
+.subgoal-dashboard .legend button { margin: 0; padding: 6px 8px; border: 1px solid #2b3e38; border-radius: 7px; background: #15201f; line-height: inherit; }
+.subgoal-dashboard .legend button:hover:not(:disabled), .subgoal-dashboard .legend button[data-highlighted="true"] { background: #243b32; border-color: currentColor; }
+.subgoal-dashboard .legend button:disabled { border-color: transparent; background: transparent; }
+.subgoal-dashboard .outcome-key { margin: 4px 0 10px; gap: 16px; }
+.subgoal-dashboard .delta-mask-legend { gap: 6px 10px; font-size: 10px; }
+.subgoal-dashboard .chart-card > details { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--card-border); }
+.subgoal-dashboard .chart-card > details > summary { padding: 6px 0; color: #c7ded3; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.subgoal-dashboard .chart-card > details[open] > summary { margin-bottom: 12px; color: var(--card-accent); }
+.subgoal-dashboard .chart-card > details > p { font-size: 11px; margin-bottom: 12px; }
+.subgoal-dashboard .chart-card > details .legend span { padding: 6px 8px; border-radius: 7px; background: var(--card-inset); }
+.subgoal-dashboard .chart-help summary { width: 28px; height: 28px; border-color: #3b5048; background: var(--card-inset); }
+.subgoal-dashboard .chart-help > div { top: 36px; padding: 18px; border-radius: 12px; background: #1b2926; box-shadow: 0 12px 32px #0005; }
+.subgoal-dashboard .chart-help > div p { color: #c1d1cb; }
+.subgoal-dashboard .chart-card > label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: fit-content; margin: 16px 0; color: var(--card-muted); }
+.subgoal-dashboard .table-scroll { margin-top: 18px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-inset); scrollbar-color: #45665b var(--card-inset); }
+.subgoal-dashboard .table-scroll table { margin: 0; }
+.subgoal-dashboard .table-scroll th, .subgoal-dashboard .table-scroll td { padding: 14px 16px; line-height: 1.55; border-color: #293a34; }
+.subgoal-dashboard .table-scroll th { background: #1d2d28; color: #c2d6cc; font-size: 11px; font-weight: 600; }
+.subgoal-dashboard .table-scroll tbody tr:nth-child(even) { background: #182422; }
+.subgoal-dashboard .table-scroll tbody tr:hover { background: #21352d; }
+.subgoal-dashboard .table-scroll tbody tr:last-child td { border-bottom: 0; }
+.subgoal-dashboard #evaluation .table-scroll { max-height: 65vh; overflow: auto; }
+.subgoal-dashboard #evaluation thead th { position: sticky; top: 0; z-index: 1; }
+.subgoal-dashboard .curriculum-controls { padding-top: 16px; margin-top: 20px; border-top: 1px solid var(--card-border); }
+.subgoal-dashboard .curriculum-controls p:last-child { margin-bottom: 0; }
+.subgoal-dashboard .notice { border-radius: 10px; line-height: 1.65; }
+.subgoal-dashboard .chart-card .notice { color: #eed7ac; }
+.subgoal-dashboard .chart-card .warn { color: #f4b979; }
+.subgoal-dashboard .table-scroll:focus-visible, .subgoal-dashboard details > summary:focus-visible { outline: 2px solid #79deba; outline-offset: 3px; }
+.subgoal-dashboard footer { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--card-border); line-height: 1.7; }
 .subgoal-dashboard .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .trajectory-context { margin: 24px 0 16px; }
-.observation-card h3, .goal-card h3 { padding-left: 12px; border-left: 3px solid #77dabb; }
-.goal-card h3 { border-color: #a9a6ef; }
+.subgoal-dashboard .goal-card { --card-accent: #b6aaee; }
 .observation-content { display: flex; align-items: center; gap: 24px; margin-top: 20px; }
 .subgoal-dashboard .observation-content .goal-image { width: 168px; max-width: 42%; flex: 0 0 auto; }
 .observation-content strong { color: #9ce4cd; font-size: 14px; line-height: 1.5; }
@@ -169,7 +234,6 @@ a { color: #77dabb; font-size: 13px; }
 .subgoal-dashboard .observation-content p { min-height: 0; margin: 10px 0 0; }
 .trajectory-preview { margin: 0 0 24px; }
 .trajectory-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
-.trajectory-heading h3 { padding-left: 12px; border-left: 3px solid #77dabb; }
 .subgoal-dashboard .trajectory-preview p { min-height: 0; }
 #trajectory-info { margin: 8px 0 14px; }
 .trajectory-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px 14px; flex-shrink: 0; max-width: 380px; }
@@ -200,7 +264,7 @@ a { color: #77dabb; font-size: 13px; }
 .trajectory-state[data-selected="true"] { border-color: #77dabb; background: #203c32; }
 #trajectory-matrix .trajectory-thumb { width: 76px; height: auto; max-height: 100px; object-fit: contain; image-rendering: pixelated; margin: auto auto 6px; border-radius: 2px; }
 #trajectory-matrix .trajectory-real .trajectory-thumb { width: 86px; margin-bottom: 0; }
-.action-badge { display: block; width: fit-content; min-width: 62px; margin: 0 auto; padding: 4px 7px; border: 1px solid #3a4d47; border-radius: 6px; color: #cdded7; background: #21302d; font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; }
+.action-badge { display: block; width: fit-content; min-width: 62px; max-width: 100%; margin: 0 auto; padding: 4px 7px; border: 1px solid #3a4d47; border-radius: 6px; color: #cdded7; background: #21302d; font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; white-space: normal; }
 #trajectory-matrix .trajectory-section th { padding: 12px 14px; color: #bdb5f4; font-size: 11px; font-weight: 600; text-align: left; background: #1b242b; letter-spacing: .03em; }
 .trajectory-imagined .trajectory-row-label { color: #bcb8ef; }
 .trajectory-route-kind { display: block; max-width: 112px; margin-top: 6px; color: #91a59d; font-size: 10px; line-height: 1.5; font-weight: 400; white-space: normal; }
@@ -226,5 +290,24 @@ a { color: #77dabb; font-size: 13px; }
 .observed-key { color: #77dabb; }.imagined-key { color: #b6aaee; }.different-key { color: #e2b782; }
 #trajectory-explanation { margin-bottom: 0; font-size: 11px; }
 @media (max-width: 1000px) { .observation-content { gap: 16px; } .trajectory-heading { flex-direction: column; gap: 8px; } .trajectory-controls { max-width: none; justify-content: flex-start; margin-bottom: 14px; } .trajectory-controls small { flex-basis: auto; } }
-@media (max-width: 720px) { .subgoal-dashboard .chart-card { padding: 18px 14px; } .subgoal-dashboard .trajectory-context { grid-template-columns: 1fr; } .observation-content { margin-top: 16px; } .trajectory-scroll { max-height: 65vh; } #trajectory-matrix col { width: 100px; } #trajectory-matrix .trajectory-cell { min-width: 100px; } #trajectory-matrix .trajectory-label-column, #trajectory-matrix .trajectory-row-label { width: 112px; min-width: 112px; } .trajectory-state { width: 84px; } #trajectory-matrix .trajectory-real .trajectory-thumb { width: 72px; } #trajectory-matrix .trajectory-thumb { width: 64px; } }
+@media (max-width: 720px) { .subgoal-dashboard .chart-card { padding: 20px 16px; } .subgoal-dashboard .trajectory-context { grid-template-columns: 1fr; } .observation-content { margin-top: 16px; } .trajectory-scroll { max-height: 65vh; } #trajectory-matrix col { width: 100px; } #trajectory-matrix .trajectory-cell { min-width: 100px; } #trajectory-matrix .trajectory-label-column, #trajectory-matrix .trajectory-row-label { width: 112px; min-width: 112px; } .trajectory-state { width: 84px; } #trajectory-matrix .trajectory-real .trajectory-thumb { width: 72px; } #trajectory-matrix .trajectory-thumb { width: 64px; } }
 @media (pointer: coarse) { .trajectory-toolbar button, .trajectory-origin-button { min-height: 44px; } }
+@media (min-width: 951px) and (max-width: 1150px) { .subgoal-dashboard .prediction-samples:not([hidden]) { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) {
+  .subgoal-dashboard h3 { font-size: 15px; }
+  .subgoal-dashboard .charts { gap: 14px; }
+  .subgoal-dashboard .metrics article { padding: 15px; }
+  .subgoal-dashboard .metrics strong { font-size: 24px; }
+  .subgoal-dashboard .connection { width: 100%; }
+  .subgoal-dashboard .tabs { gap: 4px; margin-bottom: 18px; }
+  .subgoal-dashboard .tabs button { padding: 10px 12px; font-size: 12px; }
+  .subgoal-dashboard .prediction-samples figure { padding: 10px; }
+  .subgoal-dashboard .table-scroll th, .subgoal-dashboard .table-scroll td { padding: 12px; }
+}
+@media (max-width: 500px) {
+  .subgoal-dashboard .prediction-samples:not([hidden]) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .subgoal-dashboard .prediction-samples figure:last-child { grid-column: 1 / -1; }
+  .subgoal-dashboard .prediction-samples figure:last-child .goal-image { max-width: 180px; }
+}
+@media (pointer: coarse) { .subgoal-dashboard .legend button, .subgoal-dashboard select { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .subgoal-dashboard .tabs button { transition: none; } }
