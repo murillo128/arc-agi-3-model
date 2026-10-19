@@ -197,6 +197,7 @@ class OptimizationTelemetry:
             np.savez(stream, **arrays)
         temporary.replace(self.directory / 'optimization_samples.npz')
         atomic_json(self.directory / 'optimization.json', dict(kind='optimization', version=1,
+            reference_source=getattr(self, 'reference_source', 'fixed_evaluation'),
             identity=self.identity, updated_at=time.time(), batch=self.batch, tick=self.tick,
             every=self.every, sample_per_tensor=256, selected=self.selected, catalog=self.catalog,
             events=self.events, points=self.points, planes=planes, probe=self.probe,

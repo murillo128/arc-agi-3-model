@@ -30,7 +30,7 @@ function chart(id, rows, series, ceiling=null) {
     const flush = () => { if (points.length) svg.append(element('polyline', {points: points.join(' '), fill: 'none', stroke: color, 'stroke-width': 2})); points = []; };
     rows.forEach(r => {
       if(s.skip?.(r))return;
-      const group=s.group?.(r);if(previousGroup!==undefined&&group!==previousGroup)flush();previousGroup=group;
+      const group=s.group?.(r)??r.measurement_source??'fixed_evaluation';if(previousGroup!==undefined&&group!==previousGroup)flush();previousGroup=group;
       const value = s.value(r); if (!Number.isFinite(value)) { flush(); return; }
       const x = 50 + (r.batch-start) * 630 / (end-start), y = 220 - 188 * value/max;
       points.push(`${x},${y}`);
@@ -47,10 +47,26 @@ function table(id, rows) {
 }
 function series(label, value, extra={}) { return {label,value,...extra}; }
 const timingLabels = {collection_seconds:'Juego',representation_seconds:'Representación',encode_seconds:'Codificación',
-  predictor_seconds:'Predictor y memoria',evaluation_seconds:'Evaluación',save_seconds:'Guardado'};
+  predictor_seconds:'Predictor y memoria',evaluation_seconds:'Medición',drift_seconds:'Deriva encoder',save_seconds:'Guardado'};
 function render(data) {
   displayedReport=data;
   const c = data.config || {}, rows = data.history || [], last = rows.at(-1) || {};
+  const training=data.measurement_source==='training_pre_update', control=data.phase_control;
+  $('phase-status').textContent=control?`Fase: ${control.phase==='predictor'?'Predictor · representación a LR reducido':'Representación · predictor en espera'}${last.phase&&last.phase!==control.phase?' · Cambio efectivo en el siguiente batch':''}`:'';
+  $('quality-source').textContent=$('early-source').textContent=training?'% · batch antes de entrenar':'% · evaluación fija';
+  $('tab-evaluation').textContent=training?'Mediciones del entrenamiento':'Evaluación congelada';
+  $('evaluation-description').textContent=training?'Trayectorias del batch normal, medidas antes de actualizar los pesos. La media da el mismo peso a cada juego presente. Son diagnósticos de aprendizaje; no miden generalización ni victorias.':'Semillas separadas, pesos congelados y memoria causal reconstruida desde el inicio de cada sesión. La media da el mismo peso a cada juego; no mide victorias.';
+  $('evaluations-title').textContent=training?'Mediciones antes de aprender':'Evaluaciones congeladas';
+  $('evaluations-description').textContent=training?'Un registro por batch de entrenamiento. Las escenas cambian entre batches; no son partidas fijas. Reconstrucción y rollout utilizan una muestra por juego y nivel.':'Un registro por batch con las mismas sesiones reales de referencia. Reconstrucción y rollout se miden cada cuatro batches; los huecos no significan cero.';
+  $('drift-description').textContent=training?'Cambio relativo del encoder sobre las mismas imágenes del batch, antes y después de actualizar representación. Cada batch aporta nuevas imágenes; no se confunde movimiento de objetos con deriva del encoder.':'Cambio relativo del latente frente a la primera medición del proceso. Al reanudar se establece una nueva referencia; se separan las líneas entre referencias.';
+  $('phase-card').hidden=!control;
+  if(control){
+    $('phase-description').textContent=`Ventana de ${control.window_batches} batches. Todos los juegos y niveles deben cumplir reconstrucción y deriva con suficiente evidencia. La reconstrucción usa la unión de cambios reales y reconstruidos; se incluyen cambios observados poco frecuentes. La admisión del predictor se conserva; las métricas posteriores siguen visibles.`;
+    table('phase-rows',control.rows.map(r=>[`${r.game} / ${r.level}`,`${r.samples} / ${r.changed} · mínimo ${r.thresholds.minimum_samples} / ${r.thresholds.minimum_changed}`,
+      `${number(pct(r.reconstruction_error))} % / ${number(pct(r.thresholds.representation_open))} %`,
+      `${number(pct(r.latent_drift))} % / ${number(pct(r.thresholds.latent_drift))} %`,`${r.passes} / ${r.thresholds.patience}`,
+      !r.enough?'Recogiendo evidencia':r.passing?'Cumple':'Fuera del umbral']));
+  }
   $('status').textContent = ({running: 'Entrenando', paused: 'Pausado', budget_complete: 'Presupuesto terminado', error: 'Error', waiting: 'Esperando'})[data.status] || data.status;
   $('run-info').textContent = data.message || `${(data.games || []).join(' · ')} · Actualizado hace ${number(data.age_seconds, 0)} s`;
   $('configuration').textContent = `${c.batch_games || '—'} sesiones independientes · ${c.session_steps || '—'} acciones por sesión · Bloque: ${c.block_steps || '—'} pasos + ${c.context_steps ?? 0} de contexto con gradiente · Peso inicial: ${number(c.loss_start_weight)} → 1 en ${c.loss_warmup_steps || '—'} acciones · ${c.game_schedule === 'blocked' ? 'Un juego por batch' : 'Juegos alternados'}`;
@@ -73,10 +89,12 @@ function render(data) {
   chart('fixed-quality',rows,[series('Predicción 1 paso %',r=>pct(r.quality?.all?.delta_error)),
     series('Reconstrucción %',r=>pct(r.diagnostics?.reconstruction_error),{skip:r=>!r.diagnostics}),
     series('Predicción 3 pasos %',r=>pct(r.diagnostics?.rollout_error),{skip:r=>!r.diagnostics})],100);
-  $('diagnostic-scope').textContent=diagnostic
+  $('diagnostic-scope').textContent=training
+    ?`Datos del batch normal antes de actualizar pesos · diagnóstico estratificado por juego/nivel${diagnostic?` · batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transiciones · ${diagnostic.rollouts} rutas de tres pasos`:''}. La deriva compara las mismas imágenes antes y después de actualizar el encoder.`
+    :diagnostic
     ?`Evaluación fija en cada batch. Diagnósticos adicionales cada ${diagnostic.every} batches · última medición: batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transiciones y ${diagnostic.latent?.sample_count??0} estados reales. Rollout: ${diagnostic.rollouts} rutas de tres pasos. Deriva: referencia del proceso en batch ${diagnostic.drift_reference_batch}.`
     :'Evaluación fija en cada batch. Los diagnósticos adicionales aparecerán tras una nueva medición; no se rellenan datos anteriores con ceros.';
-  chart('latent-drift',measured,[series('Deriva %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_reference_batch})]);
+  chart('latent-drift',measured,[series('Deriva %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})]);
   chart('latent-diversity',measured,[series('Entre observaciones',r=>r.diagnostics.latent?.std_mean),series('Dentro de cada episodio',r=>r.diagnostics.latent?.within_episode_std)]);
   chart('latent-rank',measured,[series('Rango efectivo',r=>r.diagnostics.latent?.effective_rank),series('Máximo observable',r=>r.diagnostics.latent?.max_rank)]);
   chart('latent-inactive',measured,[series('Casi constantes %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
@@ -92,7 +110,7 @@ function render(data) {
   table('evaluations',[...rows].reverse().map(r=>[number(r.actions,0),r.batch,`${number(pct(r.quality?.all?.delta_error))} %`,
     `${number(pct(r.diagnostics?.reconstruction_error))} %`,`${number(pct(r.diagnostics?.rollout_error))} %`,
     number(r.quality?.all?.transitions,0),number(r.diagnostics?.sampled_transitions,0)]));
-  table('schedule',(data.schedule||[]).map((s,i)=>[i+1,s.game,s.level,s.source,'Encoder · decoder · predictor']));
+  table('schedule',(data.schedule||[]).map((s,i)=>[i+1,s.game,s.level,s.source,control?.phase==='representation'?'Encoder · decoder':'Encoder · decoder · predictor']));
   $('schedule-info').textContent=`${c.game_schedule==='blocked'?'Un juego por batch':'Juegos intercalados en cada batch'} · rotación cada ${c.level_steps??'—'} movimientos en juegos sintéticos; el SDK progresa de forma nativa. Se conserva la memoria entre niveles de una sesión. Este modo no utiliza umbrales para activar el planner.`;
   renderPreview(data);
 }
@@ -116,12 +134,12 @@ function renderPreview(data) {
   const sample=samples.find(s=>s.game===select.value);
   $('preview-images').hidden=!sample;$('preview-legend').replaceChildren();
   if(!sample){
-    $('preview-info').textContent='Esperando una muestra de la evaluación fija.';
+    $('preview-info').textContent=data.measurement_source==='training_pre_update'?'Esperando una muestra del batch de entrenamiento.':'Esperando una muestra de la evaluación fija.';
     for(const id of ['before','reconstruction','real','predicted','difference'])draw(`preview-${id}`,null);
     return;
   }
   const arrows={1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'Undo'};
-  $('preview-info').textContent=`${sample.game} · nivel ${sample.level} · paso ${sample.step} · A${sample.action} ${arrows[sample.action]||''} · evaluación fija del batch ${data.prediction_sample_batch}`;
+  $('preview-info').textContent=`${sample.game} · nivel ${sample.level} · paso ${sample.step} · A${sample.action} ${arrows[sample.action]||''} · ${data.measurement_source==='training_pre_update'?'antes de entrenar el batch':'evaluación fija del batch'} ${data.prediction_sample_batch}`;
   draw('preview-before',sample.previous);draw('preview-reconstruction',sample.reconstruction);
   const real=[], predicted=[], difference=[], counts=[0,0,0,0];
   sample.previous.forEach((row,y)=>{real[y]=[];predicted[y]=[];difference[y]=[];row.forEach((before,x)=>{

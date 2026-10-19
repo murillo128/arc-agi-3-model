@@ -5,6 +5,7 @@ Use --source CHECKPOINT to warm-start weights, or --resume to retain optimizers.
 SIGINT/SIGTERM finish the current batch and atomically save its completed state.
 """
 import argparse
+import copy
 from dataclasses import asdict, replace
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ from .learning import Engine
 from .networks import WorldModel
 from .online_learning import OnlineRepresentation
 from .training_config import load_plan, run_owner
+from .sequence_control import SequenceControlConfig, SequencePhaseControl, TrainingBatchDiagnostics
 
 
 def synchronize(engine):
@@ -91,11 +93,13 @@ def representation_for(engine, plan):
     learner = OnlineRepresentation(engine, plan.settings['representation_learning_rate'],
         freeze_encoder=plan.settings['freeze_encoder'],
         encoder_learning_rate_after_predictor=plan.settings['encoder_learning_rate_after_predictor'])
-    learner.activate_predictor()
+    if 'sequence_control' not in plan.payload:
+        learner.activate_predictor()
     return learner
 
 
-def fit_batch(learner, sessions, representation=None, *, telemetry=None):
+def fit_batch(learner, sessions, representation=None, *, telemetry=None,
+              train_predictor=True, training_probe=None):
     """One representation phase, then causal predictor blocks on fixed latents."""
     e, c = learner.engine, learner.config
     synchronize(e)
@@ -113,16 +117,22 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
                     reconstruction.append(result)
     synchronize(e)
     representation_seconds = time.perf_counter() - begin
+    drift_seconds = 0.
+    if training_probe is not None:
+        start = time.perf_counter()
+        training_probe.after_representation()
+        synchronize(e)
+        drift_seconds = time.perf_counter() - start
     start = time.perf_counter()
     e.model.eval()
-    encoded = EncodedSessions(e, sessions)
+    encoded = EncodedSessions(e, sessions) if train_predictor else None
     synchronize(e)
     encode_seconds = time.perf_counter() - start
     start = time.perf_counter()
     updates = []
     length = max(len(s.transitions) for s in sessions)
     last_supervised = max((i for s in sessions for i, step in enumerate(s.transitions) if step.supervised), default=-1)
-    for position in range(0, length, c.block_steps):
+    for position in range(0, length if train_predictor else 0, c.block_steps):
         result = learner.update(encoded, position, min(length, position + c.block_steps),
             telemetry=telemetry, last=position <= last_supervised < position + c.block_steps)
         if result is not None:
@@ -130,7 +140,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
     synchronize(e)
     predictor_seconds = time.perf_counter() - start
     probe_seconds = 0.
-    if telemetry and telemetry.probe_requested:
+    if telemetry and telemetry.probe_requested and train_predictor:
         from .optimization_probe import memory_probe
         probe_start = time.perf_counter()
         telemetry.probe = dict(memory_probe(learner, encoded, telemetry.probe_session),
@@ -140,6 +150,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
         probe_seconds = time.perf_counter() - probe_start
     return dict(representation_seconds=representation_seconds, encode_seconds=encode_seconds,
         predictor_seconds=predictor_seconds, training_seconds=time.perf_counter() - begin,
+        drift_seconds=drift_seconds,
         probe_seconds=probe_seconds,
         updates=len(updates), examples=sum(x['examples'] for x in updates),
         loss=sum(x['loss'] for x in updates)/len(updates) if updates else None,
@@ -152,7 +163,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
         examples_per_second=sum(x['examples'] for x in updates)/max(1e-9, predictor_seconds))
 
 
-def save_run(path, plan, learner, representation, batches, actions):
+def save_run(path, plan, learner, representation, batches, actions, control=None):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
@@ -160,16 +171,34 @@ def save_run(path, plan, learner, representation, batches, actions):
         representation_optimizer=representation.optimizer.state_dict(),
         progress=dict(batches=batches, actions=actions, updates=learner.updates),
         torch_rng=torch.get_rng_state(),
-        cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else []))
+        cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
+        **(dict(sequence_control=control.snapshot(), representation_state=dict(
+            sigreg_enabled=representation.sigreg_enabled, updates=representation.updates)) if control else {})))
 
 
-def restore_run(saved, plan, learner, representation):
+def restore_run(saved, plan, learner, representation, control=None, *, adopt=False):
+    expected = copy.deepcopy(plan.payload)
+    if adopt:
+        if control is None or 'sequence_control' in saved or 'sequence_control' in saved['plan']:
+            raise ValueError('Phase adoption requires a legacy sequence checkpoint and a controlled plan')
+        expected.pop('sequence_control')
+        expected['settings']['encoder_learning_rate_after_predictor'] = saved['plan']['settings']['encoder_learning_rate_after_predictor']
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
-            saved['plan'] != plan.payload or saved['sequence'] != asdict(learner.config)):
+            saved['plan'] != expected or saved['sequence'] != asdict(learner.config)):
         raise ValueError('Resume requires the same sequence configuration and training plan')
+    if control is not None and not adopt:
+        if 'sequence_control' not in saved:
+            raise ValueError('Missing checkpoint phase state; use explicit adoption for legacy runs')
+        control.restore(saved['sequence_control'])
     learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
     learner.updates = saved['progress']['updates']
+    if control is not None:
+        state = saved.get('representation_state', {})
+        representation.sigreg_enabled = state.get('sigreg_enabled',
+            representation.sigreg_enabled and learner.updates == 0)
+        representation.updates = state.get('updates', 0)
+        control.apply(representation)
     torch.set_rng_state(saved['torch_rng'])
     if learner.engine.device.type == 'cuda' and saved['cuda_rng']:
         if len(saved['cuda_rng']) != torch.cuda.device_count():
@@ -193,6 +222,9 @@ def run(args):
     output = args.output.resolve()
     if args.resume and args.source:
         raise ValueError('Choose --source for a fresh run or --resume, not both')
+    adopt = getattr(args, 'adopt_training_phases', False)
+    if adopt and not args.resume:
+        raise ValueError('--adopt-training-phases requires --resume')
     if args.max_batches is not None and args.max_batches < 1:
         raise ValueError('--max-batches must be positive')
     action_budget = None if getattr(args, 'unlimited', False) else plan.settings['actions']
@@ -201,8 +233,12 @@ def run(args):
         torch.manual_seed(plan.settings['seed'])
         engine = load_engine(plan, source, device=args.device, compile_model=args.compile)
         learner, representation = SequenceLearner(engine, config), representation_for(engine, plan)
-        batches, actions = (restore_run(checkpoint.load(source), plan, learner, representation)
+        control = (SequencePhaseControl(plan.stages, plan.settings,
+            SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
+        batches, actions = (restore_run(checkpoint.load(source), plan, learner, representation, control, adopt=adopt)
                             if args.resume else (0, 0))
+        if control:
+            control.apply(representation)
         telemetry = None
         if getattr(args, 'optimization', False):
             from .optimization_telemetry import OptimizationTelemetry
@@ -219,20 +255,32 @@ def run(args):
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
         report['budget'] = action_budget
+        report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
+        if control:
+            report['phase_control'] = control.report()
         report['learning_rates'] = dict(predictor=learner.optimizer.param_groups[0]['lr'],
                                         **representation.learning_rates)
         if telemetry:
             report['optimization_identity'] = telemetry.identity
         if args.resume and report_path.exists():
             previous = json.loads(report_path.read_text())
-            report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
-            report['prediction_samples'] = previous.get('prediction_samples', [])
-            report['prediction_sample_batch'] = previous.get('prediction_sample_batch')
+            if adopt:
+                # Keep the original report as evidence; never join different metric sources.
+                archive = output / f'report-before-training-phases-{batches}.json'
+                if not archive.exists():
+                    archive.write_text(json.dumps(previous, allow_nan=False) + '\n')
+                report['adopted_at_batch'] = batches
+            else:
+                report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
+                report['prediction_samples'] = previous.get('prediction_samples', [])
+                report['prediction_sample_batch'] = previous.get('prediction_sample_batch')
+                if 'adopted_at_batch' in previous:
+                    report['adopted_at_batch'] = previous['adopted_at_batch']
         completed_here = 0
         try:
             factories = factories_for(plan)
             # Cover the entire configured catalog in bounded GPU batches.
-            evaluation = [collect_batch(factories, replace(config, game_schedule='interleaved'), i,
+            evaluation = [] if control else [collect_batch(factories, replace(config, game_schedule='interleaved'), i,
                                         plan.settings['seed'], evaluation=True)
                           for i in range((len(factories) + config.batch_games - 1)//config.batch_games)]
             from .sequence_diagnostics import SequenceDiagnostics
@@ -244,30 +292,54 @@ def run(args):
                     telemetry.start_batch(batches + 1)
                 sessions = collect_batch(factories, config, batches, plan.settings['seed'])
                 collection_seconds = time.perf_counter() - begin
-                measured = (fit_batch(learner, sessions, representation, telemetry=telemetry) if telemetry
-                            else fit_batch(learner, sessions, representation))
-                evaluation_start = time.perf_counter()
-                measure_diagnostics = completed_here == 0 or (batches+1) % diagnostics.every == 0
-                if measure_diagnostics:
-                    diagnostics.start(batches+1)
-                quality = merge_evaluations([evaluate_sessions(engine, batch,
-                    early_steps=config.loss_warmup_steps, reference_loss=bool(telemetry),
-                    diagnostics=diagnostics if measure_diagnostics else None) for batch in evaluation])
-                if measure_diagnostics:
-                    measured['diagnostics'], report['prediction_samples'] = diagnostics.finish()
+                if control:
+                    phase = control.phase
+                    control.apply(representation)
+                    learning_rates = dict(predictor=learner.optimizer.param_groups[0]['lr'], **representation.learning_rates)
+                    probe = TrainingBatchDiagnostics(engine, sessions, control.config.diagnostic_samples)
+                    probe.start(batches+1)
+                    evaluation_start = time.perf_counter()
+                    quality = merge_evaluations([evaluate_sessions(engine, sessions,
+                        early_steps=config.loss_warmup_steps, reference_loss=bool(telemetry), diagnostics=probe)])
+                    synchronize(engine)
+                    evaluation_seconds = time.perf_counter() - evaluation_start
+                    measured = fit_batch(learner, sessions, representation, telemetry=telemetry,
+                        train_predictor=phase == 'predictor', training_probe=probe)
+                    measured['diagnostics'], report['prediction_samples'] = probe.finish()
                     report['prediction_sample_batch'] = batches+1
-                    measured['diagnostics_seconds'] = diagnostics.seconds
-                synchronize(engine)
-                measured['evaluation_seconds'] = time.perf_counter() - evaluation_start
+                    measured.update(evaluation_seconds=evaluation_seconds, diagnostics_seconds=probe.seconds,
+                        phase=phase, learning_rates=learning_rates, measurement_source='training_pre_update')
+                    control.observe(batches+1, {k: dict(v) for k, v in probe.pairs.items()})
+                    control.apply(representation)
+                    report['phase_control'] = control.report()
+                    report['learning_rates'] = dict(predictor=learner.optimizer.param_groups[0]['lr'], **representation.learning_rates)
+                    measured['next_phase'] = control.phase
+                else:
+                    measured = (fit_batch(learner, sessions, representation, telemetry=telemetry) if telemetry
+                                else fit_batch(learner, sessions, representation))
+                    evaluation_start = time.perf_counter()
+                    measure_diagnostics = completed_here == 0 or (batches+1) % diagnostics.every == 0
+                    if measure_diagnostics:
+                        diagnostics.start(batches+1)
+                    quality = merge_evaluations([evaluate_sessions(engine, batch,
+                        early_steps=config.loss_warmup_steps, reference_loss=bool(telemetry),
+                        diagnostics=diagnostics if measure_diagnostics else None) for batch in evaluation])
+                    if measure_diagnostics:
+                        measured['diagnostics'], report['prediction_samples'] = diagnostics.finish()
+                        report['prediction_sample_batch'] = batches+1
+                        measured['diagnostics_seconds'] = diagnostics.seconds
+                    synchronize(engine)
+                    measured['evaluation_seconds'] = time.perf_counter() - evaluation_start
                 real_actions = sum(s.environment_actions for s in sessions)
                 batches += 1
                 actions += real_actions
                 save_start = time.perf_counter()
-                save_run(output / 'latest.pt', plan, learner, representation, batches, actions)
+                save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
                     capture_seconds = telemetry.seconds
+                    telemetry.reference_source = report['measurement_source']
                     telemetry.finish_batch(quality['reference']['nll'], actions)
                     measured['telemetry_seconds'] = capture_seconds + time.perf_counter() - telemetry_start
                 seconds = time.perf_counter() - begin
@@ -305,6 +377,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--adopt-training-phases', action='store_true',
+                        help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
     parser.add_argument('--unlimited', action='store_true',
                         help='Ignore the total action budget; run until interrupted or --max-batches is reached')
     parser.add_argument('--optimization', action='store_true', help='Record bounded optimizer diagnostics')

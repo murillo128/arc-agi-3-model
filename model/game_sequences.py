@@ -26,6 +26,13 @@ class Transition:
     action: Action
     after: Observation
     reset_before: bool = False
+    # Collection metadata only; never an input to the encoder or predictor.
+    # Isolated synthetic levels report SDK progress relative to their one-level game.
+    level: int | None = None
+
+    @property
+    def level_number(self):
+        return self.level if self.level is not None else self.before.levels_completed + 1
 
     @property
     def supervised(self):
@@ -80,7 +87,8 @@ def collect_session(factory, levels, seed, config):
                        (not after.terminal and after.levels_completed + 1 not in levels)):
             session.end_reason = 'reserved_level'
             break
-        session.transitions.append(Transition(before, action, after, boundary))
+        session.transitions.append(Transition(before, action, after, boundary,
+            before.levels_completed + 1 if native else levels[slot]))
         boundary = after.starts_new_level(before)
         if boundary:
             # Only the final new-board frame may enter the next level's encoder.

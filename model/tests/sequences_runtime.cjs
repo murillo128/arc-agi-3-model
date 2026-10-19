@@ -79,6 +79,25 @@ const text = id => nodes.get(id).textContent;
     ['Inventados: 1 px','Omitidos: 1 px','Color incorrecto: 1 px','Acertados: 1 px']);
   assert.deepEqual(nodes.get('preview-real').context.pixels.map(p=>p.color),
     ['#1e93ff','#1e93ff','#1e93ff','#aaa']);
+  report.measurement_source='training_pre_update';
+  report.phase_control={phase:'representation',window_batches:4,rows:[{game:'<game>',level:2,samples:8,changed:1,
+    reconstruction_error:.2,latent_drift:.01,enough:false,passing:false,passes:0,
+    thresholds:{minimum_samples:8,minimum_changed:4,representation_open:.1,latent_drift:.15,patience:3}}]};
+  report.learning_rates={encoder:3e-5,decoder:3e-5,predictor:3e-5};
+  await vm.runInContext('refresh()',context);
+  assert.match(text('phase-status'),/predictor en espera/);
+  assert.equal(text('tab-evaluation'),'Mediciones del entrenamiento');
+  assert.equal(nodes.get('phase-card').hidden,false);
+  assert.equal(nodes.get('phase-rows').children[0].children[0].textContent,'<game> / 2');
+  assert.equal(nodes.get('phase-rows').children[0].children[2].textContent,'20 % / 10 %');
+  assert.equal(nodes.get('phase-rows').children[0].children[5].textContent,'Recogiendo evidencia');
+  assert.match(text('preview-info'),/antes de entrenar el batch/);
+  assert.match(text('drift-description'),/antes y después de actualizar/);
+  report.phase_control.phase='predictor';
+  report.learning_rates.encoder=report.learning_rates.decoder=3e-7;
+  await vm.runInContext('refresh()',context);
+  assert.match(text('phase-status'),/representación a LR reducido/);
+  assert.match(text('learning-rates'),/LR decoder: 3.0e-7/);
   report.prediction_samples=[];
   report.history = [];
   await vm.runInContext('refresh()', context);

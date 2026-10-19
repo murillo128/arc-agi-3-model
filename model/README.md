@@ -43,8 +43,56 @@ Los límites por sesión, nivel, historial y diagnóstico permanecen activos.
 
 La configuración reutiliza los juegos, niveles, rutas y splits del plan anterior,
 añadiendo `sequence`. `objective` debe ser `world_model` (es su valor por defecto
-en este modo). No utiliza los umbrales de promoción, el planner ni los intervalos
-de evaluación del currículo por niveles: evalúa y guarda cada batch completo.
+en este modo). `sequence_control` activa fases de representación y predictor con
+umbrales sobre los batches normales de entrenamiento. Guarda cada batch completo;
+no activa el planner ni modifica la rotación configurada de niveles. Los planes
+anteriores sin `sequence_control` mantienen su comportamiento y evaluación fija.
+
+### Fases sobre los datos de entrenamiento
+
+El ejemplo incluye `sequence_control: {"window_batches": 4, "diagnostic_samples": 128,
+"decoder_learning_rate_after_predictor": 3e-7}`. Cada batch se mide **antes** de
+actualizar sus pesos, con memoria causal y las mismas transiciones que después
+se entrenarán. No se recogen partidas adicionales ni se reutilizan trayectorias
+fijas. Estas métricas controlan la optimización; no son una evaluación de
+generalización. La muestra de diagnóstico se reparte entre juegos/niveles y
+reserva hasta la mitad de cada cupo para cambios reales observados, incluidos
+clics poco frecuentes. El límite debe cubrir todos los pares presentes.
+
+Primero solo aprende representación. Para cada juego/nivel se acumulan los
+numeradores y denominadores de los últimos `window_batches`, sin promediar
+porcentajes de escenas de tamaños distintos. El error de admisión reconstruye
+la observación real posterior y cuenta errores sobre la unión de sus cambios
+reales y reconstruidos respecto a la observación anterior. El fondo intacto no
+diluye el error. La reconstrucción global de todos los píxeles sigue disponible
+como diagnóstico separado. La deriva es `sqrt(sum((z_después-z_antes)^2) /
+sum(z_antes^2))` sobre exactamente las mismas imágenes del batch, alrededor de
+las actualizaciones de representación; no compara escenas distintas.
+
+Se reutilizan los umbrales por etapa `representation_open` (0,10), `latent_drift`
+(0,15), `minimum_samples` (8), `minimum_changed` (4) y `patience` (3). Cada par
+necesita nuevas muestras para sumar un batch apto. La falta de evidencia, de
+cambios o de escala latente válida no cuenta como aprobado. Todos los pares
+deben cumplir porque comparten encoder/decoder. La admisión activa el predictor
+en el **siguiente** batch y se conserva; una regresión posterior permanece visible.
+`prediction_open` y `success` no activan un planner en este modo.
+
+En representación se usa `settings.representation_learning_rate` en ambos
+módulos. En predictor se usa `settings.encoder_learning_rate_after_predictor`
+para el encoder y `sequence_control.decoder_learning_rate_after_predictor` para
+el decoder (3e-7 en ambos en el ejemplo), manteniendo predictor a 3e-5. Se
+conservan pesos y momentos. Fase, ventana y contadores se guardan al completar
+el batch y se recuperan con `--resume`.
+
+Para adoptar las fases en un checkpoint antiguo, guardar primero una copia
+local del checkpoint/configuración y añadir `sequence_control` al plan. La única
+otra modificación permitida es el LR posterior del encoder. Ejecutar una vez
+`--resume --adopt-training-phases --max-batches 1` (añadir `--unlimited` si se
+había agotado el presupuesto), y después reanudar normalmente **sin** el flag
+de adopción. No reinicia pesos, momentos ni contadores; comienza en representación
+con evidencia nueva y archiva el informe previo como
+`report-before-training-phases-N.json`. Cambios en juegos, pérdidas o arquitectura
+siguen rechazados. El dashboard mantiene separados los dos tipos de medición.
 
 | Ajuste `sequence` | Función |
 | --- | --- |
@@ -73,15 +121,16 @@ normaliza sobre la **sesión completa**, dando el mismo peso a cada sesión; pad
 y saltos no cuentan. La media de los objetivos de los bloques equivale a esa
 media por sesión. Normalizar cada bloque por sus propios pesos cancelaría buena
 parte de la rampa. Encoder/decoder siguen aprendiendo reconstrucción por separado,
-con las tasas del plan (en el ejemplo, encoder 3e-6, decoder 3e-5); no reciben el
+con las tasas de su fase (en predictor, encoder y decoder 3e-7 en el ejemplo); no reciben el
 gradiente predictivo. Se codifica de nuevo después de esas actualizaciones y los
 latentes se conservan únicamente mientras el encoder permanezca fijo.
 
 En el SDK los niveles permitidos deben ser el prefijo `[1, 2, ...]`: se recorren
 mediante acciones públicas, sin forzar avances ni usar profesores. Una transición
 que entra en un nivel reservado/no permitido se excluye entera y termina la sesión.
-La evaluación usa semillas disjuntas, pesos congelados y contexto propio, y cubre
-todos los juegos configurados en grupos acotados. El dashboard separa error inicial,
+Sin control de fases, la evaluación usa semillas disjuntas y contexto propio.
+Con control de fases se miden los batches de entrenamiento antes de actualizarlos.
+El dashboard separa error inicial,
 tardío y por juego, TPS del último batch completo y coste de juego/codificación/
 predictor/evaluación/guardado. Error de predicción no es éxito en el juego.
 
