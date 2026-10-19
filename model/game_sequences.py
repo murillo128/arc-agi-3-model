@@ -246,7 +246,7 @@ class SequenceLearner:
                     terms.append((values * weight[:, None]).sum(0))
         return torch.stack(terms).sum(0) if terms else None
 
-    def update(self, encoded, start, stop):
+    def update(self, encoded, start, stop, *, telemetry=None, last=False):
         e = self.engine
         trainable(e, 'dynamics')
         self.optimizer.zero_grad(set_to_none=True)
@@ -255,8 +255,12 @@ class SequenceLearner:
             trainable(e)
             return None
         terms.sum().backward()
+        capture = telemetry.before_step('predictor', self.optimizer, start=start, stop=stop, last=last,
+            context_start=max(0, start-self.config.context_steps)) if telemetry else None
         norm = torch.nn.utils.clip_grad_norm_(e.model.dynamics.parameters(), 1., error_if_nonfinite=True)
         self.optimizer.step()
+        if telemetry:
+            telemetry.after_step(capture, norm, terms.detach().sum())
         self.updates += 1
         latent, visual = terms.detach().cpu().tolist()
         trainable(e)
@@ -265,24 +269,30 @@ class SequenceLearner:
 
 
 @torch.no_grad()
-def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32):
+def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32, reference_loss=False):
     """Fixed real trajectories; unweighted pixel-union errors, no optimizer."""
     engine.model.eval()
     encoded = EncodedSessions(engine, sessions)
     memories = [torch.zeros(1, engine.model.config.memory, device=engine.device) for _ in sessions]
     totals = defaultdict(lambda: [0, 0, 0])
+    nll_sum, nll_count = 0., 0
     with engine.autocast():
         for t in range(max((len(s.transitions) for s in sessions), default=0)):
             for ids, steps, z, h, action, geometry in memory_inputs(
                     engine, encoded, t, memories, clear_history=clear_history):
                 predicted, next_h, _ = engine.predict(z, h, action, *geometry)
-                pixels = engine.decode(predicted, *geometry).argmax(-1)
+                logits = engine.decode(predicted, *geometry)
+                pixels = logits.argmax(-1)
                 for k, (i, step, nh) in enumerate(zip(ids, steps, next_h.split(1))):
                     memories[i] = nh.float()
                     if not step.supervised:
                         continue
                     before = torch.as_tensor(np.array(step.before.final, copy=True), device=engine.device)
                     actual = torch.as_tensor(np.array(step.after.final, copy=True), device=engine.device)
+                    if reference_loss:
+                        # Fixed real targets and ordinary unweighted color NLL. Reuse the forward.
+                        nll_sum += float(torch.nn.functional.cross_entropy(logits[k].float().movedim(-1, 0)[None], actual.long()[None]))
+                        nll_count += 1
                     union = (actual != before) | (pixels[k] != before)
                     wrong = (pixels[k] != actual) & union
                     # A single transfer for this observation's integer counters.
@@ -291,15 +301,26 @@ def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32):
                         totals[key][0] += w
                         totals[key][1] += u
                         totals[key][2] += 1
-    return {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
-            for key, (w, u, n) in totals.items()}
+    result = {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
+              for key, (w, u, n) in totals.items()}
+    if reference_loss:
+        result['reference'] = dict(nll_sum=nll_sum, transitions=nll_count)
+    return result
 
 
 def merge_evaluations(reports):
     counts = defaultdict(lambda: [0, 0, 0])
+    nll_sum, nll_count = 0., 0
     for report in reports:
         for key, row in report.items():
+            if key == 'reference':
+                nll_sum += row['nll_sum']
+                nll_count += row['transitions']
+                continue
             for i, name in enumerate(('wrong', 'union', 'transitions')):
                 counts[key][i] += row[name]
-    return {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
-            for key, (w, u, n) in counts.items()}
+    result = {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
+              for key, (w, u, n) in counts.items()}
+    if nll_count:
+        result['reference'] = dict(nll=nll_sum/nll_count, transitions=nll_count)
+    return result

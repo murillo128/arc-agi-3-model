@@ -18,6 +18,7 @@ import time
 from urllib.parse import urlsplit
 
 from .curriculum_control import CurriculumControl
+from .optimization_control import OptimizationControl
 
 
 MAX_READ = 8 * 1024 * 1024
@@ -667,9 +668,25 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
     if curriculum_service and not subgoal_report:
         raise ValueError('Curriculum controls require a subgoal report')
     control = CurriculumControl(curriculum_service, subgoal_report) if curriculum_service else None
+    optimization = OptimizationControl(sequence_report)
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            if urlsplit(self.path).path == '/api/optimization':
+                if not optimization.authorized(self.headers.get('X-Optimization-Token')):
+                    self.send_error(403)
+                    return
+                try:
+                    length = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < length <= 1024 or self.headers.get('Content-Type') != 'application/json':
+                        raise ValueError('Solicitud JSON no válida.')
+                    data = json.loads(self.rfile.read(length))
+                    self.send_json(202, optimization.request(data))
+                except (ValueError, TypeError):
+                    self.send_json(400, {'error': 'Solicitud de diagnóstico no válida.'})
+                except (OSError, RuntimeError) as error:
+                    self.send_json(409, {'error': str(error)})
+                return
             if urlsplit(self.path).path != '/api/curriculum' or control is None:
                 self.send_error(404)
                 return
@@ -692,13 +709,15 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             except (OSError, ValueError, IndexError, StopIteration, subprocess.SubprocessError):
                 self.send_json(409, {'error': 'No se pudo solicitar el avance. Comprueba el estado del entrenador.'})
 
-        def send_json(self, status, payload):
+        def send_json(self, status, payload, etag=None):
             data = json.dumps(payload, allow_nan=False).encode()
             self.send_response(status)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
+            if etag is not None:
+                self.send_header('ETag', etag)
             self.end_headers()
             try:
                 self.wfile.write(data)
@@ -707,6 +726,16 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
 
         def do_GET(self):
             route = urlsplit(self.path).path
+            if route == '/api/optimization':
+                revision = optimization.revision()
+                if revision is not None and self.headers.get('If-None-Match') == revision:
+                    self.send_response(304)
+                    self.send_header('ETag', revision)
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    return
+                self.send_json(200, optimization.snapshot(), revision)
+                return
             if route == '/api/state':
                 state = ({'sequences': sequence_snapshot(sequence_report)} if sequence_report else
                          {'subgoals': subgoal_snapshot(subgoal_report)} if subgoal_report else monitor.snapshot())
@@ -722,7 +751,8 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             elif route == '/api/trajectory' and subgoal_report:
                 data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js'):
+            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
+                           '/optimization.html', '/optimization.js', '/optimization.css'):
                 name = 'index.html' if route == '/' else route[1:]
                 if subgoal_report and name in ('index.html', 'campaign.html'):
                     name = 'subgoals.html'

@@ -93,6 +93,61 @@ mejoró la evaluación al 74,46 %**, por lo que no demuestran que el modelo ya
 aproveche la memoria para inferir reglas. Los resultados y límites están en
 [`sequence_training_evidence.json`](sequence_training_evidence.json).
 
+## Observar gradientes y desplazamientos en directo
+
+El modo de secuencias admite `--optimization --optimization-every 8`, también
+con `--resume`. La instrumentación se activa sin cambiar el plan ni los
+checkpoints. El dashboard muestra la pestaña **Optimización** desde cualquier
+página; las ejecuciones no instrumentadas muestran un estado explícito de ausencia.
+No se reconstruyen gradientes históricos a partir de los pesos.
+
+```sh
+.venv/bin/python -u -m model.sequence_training \
+  --training-config model/sequence_config.example.json \
+  --output model/runs/secuencias --device cuda --resume \
+  --optimization --optimization-every 8
+.venv/bin/python -m model.dashboard \
+  --sequence-report model/runs/secuencias/report.json --port 8767
+```
+
+- **Pulso:** RMS del gradiente antes de recortarlo, factor global de recorte,
+  LR del grupo y desplazamiento real tras `optimizer.step()`. La magnitud y
+  alineación del desplazamiento usan hasta 256 coordenadas fijas por tensor;
+  `RMS(ΔW)/max(RMS(W), 1e-12)` es una estimación sobre esa muestra. Los mapas
+  de la matriz seleccionada calculan RMS sobre bloques completos, sin cancelar
+  signos. El histograma de ΔW utiliza la muestra. Se distinguen congelación,
+  gradiente ausente y cero medido. El último update de cada batch siempre se
+  captura, además de la cadencia, para alinearlo con su evaluación.
+- **Trayectoria:** PCA por módulo sobre la misma muestra estratificada, con dos
+  ejes fijos calibrados tras cuatro batches. La altura es la NLL de color sin
+  ponderación sobre las observaciones reales de evaluación, idénticas entre
+  batches; no es el loss del minibatch ni un paisaje de pérdidas. El porcentaje
+  visible y el giro pertenecen a la muestra, no al vector completo. Recalibrar
+  cambia la base y reproyecta todos los puntos retenidos; no mueve los pesos.
+- **Memoria:** sonda inicial y después bajo demanda. Derivada de la pérdida
+  visual del último paso supervisado de una sesión respecto a sus estados de
+  memoria, con el mismo corte de contexto/bloque que el entrenamiento. Muestra
+  cambios de nivel, pérdida con memoria y pérdida con la memoria entrante borrada.
+  Es un diagnóstico local, no una medida global de utilidad. `autograd.grad`
+  no escribe gradientes de parámetros y se restauran modos, permisos y RNG.
+
+Los controles de captura se atienden al iniciar el próximo batch. Al pedir otra
+matriz, el siguiente update que la entrene registra el detalle; no se inventa el
+detalle de instantes anteriores. La selección fijada conserva su snapshot aunque
+lleguen nuevos batches. Los datos se publican al guardar el batch completo.
+
+En el directorio del run se conservan `optimization.json` (64 capturas y hasta
+96 puntos), `optimization_samples.npz` (muestras/bases, sin pickle) y, mientras
+esté pendiente, `optimization_request.json`. Son artefactos locales ignorados,
+no pesos adicionales. La reanudación exige una identidad compatible y descarta
+telemetría posterior al checkpoint restaurado. HTTP limita el tamaño, usa un
+token por servidor para las solicitudes y respuestas condicionales para no
+reenviar varios MB cada dos segundos. El servidor sigue sin importar Torch.
+
+El diseño común de navegación, tarjetas, tablas y controles se aplica a las páginas
+de secuencias, seguimiento general, campañas, subobjetivos y optimización.
+Validación funcional y numérica sin navegador; la apariencia la verifica el usuario.
+
 ## Entrenamiento configurable
 
 `model.subgoal_training --training-config ARCHIVO.json` permite elegir juegos,

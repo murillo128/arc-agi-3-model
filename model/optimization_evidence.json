@@ -1,0 +1,82 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4070 Ti",
+  "batch_games": 4,
+  "session_steps": 512,
+  "block_steps": 16,
+  "context_steps": 16,
+  "parameter_count": 215984848,
+  "source_batch": 34,
+  "trials": [
+    {
+      "trial": 0,
+      "enabled": false,
+      "seconds": 37.99311334900085,
+      "tps": 53.9045058294455,
+      "loss": 36.44797942042351,
+      "peak_gpu_gib": 5.3531694412231445,
+      "predictor_seconds": 26.161529912000333,
+      "capture_seconds": 0,
+      "json_bytes": 0
+    },
+    {
+      "trial": 1,
+      "enabled": true,
+      "seconds": 38.227755624000565,
+      "tps": 53.57363953415571,
+      "loss": 36.44797942042351,
+      "peak_gpu_gib": 5.356322765350342,
+      "predictor_seconds": 26.174193204000403,
+      "capture_seconds": 0.4227158449994022,
+      "json_bytes": 624223
+    },
+    {
+      "trial": 2,
+      "enabled": true,
+      "seconds": 37.98224444799962,
+      "tps": 53.91993100365243,
+      "loss": 36.44797942042351,
+      "peak_gpu_gib": 5.357253551483154,
+      "predictor_seconds": 25.920303513999897,
+      "capture_seconds": 0.41315084699999716,
+      "json_bytes": 624224
+    },
+    {
+      "trial": 3,
+      "enabled": false,
+      "seconds": 37.50563551900086,
+      "tps": 54.60512724714278,
+      "loss": 36.44797942042351,
+      "peak_gpu_gib": 5.350583076477051,
+      "predictor_seconds": 25.806298802999663,
+      "capture_seconds": 0,
+      "json_bytes": 0
+    }
+  ],
+  "probe_seconds": 0.2732656579992181,
+  "probe_status": "ready",
+  "date": "2026-10-19",
+  "method": "ABBA, restore identical model, Adam and RNG before each trial; one actual 4 x 512 session batch plus fixed evaluation; CUDA synchronization at measurement boundaries.",
+  "timed_scope": "Representation/predictor updates, fixed evaluation and optional telemetry publication. Excludes environment collection and checkpoint writing; TPS here is not end-to-end training throughput.",
+  "telemetry": {
+    "predictor_every": 8,
+    "representation_every": 1,
+    "force_last_predictor_capture": true,
+    "sample_per_tensor": 256,
+    "detail_blocks": [
+      16,
+      16
+    ]
+  },
+  "mean_seconds_off": 37.749374434000856,
+  "mean_seconds_on": 38.10500003600009,
+  "mean_overhead_percent": 0.9420701861457159,
+  "limitations": [
+    "Two repeats per configuration, one hardware/workload; short timing comparison, not a universal performance guarantee.",
+    "Probe timed separately; ordinary trials do not include it.",
+    "No browser or visual tests requested."
+  ],
+  "numerical_validation": [
+    "CPU integration produces identical model, Adam and RNG state with instrumentation on/off and after resume.",
+    "Known AdamW update, clipping, temporal derivative and planar/orthogonal displacement fixtures."
+  ]
+}
