@@ -160,7 +160,8 @@ class SequenceTrainingTests(unittest.TestCase):
                 return self.observation
         factory = SimpleNamespace(game_id='native', reserve_final_level=True,
                                   make=lambda seed, level: Env())
-        row = collect_session(factory, [1, 2], 0, SequenceConfig(session_steps=4, block_steps=2))
+        row = collect_session(factory, [1, 2], 0,
+            SequenceConfig(session_steps=4, block_steps=2, level_steps=1))
         self.assertEqual(row.environment_actions, 2)
         self.assertEqual(len(row.transitions), 1)
         self.assertFalse(row.transitions[0].supervised)
@@ -179,11 +180,21 @@ class SequenceTrainingTests(unittest.TestCase):
             seen.append(level)
             return Env()
         factory = SimpleNamespace(game_id='synthetic', reserve_final_level=False, make=make)
-        row = collect_session(factory, [1, 3], 0,
-            SequenceConfig(session_steps=5, block_steps=2, level_steps=2))
-        self.assertEqual(seen, [1, 3, 1])
-        self.assertEqual([s.reset_before for s in row.transitions], [False, False, True, False, True])
-        self.assertEqual(row.environment_actions, 5)
+        for levels, expected in (([1], [1, 1, 1, 1]), ([1, 3], [1, 3, 1, 3])):
+            with self.subTest(levels=levels):
+                seen.clear()
+                row = collect_session(factory, levels, 0,
+                    SequenceConfig(session_steps=7, block_steps=2, level_steps=2))
+                self.assertEqual(seen, expected)
+                self.assertEqual([s.reset_before for s in row.transitions],
+                                 [False, False, True, False, True, False, True])
+                self.assertEqual(row.environment_actions, 7)
+                self.assertEqual(row.game, 'synthetic')
+                e = scalar_engine()
+                memory = ScalarLearner(e).prefix(EncodedSessions(e, [row]), 3)[0]
+                # h1=1, h2=2.5; new board/reset -> 2.25; next action -> 2.125.
+                # Clearing session memory at the quota would instead give 1.5.
+                self.assertEqual(float(memory), 2.125)
         self.assertEqual(schedule_games(['a', 'b'], 0, SequenceConfig()), ['a', 'b', 'a', 'b'])
         self.assertEqual(schedule_games(['a', 'b'], 1, SequenceConfig(game_schedule='blocked')), ['b']*4)
 

@@ -38,7 +38,7 @@ de evaluación del currículo por niveles: evalúa y guarda cada batch completo.
 | `session_steps: 512` | Presupuesto de movimientos de cada sesión. |
 | `block_steps: 16` | Pasos que aportan pérdida en cada actualización, además del contexto previo con gradiente. |
 | `context_steps: 16` | Contexto previo adicional con gradiente y sin repetir su pérdida; permite aprender a través de cambios de nivel alineados con el corte del bloque. |
-| `level_steps: 32` | En sintéticos, acciones antes de pasar al siguiente nivel configurado; después se vuelve al primero. Un fracaso reinicia el mismo nivel hasta consumir su cuota. |
+| `level_steps: 32` | En sintéticos, acciones antes de pasar al siguiente nivel configurado; después se vuelve al primero. Si solo hay un nivel, se reinicia al agotar cada cuota. Un fracaso reinicia el mismo nivel hasta consumir su cuota. |
 | `game_schedule: "interleaved"` | Reparto circular entre juegos; `blocked` dedica cada batch a un tipo de juego, alternándolo en el siguiente. |
 | `loss_start_weight: 1.0` | Peso de la primera acción: 1 mantiene la pérdida uniforme; 0.25 o 0.5 prueban una rampa. |
 | `loss_warmup_steps: 32` | Acciones hasta alcanzar peso 1, contado desde el inicio de la sesión, sin reiniciar en cada nivel. |

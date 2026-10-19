@@ -57,15 +57,14 @@ def collect_session(factory, levels, seed, config):
         raise ValueError('Native sequence levels must be the contiguous allowed prefix from 1')
     session = GameSession(factory.game_id, seed)
     rng = random.Random(seed)
-    env, previous_slot, attempts = None, None, 0
+    env, attempts = None, 0
     boundary = False
     for index in range(config.session_steps):
         slot = (index // config.level_steps) % len(levels)
-        if env is None or env.observation.terminal or (not native and slot != previous_slot):
+        if env is None or env.observation.terminal or (not native and index % config.level_steps == 0):
             env = factory.make(seed + attempts * 1_000_000, None if native else levels[slot])
             attempts += 1
             boundary = bool(session.transitions)
-        previous_slot = slot
         before = env.observation
         if native and (training_boundary(factory, before) or before.levels_completed + 1 not in levels):
             session.end_reason = 'reserved_level'
