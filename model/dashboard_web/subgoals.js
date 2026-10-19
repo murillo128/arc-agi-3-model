@@ -1,5 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const historicalView = globalThis.location?.pathname?.endsWith('/history.html') === true;
+const reportApi = historicalView ? 'api/history/' : 'api/';
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const fmt = (x, n=0) => finite(x) ? x.toLocaleString('es-ES', {maximumFractionDigits:n}) : '—';
 // Same pinned SDK palette as viewer/src/canvas.ts.
@@ -347,7 +349,7 @@ async function refreshTrajectory(metadata){
   if($('path').hidden||!$('trajectory-live').checked||player.fetching||player.sample?.id===metadata.id)return;
   player.fetching=true;
   try{
-    const response=await fetch('api/trajectory',{cache:'no-store',signal:AbortSignal.timeout(10000)});
+    const response=await fetch(reportApi+'trajectory',{cache:'no-store',signal:AbortSignal.timeout(10000)});
     if(!response.ok)throw Error('HTTP '+response.status);
     const sample=(await response.json()).trajectory;
     if(displayedReport?.planner_trajectory?.id!==metadata.id||!$('trajectory-live').checked)return;
@@ -538,6 +540,9 @@ let displayedReport;
 let curriculumCells=[];
 function render(report) {
   displayedReport=report;
+  $('history-nav').hidden=!historicalView;
+  $('training-nav').setAttribute('aria-current',historicalView?'false':'page');
+  $('history-nav').setAttribute('aria-current',historicalView?'page':'false');
   const p=report.progress||{}, c=report.config||{};
   const representationFrozen=p.representation_frozen===true;
   const encoderFrozen=representationFrozen||(p.encoder_frozen??c.freeze_encoder)===true;
@@ -600,6 +605,14 @@ function render(report) {
   $('progress').textContent=p.phase==='evaluation'
     ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
     : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
+  if(historicalView){
+    $('connection').textContent=report.status==='waiting'?'Histórico no disponible':'Histórico · solo lectura';
+    $('connection').className='';
+    $('notice').hidden=false;
+    $('notice').textContent=report.message||'Ejecución anterior: estas curvas y trayectorias no pertenecen al entrenamiento por secuencias actual.';
+    $('freshness').textContent=finite(report.updated_at)?`Último registro: ${new Date(report.updated_at*1000).toLocaleString('es-ES')}`:'Sin fecha de registro';
+    $('gpu-status').textContent='';
+  }
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
   const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
   const qualityThresholds=[{name:'Reconstrucción',value:100*limits.representation_open,colorIndex:1},
@@ -738,6 +751,7 @@ let controlState=null, controlBusy=false, controlError='';
 const phaseButton=$('advance-phase'), levelButton=$('advance-level');
 const controlParking=$('curriculum-action-parking');
 function renderControls(state){
+  if(historicalView)state=null;
   controlState=state||null;
   const target=state?.target;
   const active=curriculumCells.find(row=>row.game===target?.game&&row.level===target?.level&&row.unlocked);
@@ -766,10 +780,10 @@ function renderControls(state){
   if(pending)message=`Avance de ${pending.operation==='phase'?'fase':'nivel'} pendiente: esperando a que termine la partida o evaluación.`;
   if(controlBusy)message='Enviando petición…';
   if(controlError)message=controlError;
-  $('control-status').textContent=message;
+  $('control-status').textContent=historicalView?'Histórico de solo lectura. Los controles del entrenamiento están desactivados.':message;
 }
 async function advanceCurriculum(operation){
-  if(controlBusy||!controlState?.[operation])return;
+  if(historicalView||controlBusy||!controlState?.[operation])return;
   const token=controlState.token;
   controlBusy=true;controlError='';renderControls(controlState);
   try{
@@ -784,5 +798,7 @@ async function advanceCurriculum(operation){
 }
 phaseButton.addEventListener('click',()=>advanceCurriculum('phase'));
 levelButton.addEventListener('click',()=>advanceCurriculum('level'));
-async function poll(){try{const response=await fetch('api/state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+async function poll(){try{const response=await fetch(reportApi+'state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+const initialTab=globalThis.location?.hash?.slice(1);
+if(tabs.includes(initialTab))$('tab-'+initialTab).click();
 poll();

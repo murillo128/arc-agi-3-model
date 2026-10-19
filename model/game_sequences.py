@@ -269,12 +269,12 @@ class SequenceLearner:
 
 
 @torch.no_grad()
-def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32, reference_loss=False):
+def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32, reference_loss=False, diagnostics=None):
     """Fixed real trajectories; unweighted pixel-union errors, no optimizer."""
     engine.model.eval()
     encoded = EncodedSessions(engine, sessions)
     memories = [torch.zeros(1, engine.model.config.memory, device=engine.device) for _ in sessions]
-    totals = defaultdict(lambda: [0, 0, 0])
+    totals = defaultdict(lambda: [0] * 7)
     nll_sum, nll_count = 0., 0
     with engine.autocast():
         for t in range(max((len(s.transitions) for s in sessions), default=0)):
@@ -293,23 +293,30 @@ def evaluate_sessions(engine, sessions, *, clear_history=False, early_steps=32, 
                         # Fixed real targets and ordinary unweighted color NLL. Reuse the forward.
                         nll_sum += float(torch.nn.functional.cross_entropy(logits[k].float().movedim(-1, 0)[None], actual.long()[None]))
                         nll_count += 1
-                    union = (actual != before) | (pixels[k] != before)
-                    wrong = (pixels[k] != actual) & union
-                    # A single transfer for this observation's integer counters.
-                    w, u = torch.stack((wrong.sum(), union.sum())).cpu().tolist()
+                    real, guessed = actual != before, pixels[k] != before
+                    equal = pixels[k] == actual
+                    union = real | guessed
+                    # One transfer for counts; no extra model forward for the breakdown.
+                    counts = torch.stack(((~equal & union).sum(), union.sum(),
+                        (~real & guessed).sum(), (real & ~guessed).sum(),
+                        (real & guessed & ~equal).sum(), (real & equal).sum())).cpu().tolist()
                     for key in ('all', 'early' if t < early_steps else 'late', sessions[i].game):
-                        totals[key][0] += w
-                        totals[key][1] += u
-                        totals[key][2] += 1
-    result = {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
-              for key, (w, u, n) in totals.items()}
+                        for j, value in enumerate((counts[0], counts[1], 1, *counts[2:])):
+                            totals[key][j] += value
+                    if diagnostics is not None:
+                        diagnostics.observe(encoded, sessions[i], t, z[k], predicted[k], next_h[k], pixels[k])
+    result = {}
+    for key, values in totals.items():
+        row = dict(zip(('wrong', 'union', 'transitions', 'invented', 'missed', 'color', 'correct'), values))
+        row['delta_error'] = row['wrong']/row['union'] if row['union'] else None
+        result[key] = row
     if reference_loss:
         result['reference'] = dict(nll_sum=nll_sum, transitions=nll_count)
     return result
 
 
 def merge_evaluations(reports):
-    counts = defaultdict(lambda: [0, 0, 0])
+    counts = defaultdict(lambda: [0] * 7)
     nll_sum, nll_count = 0., 0
     for report in reports:
         for key, row in report.items():
@@ -317,10 +324,11 @@ def merge_evaluations(reports):
                 nll_sum += row['nll_sum']
                 nll_count += row['transitions']
                 continue
-            for i, name in enumerate(('wrong', 'union', 'transitions')):
+            for i, name in enumerate(('wrong', 'union', 'transitions', 'invented', 'missed', 'color', 'correct')):
                 counts[key][i] += row[name]
-    result = {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None)
-              for key, (w, u, n) in counts.items()}
+    result = {key: dict(wrong=w, union=u, transitions=n, delta_error=w/u if u else None,
+                        invented=iv, missed=mi, color=co, correct=ok)
+              for key, (w, u, n, iv, mi, co, ok) in counts.items()}
     if nll_count:
         result['reference'] = dict(nll=nll_sum/nll_count, transitions=nll_count)
     return result

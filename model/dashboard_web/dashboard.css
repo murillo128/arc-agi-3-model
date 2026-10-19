@@ -375,3 +375,18 @@ body .table-scroll { overscroll-behavior-inline: contain; }
 body .metrics small { line-height: 1.6; }
 @media (max-width: 1100px) { body .summary-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 520px) { body .world-metrics { grid-template-columns: 1fr; } .app-nav > div { gap: 13px; } body .chart-card h3 span { flex-basis: 100%; } }
+
+/* Training monitoring shares the same cards and hierarchy as optimization. */
+.section-card { margin-top: 20px; }
+.planner-availability { padding: 30px; max-width: 960px; }
+.history-action { display: inline-flex; align-items: center; gap: 24px; padding: 12px 18px; margin: 4px 0 18px; border: 1px solid var(--border); border-radius: 24px; background: #20312d; text-decoration: none; }
+.history-action:hover { border-color: var(--mint); }
+.history-action:focus-visible { outline: 2px solid var(--mint); outline-offset: 4px; }
+.evaluation-history { max-height: 620px; overflow: auto; }
+.evaluation-history thead { position: sticky; top: 0; background: var(--surface); }
+.prediction-preview select { min-width: 145px; }
+#diagnostic-scope { margin: 12px 0 20px; line-height: 1.7; }
+
+.app-nav > div { min-width: 0; overflow-x: auto; }
+.app-nav > div a { flex-shrink: 0; white-space: nowrap; }
+.prediction-preview .quality-heading { flex-wrap: wrap; }

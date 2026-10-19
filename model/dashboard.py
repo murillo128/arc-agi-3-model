@@ -628,7 +628,7 @@ def subgoal_snapshot(path):
         data['config'] = {k: v for k, v in data.get('config', {}).items() if k not in ('source', 'init_config', 'output')}
         data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
         return data
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, TypeError, AttributeError) as error:
         return {'kind': 'synthetic_subgoals', 'status': 'waiting', 'message': str(error), 'progress': {}}
 
 
@@ -643,7 +643,7 @@ def trajectory_snapshot(report_path):
             return None
         data = json.loads(path.read_text())
         return data if data.get('kind') == 'planner_trajectory' and data.get('id') == metadata['id'] else None
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
@@ -661,12 +661,14 @@ def sequence_snapshot(path):
 
 
 def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None,
-                sequence_report=None):
+                sequence_report=None, history_subgoal_report=None):
     gpu = GpuMonitor()
     if sequence_report and any(x is not None for x in (monitor, behavior, campaign, subgoal_report, curriculum_service)):
         raise ValueError('Sequence report selects one independent run')
     if curriculum_service and not subgoal_report:
         raise ValueError('Curriculum controls require a subgoal report')
+    if history_subgoal_report and not sequence_report:
+        raise ValueError('Historical subgoal view requires a sequence report')
     control = CurriculumControl(curriculum_service, subgoal_report) if curriculum_service else None
     optimization = OptimizationControl(sequence_report)
 
@@ -746,8 +748,23 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                 if campaign is not None and subgoal_report is None:
                     state['campaign'] = campaign.snapshot()
                 state['gpu'] = gpu.snapshot()
+                if sequence_report:
+                    state['history_available'] = history_subgoal_report is not None
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
+            elif route == '/api/history/state' and history_subgoal_report:
+                history = subgoal_snapshot(history_subgoal_report)
+                # The archived writer may have stopped while its last status was running.
+                history['historical'] = True
+                history['status'] = 'historical' if history.get('status') != 'waiting' else 'waiting'
+                self.send_json(200, {'subgoals': history, 'curriculum_control': None})
+                return
+            elif route == '/api/history/trajectory' and history_subgoal_report:
+                self.send_json(200, {'trajectory': trajectory_snapshot(history_subgoal_report)})
+                return
+            elif route == '/history.html' and history_subgoal_report:
+                data = (ASSETS / 'subgoals.html').read_bytes()
+                mime = 'text/html; charset=utf-8'
             elif route == '/api/trajectory' and subgoal_report:
                 data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
@@ -792,6 +809,8 @@ def main():
     parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
     parser.add_argument('--subgoal-report', type=Path, help='Select the new synthetic-subgoal run for the entire dashboard')
     parser.add_argument('--sequence-report', type=Path, help='Select a game-sequence training report')
+    parser.add_argument('--history-subgoal-report', type=Path,
+                        help='Read-only previous subgoal run, kept separate from the active sequence run')
     parser.add_argument('--curriculum-service', help='Opt in to phase/level controls for this systemd user service')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
@@ -803,6 +822,8 @@ def main():
         parser.error('--sequence-report selects one run; do not combine report selectors')
     if args.curriculum_service and not args.subgoal_report:
         parser.error('--curriculum-service requires --subgoal-report')
+    if args.history_subgoal_report and not args.sequence_report:
+        parser.error('--history-subgoal-report requires --sequence-report')
     if args.subgoal_report and any((args.log, args.behavior_log, args.campaign_log, args.campaign_report)):
         parser.error('--subgoal-report selects one run; do not combine it with legacy log selectors')
     if not 2 <= args.max_points <= 10000:
@@ -811,7 +832,7 @@ def main():
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
     campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
     with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report, args.curriculum_service,
-                     args.sequence_report) as server:
+                     args.sequence_report, args.history_subgoal_report) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

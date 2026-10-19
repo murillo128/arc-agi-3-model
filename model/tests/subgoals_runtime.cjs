@@ -820,5 +820,22 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('advance-level').disabled,true);
   assert.match(text('connection'),/Sin conexión.*offline/);
   assert.equal(text('gpu-status'),'GPU · datos no disponibles','connection failure clears stale GPU readings');
+  // The full historical view uses separate endpoints and cannot send curriculum commands.
+  const historyRequests=[];
+  const history=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(){},
+    location:{pathname:'/arc3-training/history.html'},document:context.document,
+    fetch:async(url,options)=>{historyRequests.push({url,method:options?.method});
+      return {ok:true,json:async()=>({subgoals:{...report,historical:true,status:'historical'},
+        curriculum_control:{target:{game:'sc01-v1',level:2},phase:true,level:true}})};}});
+  vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),history);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(text('connection'),'Histórico · solo lectura');
+  assert.match(text('notice'),/no pertenecen al entrenamiento por secuencias/);
+  assert.equal(nodes.get('advance-phase').disabled,true);
+  assert.equal(nodes.get('advance-level').disabled,true);
+  await vm.runInContext("advanceCurriculum('level')",history);
+  assert.ok(historyRequests.every(r=>r.method!=='POST'));
+  assert.ok(historyRequests.some(r=>r.url==='api/history/state'));
+  assert.ok(historyRequests.every(r=>r.url!=='api/state'));
   console.log('Subgoal dashboard contracts passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

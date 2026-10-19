@@ -2,29 +2,59 @@
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ARC · Memoria entre niveles</title><link rel="stylesheet" href="dashboard.css"><script src="sequences.js" defer></script></head>
 <body class="subgoal-dashboard">
-<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html" aria-current="page">Entrenamiento</a><a href="optimization.html">Optimización</a></div><span class="nav-caption">WORLD MODEL</span></nav><main>
+<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html" aria-current="page">Entrenamiento</a><a href="optimization.html">Optimización</a><a id="history-link" href="history.html" hidden>Histórico del planner</a></div><span class="nav-caption">WORLD MODEL</span></nav><main>
 <header><div class="run-heading"><p class="eyebrow">ARC · APRENDIZAJE POR SECUENCIAS</p><h1>Memoria entre niveles</h1>
-<p id="run-info" class="muted">Esperando datos…</p></div><span id="status" class="badge" role="status">Esperando</span></header>
-<p class="notice" id="configuration"></p>
+<p id="run-info" class="muted">Esperando datos…</p></div><div class="connection"><span id="status" role="status">Esperando</span><p id="gpu-status" class="gpu-status"></p></div></header>
+<p class="run-context" id="configuration"></p><p class="run-context" id="learning-rates"></p>
 <div class="metrics summary-metrics">
 <article><h2>Acciones reales</h2><strong id="actions">—</strong><small id="batches"></small></article>
 <article><h2>Velocidad reciente</h2><strong id="tps">—</strong><small>Último batch completo, incluida evaluación y guardado.</small></article>
 <article><h2>Predictor</h2><strong id="examples">—</strong><small>Transiciones entrenadas / segundo del predictor.</small></article>
 <article><h2>Memoria GPU</h2><strong id="memory">—</strong><small>Pico asignado por PyTorch en este proceso.</small></article>
 </div>
+<div class="tabs" role="tablist" aria-label="Monitorización del entrenamiento">
+<button id="tab-world" role="tab" aria-controls="world" aria-selected="true">Representación y predictor</button>
+<button id="tab-path" role="tab" aria-controls="path" aria-selected="false" tabindex="-1">Subobjetivos y Path Planner</button>
+<button id="tab-evaluation" role="tab" aria-controls="evaluation" aria-selected="false" tabindex="-1">Evaluación congelada</button>
+<button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false" tabindex="-1">Currículo</button></div>
+<section id="world" role="tabpanel" aria-labelledby="tab-world">
+<p class="muted" id="diagnostic-scope">Las métricas nuevas aparecerán al completar una medición. Los datos anteriores se conservan.</p>
+<article class="chart-card prediction-preview"><div class="quality-heading"><div><h3>Una acción del predictor</h3><p id="preview-info">Esperando una muestra de la evaluación fija.</p></div><label>Juego de la muestra<select id="preview-game" aria-label="Juego para inspeccionar la predicción"></select></label></div>
+<div id="preview-images" class="prediction-samples" hidden>
+<figure><figcaption>Observación real</figcaption><canvas id="preview-before" class="goal-image" aria-label="Observación real antes de actuar"></canvas></figure>
+<figure><figcaption>Reconstrucción</figcaption><canvas id="preview-reconstruction" class="goal-image" aria-label="Reconstrucción del encoder y decoder"></canvas></figure>
+<figure><figcaption>Delta real</figcaption><canvas id="preview-real" class="goal-image" aria-label="Cambios reales de la acción"></canvas></figure>
+<figure><figcaption>Delta predicho</figcaption><canvas id="preview-predicted" class="goal-image" aria-label="Cambios predichos antes de ver el resultado"></canvas></figure>
+<figure><figcaption>Diferencia por categoría</figcaption><canvas id="preview-difference" class="goal-image" aria-label="Errores y aciertos del delta"></canvas></figure>
+</div><div id="preview-legend" class="legend delta-mask-legend"></div></article>
 <div class="charts">
-<article class="chart-card"><h3>Error del delta <span>evaluación separada · menor es mejor</span></h3>
-<p>Primeras interacciones frente al resto de la sesión. Sin ponderación del loss. La dificultad de los niveles también cambia: una diferencia no demuestra por sí sola que la memoria ayude.</p>
-<div id="quality-legend" class="legend"></div><svg id="quality" viewBox="0 0 700 260" role="img" aria-label="Error temprano y tardío por batch"></svg></article>
-<article class="chart-card"><h3>Velocidad <span>acciones reales / segundo</span></h3><p>Medida por batch completo. No es una media acumulada ni incluye acciones de evaluación en el numerador.</p>
-<div id="speed-legend" class="legend"></div><svg id="speed" viewBox="0 0 700 260" role="img" aria-label="Velocidad reciente por batch"></svg></article>
-<article class="chart-card"><h3>Pérdida del predictor <span>entrenamiento</span></h3><p>Media de los bloques, normalizada por sesión y con el mismo peso para cada juego. No es un porcentaje de errores.</p>
-<div id="loss-legend" class="legend"></div><svg id="loss" viewBox="0 0 700 260" role="img" aria-label="Pérdida por batch"></svg></article>
-<article class="chart-card"><h3>Tiempo del último batch</h3><p>El predictor incluye reconstruir su memoria con los pesos actuales al comenzar cada bloque.</p><div id="timings" class="legend"></div></article>
-</div>
-<article class="chart-card"><h3>Las sesiones del batch</h3><p>Cada fila tiene memoria independiente. Los cambios de nivel y reinicios conservan contexto; al terminar la sesión empieza una memoria nueva.</p>
-<div class="table-scroll"><table><thead><tr><th>Sesión</th><th>Juego</th><th>Movimientos</th><th>Fronteras</th><th>Fin</th></tr></thead><tbody id="sessions"></tbody></table></div></article>
-<article class="chart-card"><h3>Predicción por juego</h3><p>Evaluación con semillas separadas y pesos congelados. La media por juego da el mismo peso a cada juego; no mide victorias.</p><p id="macro-error"></p>
+<article class="chart-card"><h3>Calidad de representación y predicción <span>% · evaluación fija</span></h3><p>Predicción a un paso sobre todas las transiciones; reconstrucción y predicción a tres pasos en la muestra acotada. Las curvas no son porcentajes de victorias.</p><div id="fixed-quality-legend" class="legend"></div><svg id="fixed-quality" viewBox="0 0 700 260" role="img" aria-label="Calidad de representación y predicción"></svg></article>
+<article class="chart-card"><h3>Error del delta al comienzo y después <span>% · evaluación fija</span></h3><p>Primeras interacciones frente al resto de la sesión. Sin ponderación del loss. La dificultad de los niveles también cambia: una diferencia no demuestra por sí sola que la memoria ayude.</p><div id="quality-legend" class="legend"></div><svg id="quality" viewBox="0 0 700 260" role="img" aria-label="Error del delta al comienzo y después"></svg></article>
+<article class="chart-card"><h3>Desglose del delta <span>píxeles / acción evaluada</span></h3><p>Píxeles inventados, omitidos, con color incorrecto y acertados. Incluye las acciones sin cambios; el fondo correctamente conservado no cuenta como acierto.</p><div id="changes-legend" class="legend"></div><svg id="changes" viewBox="0 0 700 260" role="img" aria-label="Desglose del delta"></svg></article>
+<article class="chart-card"><h3>Deriva del encoder <span>% · misma observación</span></h3><p>Cambio relativo del latente frente a la primera medición de este proceso. Al reanudar se establece una nueva referencia; se separan las líneas entre referencias.</p><div id="latent-drift-legend" class="legend"></div><svg id="latent-drift" viewBox="0 0 700 260" role="img" aria-label="Deriva del encoder"></svg></article>
+<article class="chart-card"><h3>Pérdida de representación <span>encoder y decoder</span></h3><p>Media de las actualizaciones de representación de cada batch. Los periodos sin actualizaciones no se rellenan con ceros.</p><div id="representation-loss-legend" class="legend"></div><svg id="representation-loss" viewBox="0 0 700 260" role="img" aria-label="Pérdida de representación"></svg></article>
+<article class="chart-card"><h3>Componentes de representación <span>contribuciones ponderadas</span></h3><p>Desglose del objetivo de reconstrucción y regularización. Se muestran solo los términos registrados, con sus pesos ya aplicados.</p><div id="representation-components-legend" class="legend"></div><svg id="representation-components" viewBox="0 0 700 260" role="img" aria-label="Componentes de representación"></svg></article>
+<article class="chart-card"><h3>Pérdida del predictor <span>entrenamiento por secuencias</span></h3><p>Media de los bloques, normalizada por sesión y con el mismo peso para cada sesión del batch. No es un porcentaje de errores.</p><div id="loss-legend" class="legend"></div><svg id="loss" viewBox="0 0 700 260" role="img" aria-label="Pérdida del predictor"></svg></article>
+<article class="chart-card"><h3>Pérdida por componente <span>predictor</span></h3><p>MSE latente y pérdida visual con sus pesos aplicados. Su suma es la pérdida del predictor. La evaluación a tres pasos no añade una pérdida de entrenamiento.</p><div id="predictor-components-legend" class="legend"></div><svg id="predictor-components" viewBox="0 0 700 260" role="img" aria-label="Pérdida por componente"></svg></article>
+<article class="chart-card"><h3>Diversidad del latente <span>desviación típica</span></h3><p>Variación entre observaciones y dentro de cada episodio de la muestra fija. Se comparan coordenadas y geometrías equivalentes.</p><div id="latent-diversity-legend" class="legend"></div><svg id="latent-diversity" viewBox="0 0 700 260" role="img" aria-label="Diversidad del latente"></svg></article>
+<article class="chart-card"><h3>Rango efectivo <span>dimensiones observables</span></h3><p>Rango de los latentes centrados y máximo observable en la muestra. Un rango alto por sí solo no garantiza buena predicción.</p><div id="latent-rank-legend" class="legend"></div><svg id="latent-rank" viewBox="0 0 700 260" role="img" aria-label="Rango efectivo"></svg></article>
+<article class="chart-card"><h3>Coordenadas casi constantes <span>% · evaluación fija</span></h3><p>Coordenadas con desviación típica menor que 0,01 entre observaciones. Los datos anteriores a este diagnóstico permanecen ausentes.</p><div id="latent-inactive-legend" class="legend"></div><svg id="latent-inactive" viewBox="0 0 700 260" role="img" aria-label="Coordenadas casi constantes"></svg></article>
+<article class="chart-card"><h3>Respuesta a cambios reales <span>RMS del cambio latente</span></h3><p>Cambio del latente en bloques visuales que cambian y en los que permanecen iguales. Sin datos si no hay regiones de esa clase.</p><div id="latent-sensitivity-legend" class="legend"></div><svg id="latent-sensitivity" viewBox="0 0 700 260" role="img" aria-label="Respuesta a cambios reales"></svg></article>
+<article class="chart-card"><h3>Velocidad reciente <span>acciones / segundo</span></h3><p>Medida por batch completo, incluida evaluación y guardado. No es una media acumulada; las acciones de evaluación quedan fuera del numerador.</p><div id="speed-legend" class="legend"></div><svg id="speed" viewBox="0 0 700 260" role="img" aria-label="Velocidad reciente"></svg></article>
+<article class="chart-card"><h3>Dónde se emplea el tiempo <span>segundos / batch</span></h3><p>Recogida, representación, codificación, predictor, evaluación y guardado. Los diagnósticos forman parte del tiempo de evaluación.</p><div id="timing-chart-legend" class="legend"></div><svg id="timing-chart" viewBox="0 0 700 260" role="img" aria-label="Dónde se emplea el tiempo"></svg></article>
+</div><article class="chart-card section-card"><h3>Tiempo del último batch</h3><p>El predictor incluye reconstruir su memoria con los pesos actuales al comenzar cada bloque.</p><div id="timings" class="legend"></div></article></section>
+<section id="path" role="tabpanel" aria-labelledby="tab-path" hidden>
+<article class="chart-card planner-availability"><p class="eyebrow">PATH PLANNER</p><h3>Recogida aleatoria en esta ejecución</h3><p>Ahora aprenden el encoder, el decoder y el predictor con memoria. Esta ejecución no entrena ni evalúa el planner, por lo que todavía no hay una tasa de éxito, pérdida de path ni rutas planificadas actuales.</p><p id="planner-history-status">El histórico del planner no está configurado en este servidor.</p><a id="planner-history-link" class="history-action" href="history.html#path" hidden>Ver éxito, rutas, eficiencia y pérdidas del planner <span aria-hidden="true">→</span></a></article>
+</section>
+<section id="evaluation" role="tabpanel" aria-labelledby="tab-evaluation" hidden>
+<article class="chart-card"><h3>Predicción por juego</h3><p>Semillas separadas, pesos congelados y memoria causal reconstruida desde el inicio de cada sesión. La media da el mismo peso a cada juego; no mide victorias.</p><p id="macro-error"></p>
 <div class="table-scroll"><table><thead><tr><th>Juego</th><th>Error del delta</th><th>Transiciones</th></tr></thead><tbody id="game-quality"></tbody></table></div></article>
-<footer>Datos de transiciones reales. Política de recogida aleatoria; no se entrena el planner en este modo.</footer>
+<article class="chart-card section-card"><h3>Evaluaciones congeladas</h3><p>Un registro por batch, con las mismas sesiones reales de referencia. Reconstrucción y rollout se miden cada cuatro batches en una muestra; los huecos no significan cero.</p><div class="table-scroll evaluation-history" tabindex="0" role="region" aria-label="Historial de evaluaciones"><table><thead><tr><th>Acción</th><th>Batch</th><th>Error delta</th><th>Reconstrucción</th><th>Predicción 3 pasos</th><th>Transiciones</th><th>Muestra diagnóstico</th></tr></thead><tbody id="evaluations"></tbody></table></div></article>
+</section>
+<section id="curriculum" role="tabpanel" aria-labelledby="tab-curriculum" hidden>
+<article class="chart-card"><h3>Juegos y niveles configurados</h3><p id="schedule-info"></p><div class="table-scroll"><table><thead><tr><th>Orden</th><th>Juego</th><th>Nivel</th><th>Origen</th><th>Aprenden</th></tr></thead><tbody id="schedule"></tbody></table></div></article>
+<article class="chart-card section-card"><h3>Las sesiones del batch</h3><p>Cada fila tiene memoria independiente. Los cambios de nivel y reinicios conservan contexto; al terminar la sesión empieza una memoria nueva.</p>
+<div class="table-scroll"><table><thead><tr><th>Sesión</th><th>Juego</th><th>Movimientos</th><th>Fronteras</th><th>Fin</th></tr></thead><tbody id="sessions"></tbody></table></div></article>
+</section>
+<footer>Transiciones reales · ninguna predicción se guarda como experiencia verificada. Las vistas de optimización se añaden a la monitorización del entrenamiento.</footer>
 </main></body></html>
