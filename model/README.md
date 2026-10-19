@@ -93,6 +93,44 @@ mejoró la evaluación al 74,46 %**, por lo que no demuestran que el modelo ya
 aproveche la memoria para inferir reglas. Los resultados y límites están en
 [`sequence_training_evidence.json`](sequence_training_evidence.json).
 
+## Monitorización completa e histórico del planner
+
+El dashboard de secuencias conserva las secciones de representación/predictor,
+planner, evaluación congelada y currículo, junto a las vistas de optimización.
+Muestra las pérdidas del encoder/decoder y sus componentes, MSE latente y pérdida
+visual del predictor, desglose del delta, diversidad/rango/coordenadas casi
+constantes, sensibilidad a cambios, deriva, ejemplos visuales y tiempos por batch.
+
+El desglose del delta reutiliza las predicciones de la evaluación fija de cada
+batch. Los diagnósticos adicionales se calculan en el primero tras arrancar o
+reanudar y luego cada cuatro batches: hasta 32 transiciones y 64 estados reales,
+repartidos determinísticamente en las sesiones fijas. Reconstrucción y rollout a
+tres pasos usan esta muestra; el error a un paso usa todas las transiciones.
+Los rollouts reciben la memoria causal real de su origen y encadenan latentes
+predichos con las acciones registradas; no atraviesan reinicios ni cambios de
+nivel. No representan rutas seleccionadas por el planner. La deriva relativa
+usa la primera medición del proceso como referencia, que se indica en la gráfica
+y se renueva al reanudar. Se conserva un máximo de 200 batches y únicamente la
+última galería de hasta ocho ejemplos, fuera de los checkpoints. Las métricas
+nuevas no reconstruyen retrospectivamente datos ausentes.
+
+El modo de secuencias recoge acciones aleatorias: no inventa métricas de éxito o
+pérdidas de un planner inactivo. Para consultar todas las gráficas y trayectorias
+de una ejecución anterior, sin mezclarlas con las actuales:
+
+```sh
+.venv/bin/python -m model.dashboard \
+  --sequence-report model/runs/secuencias/report.json \
+  --history-subgoal-report model/runs/curriculum/current/report.json --port 8767
+```
+
+**Histórico del planner** abre las vistas completas anteriores con su diseño
+compartido y una marca de solo lectura. Sus endpoints `api/history/state` y
+`api/history/trajectory` son independientes de `api/state`; sus controles de
+currículo están desactivados. Las vistas antiguas con `--subgoal-report` siguen
+funcionando de manera independiente. No se necesitan pruebas visuales para las
+comprobaciones de contratos HTTP, datos y runtime de JavaScript.
+
 ## Observar gradientes y desplazamientos en directo
 
 El modo de secuencias admite `--optimization --optimization-every 8`, también

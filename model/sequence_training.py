@@ -110,7 +110,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
                 step = rng.choice(candidates)
                 result = representation.update([step.before, step.after], telemetry=telemetry)
                 if result is not None:
-                    reconstruction.append(result['total'])
+                    reconstruction.append(result)
     synchronize(e)
     representation_seconds = time.perf_counter() - begin
     start = time.perf_counter()
@@ -143,7 +143,12 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None):
         probe_seconds=probe_seconds,
         updates=len(updates), examples=sum(x['examples'] for x in updates),
         loss=sum(x['loss'] for x in updates)/len(updates) if updates else None,
-        reconstruction_loss=sum(reconstruction)/len(reconstruction) if reconstruction else None,
+        predictor_terms={key: sum(x[key] for x in updates)/len(updates)
+                         for key in ('latent', 'visual')} if updates else {},
+        reconstruction_loss=sum(x['total'] for x in reconstruction)/len(reconstruction) if reconstruction else None,
+        representation_terms={key: sum(x['terms'][key] for x in reconstruction if key in x['terms']) /
+                              sum(key in x['terms'] for x in reconstruction)
+                              for key in {k for x in reconstruction for k in x['terms']}},
         examples_per_second=sum(x['examples'] for x in updates)/max(1e-9, predictor_seconds))
 
 
@@ -211,11 +216,17 @@ def run(args):
         report_path = output / 'report.json'
         report = dict(kind='game_sequences', status='running', config=asdict(config), history=[],
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
+        report['schedule'] = list(plan.stages)
+        report['budget'] = plan.settings['actions']
+        report['learning_rates'] = dict(predictor=learner.optimizer.param_groups[0]['lr'],
+                                        **representation.learning_rates)
         if telemetry:
             report['optimization_identity'] = telemetry.identity
         if args.resume and report_path.exists():
             previous = json.loads(report_path.read_text())
             report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
+            report['prediction_samples'] = previous.get('prediction_samples', [])
+            report['prediction_sample_batch'] = previous.get('prediction_sample_batch')
         completed_here = 0
         try:
             factories = factories_for(plan)
@@ -223,6 +234,8 @@ def run(args):
             evaluation = [collect_batch(factories, replace(config, game_schedule='interleaved'), i,
                                         plan.settings['seed'], evaluation=True)
                           for i in range((len(factories) + config.batch_games - 1)//config.batch_games)]
+            from .sequence_diagnostics import SequenceDiagnostics
+            diagnostics = SequenceDiagnostics(engine, [s for batch in evaluation for s in batch])
             write_report(report_path, report)
             while not stop and actions < plan.settings['actions']:
                 begin = time.perf_counter()
@@ -233,8 +246,16 @@ def run(args):
                 measured = (fit_batch(learner, sessions, representation, telemetry=telemetry) if telemetry
                             else fit_batch(learner, sessions, representation))
                 evaluation_start = time.perf_counter()
+                measure_diagnostics = completed_here == 0 or (batches+1) % diagnostics.every == 0
+                if measure_diagnostics:
+                    diagnostics.start(batches+1)
                 quality = merge_evaluations([evaluate_sessions(engine, batch,
-                    early_steps=config.loss_warmup_steps, reference_loss=bool(telemetry)) for batch in evaluation])
+                    early_steps=config.loss_warmup_steps, reference_loss=bool(telemetry),
+                    diagnostics=diagnostics if measure_diagnostics else None) for batch in evaluation])
+                if measure_diagnostics:
+                    measured['diagnostics'], report['prediction_samples'] = diagnostics.finish()
+                    report['prediction_sample_batch'] = batches+1
+                    measured['diagnostics_seconds'] = diagnostics.seconds
                 synchronize(engine)
                 measured['evaluation_seconds'] = time.perf_counter() - evaluation_start
                 real_actions = sum(s.environment_actions for s in sessions)

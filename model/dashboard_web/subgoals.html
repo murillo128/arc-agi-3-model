@@ -2,7 +2,7 @@
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ARC · Currículo incremental</title><link rel="stylesheet" href="dashboard.css"><script src="subgoals.js" defer></script></head>
 <body class="subgoal-dashboard">
-<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html" aria-current="page">Entrenamiento</a><a href="optimization.html">Optimización</a></div><span class="nav-caption">WORLD MODEL</span></nav><main>
+<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a id="training-nav" href="index.html" aria-current="page">Entrenamiento</a><a id="history-nav" href="history.html" hidden>Histórico del planner</a><a href="optimization.html">Optimización</a></div><span class="nav-caption">WORLD MODEL</span></nav><main>
 <header><div class="run-heading"><p class="eyebrow">ARC · GOAL PLANNER → PATH PLANNER</p><h1>Aprendizaje incremental por niveles</h1><p id="run-info" class="muted">Una ejecución · un juego</p><p id="progress" class="run-context" role="status"></p></div><div class="connection"><span id="connection" role="status">Conectando…</span><small id="freshness"></small><p id="gpu-status" class="gpu-status" aria-label="Uso y temperatura actuales de la GPU del servidor">GPU · datos no disponibles</p></div></header>
 <p id="notice" class="notice" hidden></p>
 <section class="metrics training-metrics" aria-label="Métricas del entrenamiento">
