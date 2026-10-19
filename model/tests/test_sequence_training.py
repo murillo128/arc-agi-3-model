@@ -290,6 +290,56 @@ class SequenceTrainingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'same sequence'):
                 run(args('resumed', resume=True))
 
+    def test_unlimited_resume_passes_budget_and_keeps_manual_stop_and_optimizer_state(self):
+        from model import checkpoint
+        from model.sequence_training import run, fit_batch
+        from model.tests.test_training_config import config
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            path, values = config(root, [dict(source='synthetic', game='sc01-v1', levels=[1, 2])],
+                sequence=dict(batch_games=4, session_steps=4, block_steps=2, context_steps=1,
+                              level_steps=2, representation_updates=1))
+            values['settings']['actions'] = 16
+            path.write_text(json.dumps(values))
+            def args(name, *, resume=False, unlimited=False, maximum=None):
+                return SimpleNamespace(training_config=path, output=root/name, source=None,
+                    resume=resume, unlimited=unlimited, device='cpu', compile=False, max_batches=maximum)
+            def report():
+                return json.loads((root/'resumed/report.json').read_text())
+            run(args('resumed'))
+            first = checkpoint.load(root/'resumed/latest.pt')
+            self.assertEqual(first['progress']['actions'], 16)
+            self.assertEqual(report()['status'], 'budget_complete')
+            self.assertEqual(report()['budget'], 16)
+
+            run(args('resumed', resume=True, unlimited=True, maximum=1))
+            self.assertEqual(report()['progress']['actions'], 32)
+            self.assertIsNone(report()['budget'])
+            self.assertEqual(report()['status'], 'paused')
+
+            def interrupted(*a, **kw):
+                os.kill(os.getpid(), signal.SIGINT)
+                return fit_batch(*a, **kw)
+            with patch('model.sequence_training.fit_batch', side_effect=interrupted):
+                run(args('resumed', resume=True, unlimited=True))
+            self.assertEqual(report()['progress']['actions'], 48)
+            self.assertEqual(report()['status'], 'paused')
+            self.assertIsNone(report()['budget'])
+            self.assertEqual([r['batch'] for r in report()['history']], [1, 2, 3])
+
+            run(args('continuous', unlimited=True, maximum=3))
+            resumed, continuous = [checkpoint.load(root/name/'latest.pt') for name in ('resumed', 'continuous')]
+            self.assertEqual(resumed['plan'], first['plan'])
+            self.assertEqual(resumed['progress'], continuous['progress'])
+            for name, expected in continuous['weights'].items():
+                torch.testing.assert_close(resumed['weights'][name], expected, rtol=0, atol=0)
+            for optimizer in ('predictor_optimizer', 'representation_optimizer'):
+                self.assertEqual(resumed[optimizer]['param_groups'], continuous[optimizer]['param_groups'])
+                for key, expected in continuous[optimizer]['state'].items():
+                    for field, value in expected.items():
+                        torch.testing.assert_close(resumed[optimizer]['state'][key][field], value, rtol=0, atol=0)
+            torch.testing.assert_close(resumed['torch_rng'], continuous['torch_rng'], rtol=0, atol=0)
+
     def test_sequence_dashboard_serves_selected_run_and_escapes_no_values_into_html(self):
         from model.dashboard import make_server
         with tempfile.TemporaryDirectory() as directory:
