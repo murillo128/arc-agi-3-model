@@ -177,7 +177,7 @@
       return [w/2+a*w*.24,h*.69+b*h*.105-z*h*.47]; }
     function segment(a,b,color=C.grid){g.strokeStyle=color;g.beginPath();g.moveTo(...a);g.lineTo(...b);g.stroke();}
     for(let i=0;i<=4;i++){const k=-1+i*.5;segment(project(-1,k,0),project(1,k,0));segment(project(k,-1,0),project(k,1,0));}
-    if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('NLL visual',10,30);g.fillText('de referencia',10,46);}
+    if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('NLL visual',10,30);g.fillText(s.reference_source==='training_pre_update'?'antes de aprender':'de referencia',10,46);}
     g.fillStyle=C.muted;g.textAlign='center';g.fillText('PC1 · muestra fija',w/2,h-6);g.textAlign='right';g.fillText('PC2',w-12,h-25);
     drawHits=projections.map((p,i)=>project(normal(p.x,xmin,xmax),normal(p.y,ymin,ymax),(points[i]?.reference_loss-zmin)/Math.max(1e-9,zmax-zmin)));
     g.lineWidth=2;
@@ -195,7 +195,7 @@
     $('coverage').value=projection?.coverage ?? 0; text('coverage-value',Number.isFinite(projection?.coverage)?`${fmt(projection.coverage*100,1)} %`:'—');
     text('outside-plane',Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % del movimiento queda fuera del plano. Muestra estratificada, no modelo completo.`:'Sin desplazamiento medible para calcular cobertura.');
     text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',sci(projection?.step_norm));
-    trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:'NLL visual · referencia fija',color:C.lilac,selected:pointIndex});
+    trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'NLL visual · batch antes de aprender':'NLL visual · referencia fija',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Giro entre desplazamientos (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
   }
@@ -231,6 +231,8 @@
   function render() {
     const s=data();if(!s || s.status!=='ready') return;
     eventIndex=Math.min(eventIndex,Math.max(0,s.events.length-1));pointIndex=Math.min(pointIndex,Math.max(0,s.points.length-1));
+    text('reference-label',s.reference_source==='training_pre_update'?'NLL visual antes de aprender':'NLL visual de referencia');
+    text('reference-source',s.reference_source==='training_pre_update'?'Datos nuevos de cada batch, medidos antes de actualizar; los pesos del punto son posteriores.':'Mismas observaciones reales de referencia');
     populateSelects(s);text('sample-note',`Hasta ${s.sample_per_tensor} coeficientes / tensor · muestra fija`);
     text('optimization-status',pinned?'Instante fijado':s.running?'Midiendo entrenamiento':'Entrenamiento detenido');
     text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensores · captura cada ${s.every} actualizaciones del predictor`);

@@ -80,7 +80,7 @@ class SequenceDiagnostics:
         # Only the latest bounded gallery is serialized, never images per history row.
         if session.game not in self.samples and len(self.samples) < 8:
             self.samples[session.game] = dict(game=session.game, seed=session.seed,
-                level=step.before.levels_completed+1, step=t, action=step.action.id,
+                level=step.level_number, step=t, action=step.action.id,
                 previous=before.tolist(), actual=actual.tolist(), predicted=predicted_pixels.tolist(),
                 reconstruction=reconstruction.tolist())
         # Actions come from the fixed real trajectory, latents from imagination.

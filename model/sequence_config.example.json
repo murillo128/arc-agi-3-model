@@ -6,7 +6,7 @@
     "actions": 131072,
     "learning_rate": 0.00003,
     "representation_learning_rate": 0.00003,
-    "encoder_learning_rate_after_predictor": 0.000003,
+    "encoder_learning_rate_after_predictor": 0.0000003,
     "prediction_delta_loss": "recall_focal_capped"
   },
   "sequence": {
@@ -19,6 +19,11 @@
     "loss_warmup_steps": 32,
     "game_schedule": "interleaved",
     "representation_updates": 4
+  },
+  "sequence_control": {
+    "window_batches": 4,
+    "diagnostic_samples": 128,
+    "decoder_learning_rate_after_predictor": 0.0000003
   },
   "curriculum": [
     {"source": "synthetic", "game": "sc01-v1", "levels": [1, 2, 3, 4, 5], "objective": "world_model"},

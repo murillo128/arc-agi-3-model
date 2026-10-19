@@ -83,6 +83,18 @@ test('a retained trajectory point never borrows an evicted optimizer capture',as
   click('tab-pulse');assert.equal(text('matrix-state'),'Aprende');
 });
 
+test('training batch loss is labeled separately from fixed reference loss',async()=>{
+  const {state,text,click}=await dashboard();
+  click('tab-path');
+  assert.equal(text('reference-label'),'NLL visual de referencia');
+  state.report.updated_at=99;
+  state.report.reference_source='training_pre_update';
+  await state.polling();
+  assert.equal(text('reference-label'),'NLL visual antes de aprender');
+  assert.match(text('reference-source'),/Datos nuevos de cada batch/);
+  assert.match(text('reference-source'),/los pesos del punto son posteriores/);
+});
+
 test('malformed responses clear all live/pinned state and recover without caching the bad revision',async()=>{
   const {nodes,state,text,click,change,input}=await dashboard();
   const valid=structuredClone(state.report);

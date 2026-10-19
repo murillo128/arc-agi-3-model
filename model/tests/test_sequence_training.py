@@ -190,6 +190,8 @@ class SequenceTrainingTests(unittest.TestCase):
                                  [False, False, True, False, True, False, True])
                 self.assertEqual(row.environment_actions, 7)
                 self.assertEqual(row.game, 'synthetic')
+                self.assertEqual([s.level_number for s in row.transitions],
+                                 [levels[(t//2) % len(levels)] for t in range(7)])
                 e = scalar_engine()
                 memory = ScalarLearner(e).prefix(EncodedSessions(e, [row]), 3)[0]
                 # h1=1, h2=2.5; new board/reset -> 2.25; next action -> 2.125.

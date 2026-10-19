@@ -79,7 +79,7 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
@@ -176,6 +176,15 @@ def load_plan(path):
     if 'sequence' in value:
         payload['sequence'] = asdict(SequenceConfig(**object_keys(
             value['sequence'], SequenceConfig.__dataclass_fields__, 'sequence')))
+    if 'sequence_control' in value:
+        from .sequence_control import SequenceControlConfig
+        if 'sequence' not in value:
+            raise ValueError('sequence_control requires sequence training')
+        control = SequenceControlConfig(**object_keys(value['sequence_control'],
+            SequenceControlConfig.__dataclass_fields__, 'sequence_control'))
+        if control.decoder_learning_rate_after_predictor > settings['representation_learning_rate']:
+            raise ValueError('Post-predictor decoder LR must not exceed representation LR')
+        payload['sequence_control'] = asdict(control)
     return TrainingPlan(initial_path, settings, tuple(stages), payload)
 
 
