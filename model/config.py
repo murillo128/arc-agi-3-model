@@ -3,6 +3,35 @@ import math
 
 
 @dataclass(frozen=True)
+class SequenceConfig:
+    batch_games: int = 4
+    session_steps: int = 512
+    block_steps: int = 16
+    context_steps: int = 16
+    level_steps: int = 32
+    loss_start_weight: float = 1.
+    loss_warmup_steps: int = 32
+    game_schedule: str = 'interleaved'
+    representation_updates: int = 4
+
+    def __post_init__(self):
+        for name in ('batch_games', 'session_steps', 'block_steps', 'level_steps', 'loss_warmup_steps'):
+            if type(getattr(self, name)) is not int or getattr(self, name) < 1:
+                raise ValueError(f'{name} must be a positive integer')
+        if self.block_steps > self.session_steps:
+            raise ValueError('block_steps cannot exceed session_steps')
+        if type(self.representation_updates) is not int or self.representation_updates < 0:
+            raise ValueError('representation_updates must be a nonnegative integer')
+        if type(self.context_steps) is not int or self.context_steps < 0:
+            raise ValueError('context_steps must be a nonnegative integer')
+        if (type(self.loss_start_weight) not in (int, float) or
+                not math.isfinite(self.loss_start_weight) or not 0 < self.loss_start_weight <= 1):
+            raise ValueError('loss_start_weight must be in (0, 1]')
+        if self.game_schedule not in ('interleaved', 'blocked'):
+            raise ValueError('game_schedule must be interleaved or blocked')
+
+
+@dataclass(frozen=True)
 class NetworkConfig:
     width: int = 768
     heads: int = 12

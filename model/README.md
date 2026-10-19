@@ -1,5 +1,98 @@
 # Modelo residual latente
 
+## Secuencias con memoria entre niveles
+
+El modo optativo `model.sequence_training` entrena el predictor con **cuatro
+sesiones independientes** por batch. Una sesión conserva el contexto recurrente
+durante sus niveles y reinicios, hasta su presupuesto (512 acciones en el ejemplo).
+Al comenzar otra sesión, incluso del mismo juego, la memoria empieza en cero.
+Los pesos se comparten entre todos los juegos; el predictor no recibe su nombre
+ni reglas internas. Las predicciones imaginadas nunca actualizan esta memoria real.
+
+```sh
+.venv/bin/python -u -m model.sequence_training \
+  --training-config model/sequence_config.example.json \
+  --source model/runs/curriculum/current/latest.pt \
+  --output model/runs/secuencias --device cuda
+.venv/bin/python -u -m model.dashboard \
+  --sequence-report model/runs/secuencias/report.json --port 8767
+```
+
+`--source` importa pesos sin modificar el archivo original ni sus optimizadores.
+Sin él, `init_config` inicializa pesos nuevos. `--max-batches 2` acota una prueba;
+`--resume` sustituye a `--source` para restaurar pesos y momentos del optimizador
+desde el directorio de salida. Se exige el mismo plan al reanudar. SIGINT/SIGTERM
+terminan el batch actual y guardan atómicamente; no se serializan entornos vivos.
+Una interrupción brusca puede repetir el batch aún no guardado. Se conserva un
+checkpoint por batch completo; el presupuesto de acciones puede sobrepasarse
+hasta completar ese último batch. Este modo no declara convergencia ni publica pesos.
+
+La configuración reutiliza los juegos, niveles, rutas y splits del plan anterior,
+añadiendo `sequence`. `objective` debe ser `world_model` (es su valor por defecto
+en este modo). No utiliza los umbrales de promoción, el planner ni los intervalos
+de evaluación del currículo por niveles: evalúa y guarda cada batch completo.
+
+| Ajuste `sequence` | Función |
+| --- | --- |
+| `batch_games: 4` | Sesiones independientes por batch; pueden repetir tipo de juego con semillas diferentes. |
+| `session_steps: 512` | Presupuesto de movimientos de cada sesión. |
+| `block_steps: 16` | Pasos que aportan pérdida en cada actualización, además del contexto previo con gradiente. |
+| `context_steps: 16` | Contexto previo adicional con gradiente y sin repetir su pérdida; permite aprender a través de cambios de nivel alineados con el corte del bloque. |
+| `level_steps: 32` | En sintéticos, acciones antes de pasar al siguiente nivel configurado; después se vuelve al primero. Si solo hay un nivel, se reinicia al agotar cada cuota. Un fracaso reinicia el mismo nivel hasta consumir su cuota. |
+| `game_schedule: "interleaved"` | Reparto circular entre juegos; `blocked` dedica cada batch a un tipo de juego, alternándolo en el siguiente. |
+| `loss_start_weight: 1.0` | Peso de la primera acción: 1 mantiene la pérdida uniforme; 0.25 o 0.5 prueban una rampa. |
+| `loss_warmup_steps: 32` | Acciones hasta alcanzar peso 1, contado desde el inicio de la sesión, sin reiniciar en cada nivel. |
+| `representation_updates: 4` | Actualizaciones separadas de reconstrucción por batch; 0 congela encoder/decoder para comparar el predictor. Se rotan sesiones y se elige un par real por actualización. |
+
+En cada bloque, el predictor recibe los latentes reales anteriores y sus acciones;
+el resultado real siguiente solo se incorpora después de predecir. Los saltos de
+nivel son contexto con un marcador de reinicio, no objetivos del delta. Cada
+entrada del batch tiene memoria propia, agrupada por geometría nativa sin mezclar
+estados. Antes de un bloque se reconstruye su prefijo con los parámetros actuales
+y sin gradiente hasta el comienzo del contexto adicional. El contexto y el bloque
+sí propagan gradiente por la recurrencia; solo el bloque aporta nuevos términos de pérdida.
+Esto evita llevar estados obsoletos entre actualizaciones, pero tiene coste creciente
+con la sesión y **no equivale a retropropagar por las 512 acciones completas**.
+
+La pérdida conserva MSE latente y NLL visual. Se ponderan los pasos válidos y se
+normaliza sobre la **sesión completa**, dando el mismo peso a cada sesión; padding
+y saltos no cuentan. La media de los objetivos de los bloques equivale a esa
+media por sesión. Normalizar cada bloque por sus propios pesos cancelaría buena
+parte de la rampa. Encoder/decoder siguen aprendiendo reconstrucción por separado,
+con las tasas del plan (en el ejemplo, encoder 3e-6, decoder 3e-5); no reciben el
+gradiente predictivo. Se codifica de nuevo después de esas actualizaciones y los
+latentes se conservan únicamente mientras el encoder permanezca fijo.
+
+En el SDK los niveles permitidos deben ser el prefijo `[1, 2, ...]`: se recorren
+mediante acciones públicas, sin forzar avances ni usar profesores. Una transición
+que entra en un nivel reservado/no permitido se excluye entera y termina la sesión.
+La evaluación usa semillas disjuntas, pesos congelados y contexto propio, y cubre
+todos los juegos configurados en grupos acotados. El dashboard separa error inicial,
+tardío y por juego, TPS del último batch completo y coste de juego/codificación/
+predictor/evaluación/guardado. Error de predicción no es éxito en el juego.
+
+Los agentes que utilicen estos pesos deben activar
+`AgentConfig(memory_across_levels=True)`. Esa opción se conserva en el checkpoint
+portable del agente; el valor por defecto sigue siendo `False` para los agentes
+anteriores. `Agent.reset()` inicia una nueva sesión y siempre vacía la memoria.
+
+Ensayos breves en RTX 4070 Ti (BF16, cuatro hilos CPU), desde los pesos existentes:
+con bloques de 8/16/32/64 y 16 pasos de contexto, el predictor procesó
+69/79/84/88 transiciones/s, con 4,15/4,23/4,37/4,64 GiB asignados. Se eligió
+16 como punto inicial: error medio por juego del 70,08 %, frente al 70,80 %
+con 32 y 72,56 % con 64. Los bloques mayores también hacen menos actualizaciones
+para las mismas transiciones; esto no establece un óptimo independiente del LR.
+Las rampas desde 0,25 y 0,5 apenas cambiaron el error (hasta 0,1 puntos), por lo
+que el ejemplo conserva pesos uniformes.
+
+Con encoder/decoder activos y las mismas 4.096 transiciones, alternar juegos
+redujo el error medio del 83,50 % al 77,74 %; agrupar cada juego por separado lo
+dejó en 86,44 %. El recorrido completo midió 50 acciones/s incluyendo evaluación
+y guardado, con pico de 5,36 GiB. Son ensayos cortos: **borrar el historial aún
+mejoró la evaluación al 74,46 %**, por lo que no demuestran que el modelo ya
+aproveche la memoria para inferir reglas. Los resultados y límites están en
+[`sequence_training_evidence.json`](sequence_training_evidence.json).
+
 ## Entrenamiento configurable
 
 `model.subgoal_training --training-config ARCHIVO.json` permite elegir juegos,

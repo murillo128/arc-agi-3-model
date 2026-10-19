@@ -169,11 +169,16 @@ class Engine:
         return prefix + missing
 
     @torch.no_grad()
-    def initial(self, observation):
+    def initial(self, observation, *, memory=None):
         self.model.eval()
         with self.autocast():
             z = self.encode([observation])[0]
-        return State(z, torch.zeros(1, self.model.config.memory, device=self.device),
+            if memory is not None and z is not None:
+                from .data import Action
+                # Public reset/level boundary token. Preserve rule context;
+                # the newly observed board replaces the previous visual state.
+                memory, _ = self.advance(z[None], memory, self.actions([Action(0)]))
+        return State(z, torch.zeros(1, self.model.config.memory, device=self.device) if memory is None else memory.float(),
                      observation.final.shape if observation.final is not None else None)
 
     @torch.no_grad()
