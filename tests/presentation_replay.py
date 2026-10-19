@@ -52,15 +52,16 @@ def replay(root, output, images=False):
             def record(value): logical.update(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
             for seed in (0,1,42,123):
                 env=arcade.make(game,seed=seed,scorecard_id=card)
-                def observe(frame):
+                def observe(frame, legacy_first_frame=None):
                     nonlocal observed_frames
                     g=env._game
                     record([frame.state.name,frame.levels_completed,frame.win_levels,frame.available_actions])
                     if hasattr(g,'puzzle'): record([g.puzzle.state,g.puzzle.target,g.get_training_info()])
                     else: record([g.scene,g.remaining,[(p.x,p.y) for p in getattr(g,'players',[g.player])],
                                   sorted(getattr(g,'delivered',())),getattr(g,'selected',None),sorted(getattr(g,'click_selected',()))])
-                    for f in frame.frame:
-                        pixels.update(f.tobytes()); observed_frames+=1
+                    for i,f in enumerate(frame.frame):
+                        historical=legacy_first_frame if i==0 and legacy_first_frame is not None else f
+                        pixels.update(historical.tobytes()); observed_frames+=1
                         if images: native.append(f.copy())
                     if hasattr(g,'puzzle'): np.testing.assert_array_equal(frame.frame[-1],g.puzzle.render())
                 observe(env.observation_space)
@@ -86,9 +87,22 @@ def replay(root, output, images=False):
                             # Every semantic alternative at every witnessed state,
                             # including blocked/fatal commands, not just the solve.
                             record([p.transition(p.state,i) for i in range(len(p.commands))])
+                        before=env.observation_space.frame[-1]
+                        click_center=g.scene.players[0][0] if game=='si01-v1' and level==1 else None
                         result=env.step(GameAction.from_id(action),data=data)
                         assert result.state!=GameState.GAME_OVER,(game,seed,level)
-                        observe(result)
+                        legacy_first_frame=None
+                        if game=='si01-v1' and level==1 and result.levels_completed==1:
+                            # The accepted fixture predates the visible click reward.
+                            # Accept old archives or exactly the new four pixels,
+                            # then preserve the original whole-game pixel oracle.
+                            x,y=click_center
+                            marked=before.copy(); marked[y-1:y+1,x-1:x+1]=0
+                            if np.array_equal(result.frame[0],marked):
+                                legacy_first_frame=before
+                            else:
+                                np.testing.assert_array_equal(result.frame[0],before)
+                        observe(result,legacy_first_frame)
                         if images and index==len(actions)//2:
                             gallery.append((f'{seed} L{level} progressed',(p.render() if game in specs else result.frame[-1]).copy()))
                     assert result.levels_completed==level,(game,seed,level)

@@ -122,8 +122,6 @@ class SyntheticSubgoals:
                 x, y = position
                 r = self.scene.player_size // 2
                 mask[y-r:y+r+1, x-r:x+r+1] = True
-            # Level 1's click is an event with no persistent visual marker:
-            # its image/mask identifies the object without fabricating a change.
             frame.flags.writeable = mask.flags.writeable = False
             goals.append(Subgoal(f'{self.number}:{index}', label, frame, mask, piece, position, selected))
         self._teacher_level = self.instance_seed, self.number

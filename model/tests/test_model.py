@@ -899,6 +899,48 @@ class SDKTests(unittest.TestCase):
         self.assertGreater(result['None']['decoder_delta_error'], config.delta_error)
         self.assertTrue(all(torch.equal(v, before[k]) for k, v in model.state_dict().items()))
 
+    def test_isolated_click_wins_keep_visible_markers_and_training_targets(self):
+        from model.game_sequences import Transition
+
+        factory = Factory('si01-v1', ROOT / 'games')
+        self.addCleanup(factory.arcade.close_scorecard)
+        for level in (1, 2):
+            with self.subTest(level=level):
+                env = factory.make(42, level)
+                initial = env.observation.final.copy()
+                teacher = factory.teacher(env)
+                goals = teacher.training_subgoals()
+                for index, player in enumerate(teacher.players):
+                    before = env.observation
+                    goal = goals[index]
+                    self.assertFalse(teacher.training_goal_reached(goal))
+                    self.assertFalse(np.array_equal(before.final[goal.mask], goal.frame[goal.mask]))
+                    action = Action(6, {'x': player.x, 'y': player.y})
+                    after = env.step(action)
+                    expected = before.final.copy()
+                    # Native 5x5 square: the four central marker pixels only.
+                    expected[player.y + 1:player.y + 3, player.x + 1:player.x + 3] = 0
+                    np.testing.assert_array_equal(after.final, expected)
+                    self.assertEqual(np.count_nonzero(after.final != before.final), 4)
+                    self.assertEqual(len(after.frames), 1)
+                    self.assertEqual(after.action_input, action)
+                    self.assertEqual(after.available_actions, (6,))
+                    finished = index == level - 1
+                    self.assertEqual(after.state, 'WIN' if finished else 'NOT_FINISHED')
+                    self.assertEqual(after.levels_completed, int(finished))
+                    self.assertEqual(after.win_levels, 1)
+                    self.assertEqual(teacher.number, level)
+                    self.assertEqual(teacher.remaining, 24)
+                    self.assertTrue(Transition(before, action, after).supervised)
+                    self.assertTrue(teacher.training_goal_reached(goal))
+                    np.testing.assert_array_equal(after.final[goal.mask], goal.frame[goal.mask])
+                reset = env.step(Action(0))
+                self.assertEqual(reset.state, 'NOT_FINISHED')
+                self.assertEqual(reset.levels_completed, 0)
+                self.assertEqual(reset.available_actions, (6,))
+                np.testing.assert_array_equal(reset.final, initial)
+                self.assertFalse(teacher.training_goal_reached(teacher.training_subgoals()[0]))
+
     def test_cli_resume_advances_counters_with_empty_replay(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()) as output:
             common = ['--device', 'cpu', '--no-compile', '--output', directory]

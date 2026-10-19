@@ -55,7 +55,10 @@ class ClickTests(unittest.TestCase):
                                      (GameState.NOT_FINISHED, 1, 5))
                     self.assertEqual(result.available_actions, [6])
                     self.assertEqual(game.number, 2)
-                    np.testing.assert_array_equal(result.frame[0], initial)
+                    completed = initial.copy()
+                    completed[29:31, 19:21] = 0
+                    self.assertEqual(len(result.frame), 2)
+                    np.testing.assert_array_equal(result.frame[0], completed)
                     self.assertEqual(self.whites(result.frame[-1]), set())
 
     def test_two_independent_toggles_marker_hits_empty_clear_and_transition(self):
