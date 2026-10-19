@@ -11,6 +11,53 @@
   const data = () => pinned || latest;
   const text = (id, value) => { $(id).textContent = value; };
   function node(tag, value, cls) { const e = document.createElement(tag); if (value != null) e.textContent = value; if (cls) e.className = cls; return e; }
+  function validSnapshot(s) {
+    // Check the fields rendering consumes before replacing either live or pinned
+    // data. The server also validates the on-disk measurement contract.
+    const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const integer = (v, min=0) => Number.isSafeInteger(v) && v >= min;
+    const number = v => v === null || Number.isFinite(v);
+    const list = (v, check, max=Infinity) => Array.isArray(v) && v.length <= max && v.every(check);
+    const grid = v => Array.isArray(v) && v.length > 0 && v.length <= 16 &&
+      list(v, row => Array.isArray(row) && row.length > 0 && row.length === v[0].length && list(row, Number.isFinite, 16));
+    try {
+      if (!object(s) || s.kind !== 'optimization' || s.version !== 1 || typeof s.identity !== 'string' || !s.identity ||
+          !integer(s.batch) || !Number.isFinite(s.updated_at) || !integer(s.every,1) || !integer(s.sample_per_tensor,1) ||
+          !integer(s.session_count,1) || !Number.isFinite(s.age_seconds) || typeof s.running !== 'boolean' ||
+          !object(s.control) || typeof s.control.enabled !== 'boolean' || typeof s.control.token !== 'string') return false;
+      if (!list(s.catalog, m => object(m) && typeof m.name === 'string' && m.name.length > 0 &&
+          ['encoder','decoder','dynamics'].includes(m.module) && list(m.shape, n => integer(n,1)) && integer(m.size,1) &&
+          m.shape.reduce((a,b)=>a*b,1) === m.size) || !s.catalog.length) return false;
+      const names = new Set(s.catalog.map(m=>m.name));
+      if (names.size !== s.catalog.length || !names.has(s.selected)) return false;
+      if (!list(s.events, (e,i) => object(e) && integer(e.id,1) && (!i || e.id > s.events[i-1].id) &&
+          integer(e.batch,1) && e.batch <= s.batch && Number.isFinite(e.clip_scale) && object(e.matrices) &&
+          Object.entries(e.matrices).every(([name,row]) => names.has(name) && object(row) &&
+            ['measured','no_gradient','frozen'].includes(row.status) && (row.status !== 'measured' ||
+              ['gradient_rms','relative_update','lr','alignment'].every(k=>number(row[k])))) &&
+          (e.detail == null || (object(e.detail) && names.has(e.detail.name) && e.matrices[e.detail.name]?.status === 'measured' &&
+            grid(e.detail.gradient) && grid(e.detail.update) && object(e.detail.histogram) &&
+            list(e.detail.histogram.counts,n=>integer(n),16) && e.detail.histogram.counts.length > 0 &&
+            list(e.detail.histogram.edges,Number.isFinite) && e.detail.histogram.edges.length === e.detail.histogram.counts.length+1)),64)) return false;
+      if (!list(s.points, (p,i) => object(p) && integer(p.batch,1) && p.batch <= s.batch &&
+          (!i || p.batch > s.points[i-1].batch) && integer(p.event_id) && number(p.reference_loss) &&
+          !s.events.some(e=>e.id === p.event_id && e.batch > p.batch),96) || !object(s.planes)) return false;
+      if (!Object.entries(s.planes).every(([name,p]) => s.catalog.some(m=>m.module===name) && object(p) && integer(p.basis_id) &&
+          list(p.projections, v => object(v) && Number.isFinite(v.x) && Number.isFinite(v.y) &&
+            number(v.coverage) && number(v.angle) && Number.isFinite(v.step_norm)) &&
+          p.projections.length === (p.basis_id ? s.points.length : 0))) return false;
+      const p=s.probe;
+      if (p == null) return true;
+      if (!object(p)) return false;
+      if (p.status === 'unavailable') return typeof p.reason === 'string';
+      return p.status === 'ready' && integer(p.session) && p.session < s.session_count && typeof p.game === 'string' &&
+        integer(p.batch,1) && p.batch <= s.batch && ['session_steps','context_start','start','stop'].every(k=>integer(p[k])) &&
+        p.context_start <= p.start && p.start < p.stop && p.stop <= p.session_steps &&
+        list(p.boundaries,t=>integer(t,p.context_start) && t < p.stop) &&
+        list(p.steps,(v,i)=>object(v) && integer(v.t,p.context_start) && v.t < p.stop && (!i || v.t > p.steps[i-1].t) && number(v.rms)) &&
+        p.steps.length > 0 && ['loss','cleared_loss','seconds'].every(k=>Number.isFinite(p[k]));
+    } catch { return false; }
+  }
   function color(value, low = -8, high = -1) {
     if (!Number.isFinite(value)) return C.dark;
     const t = value > 0 ? Math.max(0, Math.min(1, (Math.log10(value) - low) / (high-low))) : 0;
@@ -61,7 +108,7 @@
     const s=data(); if (!s?.events?.length) return;
     freeze(); eventIndex=Math.max(0,Math.min(i,s.events.length-1));
     const batch=s.events[eventIndex].batch, found=s.points.findIndex(p=>p.batch===batch);
-    if(found>=0) pointIndex=found;
+    pointIndex=found;
     render();
   }
   function choosePoint(i) {
@@ -69,7 +116,7 @@
     freeze(); pointIndex=Math.max(0,Math.min(i,s.points.length-1));
     const batch=s.points[pointIndex].batch;
     const found=s.events.map((e,i)=>({e,i})).filter(x=>x.e.batch===batch).at(-1);
-    if(found) eventIndex=found.i;
+    eventIndex=found ? found.i : -1;
     render();
   }
   function populateSelects(s) {
@@ -91,12 +138,12 @@
   function renderPulse(s) {
     const event=s.events[eventIndex], item=event?.matrices?.[selection], meta=s.catalog.find(m=>m.name===selection);
     text('matrix-title',shortName(selection));text('matrix-shape',meta?`${meta.shape.join(' × ') || 'Escalar'} · ${fmt(meta.size,0)} parámetros`:'');
-    const status=item?.status || 'frozen';
-    text('matrix-state',({measured:'Aprende',no_gradient:'Sin gradiente',frozen:'Congelada en este paso'})[status] || 'Sin datos');
+    const status=event ? item?.status || 'frozen' : 'unavailable';
+    text('matrix-state',({measured:'Aprende',no_gradient:'Sin gradiente',frozen:'Congelada en este paso',unavailable:'Captura no disponible'})[status] || 'Sin datos');
     text('gradient-value',sci(item?.gradient_rms));text('update-value',Number.isFinite(item?.relative_update)?`${sci(item.relative_update*100)} %`:'—');
     text('learning-rate',sci(item?.lr));text('clip-value',event?fmt(event.clip_scale,4):'—');text('alignment-value',Number.isFinite(item?.alignment)?fmt(item.alignment,3):'—');
     const detail=event?.detail?.name===selection ? event.detail : null;
-    text('capture-note',detail?'Los mapas corresponden a esta matriz y a esta actualización. Cada celda resume un bloque completo.':'El detalle de esta matriz no se guardó en este instante. Solicita una captura para una próxima actualización.');
+    text('capture-note',!event?'No se conserva una captura de optimización para el batch seleccionado.':detail?'Los mapas corresponden a esta matriz y a esta actualización. Cada celda resume un bloque completo.':'El detalle de esta matriz no se guardó en este instante. Solicita una captura para una próxima actualización.');
     const measure=$('measure').value, rows=s.catalog.filter(m=>m.module===module && m.shape.length>1);
     const table=$('activity'), head=node('tr');head.append(node('th','Matriz / actualización'));
     s.events.forEach((e,i)=>{const th=node('th'),b=node('button',String(e.id));b.dataset.event=i;b.title=`Batch ${e.batch} · ${e.phase==='predictor'?'Predictor':'Representación'}`;th.append(b);head.append(th);});
@@ -150,11 +197,15 @@
     text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',sci(projection?.step_norm));
     trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:'NLL visual · referencia fija',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Giro entre desplazamientos (°)',selected:pointIndex,ceiling:180});
-    $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=pointIndex;
+    $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
   }
   function renderMemory(s) {
     const p=s.probe;
-    if(!p || p.status!=='ready'){text('probe-description',p?.reason || 'Solicita una sonda para medir la señal temporal de una pérdida.');empty('memory-window','Sin sonda registrada');empty('memory-gradient','Sin sonda registrada');return;}
+    if(!p || p.status!=='ready'){
+      text('probe-description',p?.reason || 'Solicita una sonda para medir la señal temporal de una pérdida.');
+      for(const id of ['probe-loss','probe-cleared','probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
+      text('probe-comparison','');empty('memory-window','Sin sonda registrada');empty('memory-gradient','Sin sonda registrada');return;
+    }
     text('probe-description',`Sonda del batch ${p.batch} · sesión ${p.session+1} · ${p.game}. Derivada de la pérdida visual del paso ${p.stop-1} respecto a los estados de memoria anteriores.`);
     {const {g,w,h}=canvas('memory-window'),left=22,width=w-44,y=37,x=t=>left+t/p.session_steps*width;
       g.fillStyle=C.dark;g.fillRect(left,y,width,22);g.fillStyle='#71618e';g.fillRect(x(p.context_start),y,x(p.start)-x(p.context_start),22);g.fillStyle=C.mint;g.fillRect(x(p.start),y,x(p.stop)-x(p.start),22);
@@ -185,8 +236,10 @@
     text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensores · captura cada ${s.every} actualizaciones del predictor`);
     const enabled=latest?.control?.enabled === true;
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=!enabled;
-    $('event-scrubber').max=Math.max(0,s.events.length-1);$('event-scrubber').value=eventIndex;
-    const event=s.events[eventIndex];text('event-label',event?`Actualización ${event.id} · batch ${event.batch}`:'Sin capturas');
+    $('event-scrubber').max=Math.max(0,s.events.length-1);$('event-scrubber').value=Math.max(0,eventIndex);
+    const event=s.events[eventIndex], point=s.points[pointIndex];
+    const label=event?`Actualización ${event.id} · batch ${event.batch}`:point?`Batch ${point.batch} · captura no disponible`:'Sin capturas';
+    text('event-label',label);$('event-scrubber').setAttribute('aria-valuetext',label);
     if(tab==='pulse')renderPulse(s);if(tab==='path')renderPath(s);if(tab==='memory')renderMemory(s);
   }
   function setTab(name) {
@@ -198,6 +251,17 @@
     } catch(error){$('optimization-notice').hidden=false;text('optimization-notice',error.message);}
   }
   function stopPlayback(){clearInterval(playing);playing=null;text('playback','Reproducir');}
+  function clearData(status,message) {
+    latest=null;pinned=null;revision=null;requestId=null;eventIndex=-1;pointIndex=-1;drawHits=[];drag=null;stopPlayback();
+    $('live').checked=true;text('optimization-status',status);text('optimization-summary',message);
+    $('optimization-notice').hidden=false;text('optimization-notice',message);text('event-label','Sin capturas');
+    text('request-status','');text('sample-note','Sin mediciones');$('matrix').replaceChildren();
+    for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=true;
+    for(const id of ['pulse','path','memory'])$(id).hidden=true;
+    for(const id of ['gradient-value','update-value','learning-rate','clip-value','alignment-value','matrix-state',
+      'reference-value','loss-change','coverage-value','turn-value','step-value','probe-loss','probe-cleared',
+      'probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
+  }
   $('module').addEventListener('change',e=>{module=e.target.value;render();});
   $('matrix').addEventListener('change',e=>{selection=e.target.value;render();});
   $('measure').addEventListener('change',render);
@@ -219,15 +283,21 @@
   $('parameter-path').addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();choosePoint(pointIndex+(e.key==='ArrowRight'?1:-1));}});
   window.addEventListener('resize',render);
   async function refresh(){
-    try{const response=await fetch('api/optimization',{cache:'no-store',headers:revision?{'If-None-Match':revision}:{}});if(response.status===304){if(data())text('optimization-status',pinned?'Instante fijado':latest.running?'Midiendo entrenamiento':'Entrenamiento detenido');setTimeout(refresh,2000);return;}if(!response.ok)throw Error('No se pudo leer el diagnóstico');revision=response.headers?.get('ETag') || null;const next=await response.json();
-      if(next.status!=='ready'){latest=null;pinned=null;stopPlayback();text('optimization-status',next.status==='unavailable'?'No instrumentado':'Esperando capturas');$('optimization-notice').hidden=false;text('optimization-notice',next.message);for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=true;for(const id of ['pulse','path','memory'])$(id).hidden=true;text('event-label','Sin capturas');}
-      else {const changed=!latest||latest.identity!==next.identity||latest.updated_at!==next.updated_at||latest.running!==next.running||latest.control?.enabled!==next.control?.enabled;if(latest&&latest.identity!==next.identity){pinned=null;$('live').checked=true;}latest=next;for(const id of ['pulse','path','memory'])$(id).hidden=id!==tab;
+    let received=false;
+    try{const response=await fetch('api/optimization',{cache:'no-store',headers:revision?{'If-None-Match':revision}:{}});if(response.status===304){if(data())text('optimization-status',pinned?'Instante fijado':latest.running?'Midiendo entrenamiento':'Entrenamiento detenido');return;}if(!response.ok)throw Error('No se pudo leer el diagnóstico');received=true;const next=await response.json();
+      if(next?.status==='waiting' || next?.status==='unavailable'){
+        if(typeof next.message!=='string')throw Error('Invalid diagnostic message');
+        clearData(next.status==='unavailable'?'No instrumentado':'Esperando capturas',next.message);
+      }
+      else {if(next?.status!=='ready' || !validSnapshot(next))throw Error('Invalid diagnostic snapshot');
+        const changed=!latest||latest.identity!==next.identity||latest.updated_at!==next.updated_at||latest.running!==next.running||latest.control?.enabled!==next.control?.enabled;if(latest&&latest.identity!==next.identity){pinned=null;$('live').checked=true;}latest=next;for(const id of ['pulse','path','memory'])$(id).hidden=id!==tab;
         if(requestId&&next.last_request===requestId){text('request-status','Captura completada.');requestId=null;}
         if(!requestId){$('optimization-notice').hidden=next.age_seconds<180;text('optimization-notice','La última captura tiene más de tres minutos. Comprueba el estado del entrenamiento.');}
-        if(!pinned){eventIndex=Math.max(0,next.events.length-1);pointIndex=Math.max(0,next.points.length-1);}if(changed)render();
+        if(!pinned){eventIndex=next.events.length-1;pointIndex=next.points.length-1;}if(changed)render();
+        revision=response.headers?.get('ETag') || null;
       }
-    }catch{ text('optimization-status','Sin conexión'); }
-    setTimeout(refresh,2000);
+    }catch{if(received)clearData('Datos no válidos','El registro de optimización no es válido. Esperando una captura compatible.');else text('optimization-status','Sin conexión');}
+    finally{setTimeout(refresh,2000);}
   }
   refresh();
 })();

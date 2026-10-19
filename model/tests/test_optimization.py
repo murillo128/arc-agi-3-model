@@ -165,6 +165,7 @@ class OptimizationTests(unittest.TestCase):
             report = json.loads((root/'observed/report.json').read_text())
             self.assertTrue(report['optimization_identity'])
             self.assertTrue(np.isfinite(report['history'][-1]['quality']['reference']['nll']))
+            self.assertEqual(OptimizationControl(root/'observed/report.json').snapshot()['status'], 'ready')
 
     def test_http_capture_scope_token_validation_missing_and_malformed_data(self):
         from model.dashboard import make_server
@@ -172,8 +173,9 @@ class OptimizationTests(unittest.TestCase):
             report = Path(d)/'report.json'
             report.write_text(json.dumps(dict(kind='game_sequences', status='running', optimization_identity='test',
                 config=dict(batch_games=4), progress=dict(batches=4))))
-            state = dict(kind='optimization', version=1, identity='test', batch=4, updated_at=time.time(),
-                catalog=[dict(name='dynamics.weight')], events=[], planes={}, points=[])
+            # A hand-authored measurement fixture shared with the JS interaction tests.
+            state = json.loads(Path(__file__).with_name('optimization_snapshot.json').read_text())
+            state['updated_at'] = time.time()
             snapshot = Path(d)/'optimization.json'
             snapshot.write_text(json.dumps(state))
             server = make_server(('127.0.0.1', 0), None, sequence_report=report)
@@ -202,6 +204,65 @@ class OptimizationTests(unittest.TestCase):
                     post({'operation':'recalibrate'})
                 self.assertEqual(pending.exception.code,409)
                 self.assertIn('optimization.js',urlopen(base+'/optimization.html').read().decode())
+                # The outer containers are valid in every case. Reject the malformed
+                # nested value/relationship before either rendering or accepting controls.
+                invalid_fields = [
+                    (('catalog', 0), None),
+                    (('catalog', 0, 'shape'), '2x2'),
+                    (('catalog', 0, 'size'), 5),
+                    (('events', 1), None),
+                    (('events', 1, 'matrices'), []),
+                    (('events', 1, 'matrices', state['selected']), None),
+                    (('events', 1, 'matrices', 'unknown.weight'), {'status': 'no_gradient'}),
+                    (('events', 1, 'detail', 'name'), 'unknown.weight'),
+                    (('events', 1, 'detail', 'gradient'), [None]),
+                    (('events', 1, 'detail', 'update'), [[1], [2, 3]]),
+                    (('events', 1, 'detail', 'histogram', 'edges'), [0, 1]),
+                    (('events', 1, 'clip_scale'), 'not a number'),
+                    (('events', 1, 'id'), 1),
+                    (('points', 1), None),
+                    (('points', 1, 'event_id'), 4),
+                    (('points', 1, 'reference_loss'), float('inf')),
+                    (('planes', 'dynamics', 'projections'), state['planes']['dynamics']['projections'][:3]),
+                    (('planes', 'dynamics', 'projections', 1), None),
+                    (('probe', 'steps'), [None]),
+                    (('probe', 'boundaries'), None),
+                    (('probe', 'session'), 4),
+                    (('probe', 'stop'), 513),
+                    (('selected',), 'unknown.weight'),
+                    (('events',), [state['events'][0]] * 65),
+                    (('identity',), 'different-run'),
+                ]
+                for fields, value in invalid_fields:
+                    with self.subTest(fields=fields):
+                        broken = copy.deepcopy(state)
+                        target = broken
+                        for field in fields[:-1]:
+                            target = target[field]
+                        target[fields[-1]] = value
+                        snapshot.write_text(json.dumps(broken))
+                        self.assertEqual(read()['status'], 'waiting')
+                        with self.assertRaises(HTTPError) as invalid:
+                            post({'operation': 'probe', 'session': 0})
+                        self.assertEqual(invalid.exception.code, 409)
+                # JSON can also decode a finite-looking exponent as infinity.
+                snapshot.write_text(json.dumps(state).replace('"reference_loss": 4', '"reference_loss": 1e400'))
+                self.assertEqual(read()['status'], 'waiting')
+                snapshot.write_text(json.dumps(state))
+                recovered = read()
+                self.assertEqual(recovered['status'], 'ready')
+                self.assertEqual(recovered['events'], state['events'])
+                # Legitimate missing numbers, biases/scalars, uncalibrated planes and
+                # unavailable probes remain valid; they are not fabricated zeros.
+                partial = copy.deepcopy(state)
+                partial['catalog'].append(dict(name='decoder.bias', module='decoder', shape=[], size=1))
+                partial['events'][1]['matrices'][state['selected']]['alignment'] = None
+                partial['events'][1]['matrices']['decoder.bias'] = dict(status='no_gradient')
+                partial['events'][1]['detail'] = None
+                partial['planes']['decoder'] = dict(basis_id=0, projections=[])
+                partial['probe'] = dict(status='unavailable', reason='No supervised transition')
+                snapshot.write_text(json.dumps(partial))
+                self.assertEqual(read()['status'], 'ready')
                 snapshot.write_text('{"kind":"optimization","updated_at":NaN}')
                 self.assertEqual(read()['status'],'waiting')
                 snapshot.unlink()

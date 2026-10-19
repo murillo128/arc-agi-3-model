@@ -135,6 +135,11 @@ Los controles de captura se atienden al iniciar el próximo batch. Al pedir otra
 matriz, el siguiente update que la entrene registra el detalle; no se inventa el
 detalle de instantes anteriores. La selección fijada conserva su snapshot aunque
 lleguen nuevos batches. Los datos se publican al guardar el batch completo.
+Si un punto de la trayectoria ya no conserva su captura de optimización, el
+inspector indica «Captura no disponible» y vacía sus medidas y mapas. El transporte
+valida también los registros internos y la correspondencia entre puntos y
+proyecciones; un registro malformado vacía la vista y se vuelve a consultar hasta
+recibir datos válidos, sin conservar una revisión inválida en la caché.
 
 En el directorio del run se conservan `optimization.json` (64 capturas y hasta
 96 puntos), `optimization_samples.npz` (muestras/bases, sin pickle) y, mientras
