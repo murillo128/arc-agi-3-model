@@ -195,6 +195,7 @@ def run(args):
         raise ValueError('Choose --source for a fresh run or --resume, not both')
     if args.max_batches is not None and args.max_batches < 1:
         raise ValueError('--max-batches must be positive')
+    action_budget = None if getattr(args, 'unlimited', False) else plan.settings['actions']
     with run_owner(output, args.resume):
         source = output / 'latest.pt' if args.resume else args.source
         torch.manual_seed(plan.settings['seed'])
@@ -217,7 +218,7 @@ def run(args):
         report = dict(kind='game_sequences', status='running', config=asdict(config), history=[],
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
-        report['budget'] = plan.settings['actions']
+        report['budget'] = action_budget
         report['learning_rates'] = dict(predictor=learner.optimizer.param_groups[0]['lr'],
                                         **representation.learning_rates)
         if telemetry:
@@ -237,7 +238,7 @@ def run(args):
             from .sequence_diagnostics import SequenceDiagnostics
             diagnostics = SequenceDiagnostics(engine, [s for batch in evaluation for s in batch])
             write_report(report_path, report)
-            while not stop and actions < plan.settings['actions']:
+            while not stop and (action_budget is None or actions < action_budget):
                 begin = time.perf_counter()
                 if telemetry:
                     telemetry.start_batch(batches + 1)
@@ -286,7 +287,7 @@ def run(args):
                 completed_here += 1
                 if args.max_batches is not None and completed_here >= args.max_batches:
                     break
-            report['status'] = 'paused' if stop or actions < plan.settings['actions'] else 'budget_complete'
+            report['status'] = 'paused' if stop or action_budget is None or actions < action_budget else 'budget_complete'
             write_report(report_path, report)
         except BaseException:
             report['status'] = 'error'
@@ -304,6 +305,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--unlimited', action='store_true',
+                        help='Ignore the total action budget; run until interrupted or --max-batches is reached')
     parser.add_argument('--optimization', action='store_true', help='Record bounded optimizer diagnostics')
     parser.add_argument('--optimization-every', type=int, default=8, help='Predictor updates between captures')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')

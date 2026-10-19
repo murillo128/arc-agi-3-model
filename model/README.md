@@ -27,6 +27,20 @@ Una interrupción brusca puede repetir el batch aún no guardado. Se conserva un
 checkpoint por batch completo; el presupuesto de acciones puede sobrepasarse
 hasta completar ese último batch. Este modo no declara convergencia ni publica pesos.
 
+`--unlimited` elimina el límite total de acciones: sigue entrenando hasta una
+interrupción manual o hasta `--max-batches`, si se especifica. Se puede activar
+con `--resume` incluso cuando el presupuesto anterior ya se ha agotado, conservando
+pesos, optimizadores, contadores y plan. Es una opción de cada lanzamiento: hay
+que incluirla al reanudar; sin ella vuelve a aplicarse `settings.actions`.
+El dashboard muestra **Sin límite de acciones** (`budget: null` en el informe).
+Los límites por sesión, nivel, historial y diagnóstico permanecen activos.
+
+```sh
+.venv/bin/python -u -m model.sequence_training \
+  --training-config model/sequence_config.example.json \
+  --output model/runs/secuencias --device cuda --resume --unlimited
+```
+
 La configuración reutiliza los juegos, niveles, rutas y splits del plan anterior,
 añadiendo `sequence`. `objective` debe ser `world_model` (es su valor por defecto
 en este modo). No utiliza los umbrales de promoción, el planner ni los intervalos

@@ -55,7 +55,8 @@ function render(data) {
   $('run-info').textContent = data.message || `${(data.games || []).join(' · ')} · Actualizado hace ${number(data.age_seconds, 0)} s`;
   $('configuration').textContent = `${c.batch_games || '—'} sesiones independientes · ${c.session_steps || '—'} acciones por sesión · Bloque: ${c.block_steps || '—'} pasos + ${c.context_steps ?? 0} de contexto con gradiente · Peso inicial: ${number(c.loss_start_weight)} → 1 en ${c.loss_warmup_steps || '—'} acciones · ${c.game_schedule === 'blocked' ? 'Un juego por batch' : 'Juegos alternados'}`;
   $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
-  $('actions').textContent = number(data.progress?.actions, 0); $('batches').textContent = `${number(data.progress?.batches, 0)} batches completados${data.budget?` · presupuesto ${number(data.budget,0)}`:''}`;
+  const budgetLabel=data.budget===null?' · Sin límite de acciones':data.budget?` · presupuesto ${number(data.budget,0)}`:'';
+  $('actions').textContent = number(data.progress?.actions, 0); $('batches').textContent = `${number(data.progress?.batches, 0)} batches completados${budgetLabel}`;
   $('tps').textContent = `${number(last.recent_tps)} acciones/s`; $('examples').textContent = `${number(last.examples_per_second)} transiciones/s`; $('memory').textContent = `${number(last.peak_gpu_gib)} GiB`;
   chart('quality', rows, [series('Inicio %',r=>pct(r.quality?.early?.delta_error),{color:colors[1]}),series('Después %',r=>pct(r.quality?.late?.delta_error),{color:colors[0]})],100);
   chart('speed', rows, [series('Acciones/s',r=>r.recent_tps)]);
