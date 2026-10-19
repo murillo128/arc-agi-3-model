@@ -29,7 +29,7 @@ class FoundationSDK(unittest.TestCase):
 
     def test_all_six_levels_native_actions_transition_alignment_and_win_reset(self):
         ids={info.game_id for info in self.arcade.get_environments()}
-        self.assertEqual(len(ids),70)
+        self.assertEqual(len(ids),71)
         for spec in FOUNDATION_SPECS:
             self.assertIn(spec.game_id+'-v1',ids)
             for seed in (0,1,42,123):

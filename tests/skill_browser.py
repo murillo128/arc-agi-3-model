@@ -67,7 +67,7 @@ def check_catalog(page,url,session,mobile):
     page.goto(url); settled(page)
     catalog = page.request.get(url+'/play/games').json()
     games = [g for group in catalog['groups'] if group['source']=='synthetic' for g in group['games']]
-    expected = {'sc01-v1','si01-v1'} | {s.game_id+'-v1' for s in SPECS}
+    expected = {'sc01-v1','si01-v1','mc01-v1'} | {s.game_id+'-v1' for s in SPECS}
     assert {g['id'] for g in games} == expected and len(games)==len(expected)
     debug_requests=[]
     page.on('request',lambda r: debug_requests.append(r.url) if '/play/debug/' in r.url else None)
@@ -82,7 +82,7 @@ def check_catalog(page,url,session,mobile):
             p=session.env._game.puzzle
             assert page.locator('#control-legend li').count()==(len(set(p.commands)) if getattr(p,'direct_controls',False) else len(p.commands))
             click_command(page,session,0,touch=mobile)
-        elif item['id']=='sc01-v1':
+        elif item['id'] in ('sc01-v1','mc01-v1'):
             page.keyboard.press('ArrowRight'); settled(page)
         else:
             x,y=session.env._game.scene.players[0][0]

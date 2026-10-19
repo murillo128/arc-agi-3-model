@@ -1,0 +1,6 @@
+{
+  "game_id": "mc01-v1",
+  "title": "Square Cross Maze",
+  "tags": ["synthetic", "navigation", "maze"],
+  "default_fps": 10
+}

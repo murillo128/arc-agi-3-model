@@ -31,7 +31,7 @@ class OfflineSDKTests(unittest.TestCase):
 
     def test_discovery_all_levels_terminal_reset_and_teacher_alignment(self):
         ids = {info.game_id for info in self.arcade.get_environments()}
-        expected = {s.game_id+'-v1' for s in SPECS} | {'sc01-v1','si01-v1'}
+        expected = {s.game_id+'-v1' for s in SPECS} | {'sc01-v1','si01-v1','mc01-v1'}
         self.assertEqual(ids, expected)
         self.assertEqual(len(self.arcade.get_environments()), len(ids))
         for spec in SKILL_SPECS:

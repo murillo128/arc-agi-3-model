@@ -27,7 +27,7 @@ class LauncherTests(unittest.TestCase):
                                   cwd=cwd, env=env, capture_output=True, text=True, timeout=20)
 
     def test_sdk_finite_and_cwd_independent(self):
-        for game, total, limit in ((None, 5, 0), (None, 5, 100), ('si01-v1', 5, 0), ('si01-v1', 5, 100)):
+        for game, total, limit in ((None, 5, 0), (None, 5, 100), ('si01-v1', 5, 0), ('si01-v1', 5, 100), ('mc01-v1', 6, 0), ('mc01-v1', 6, 100)):
             with self.subTest(game=game, limit=limit):
                 result = self.command('--mode', 'sdk', '--seed', '42', '--max-actions', str(limit),
                                       *(['--game', game] if game else []))
@@ -58,8 +58,8 @@ try:
     ids = [info.game_id for info in arcade.get_environments()]
     assert len(ids) == len(set(ids)), ids
     from games.skill_core import SKILL_SPECS as SPECS, FOUNDATION_SPECS
-    assert set(ids) == {'sc01-v1', 'si01-v1'} | {s.game_id+'-v1' for s in (*SPECS,*FOUNDATION_SPECS)}, ids
-    for game, total in (('sc01-v1', 5), ('si01-v1', 5)):
+    assert set(ids) == {'sc01-v1', 'si01-v1', 'mc01-v1'} | {s.game_id+'-v1' for s in (*SPECS,*FOUNDATION_SPECS)}, ids
+    for game, total in (('sc01-v1', 5), ('si01-v1', 5), ('mc01-v1', 6)):
         env = arcade.make(game, seed=42)
         assert env is not None, game
         frame = env.observation_space
@@ -170,6 +170,7 @@ class ProtocolTests(unittest.TestCase):
             {'source': 'synthetic', 'label': 'Synthetic · Foundations / Basics', 'games': [
                 {'source':'synthetic','id':s.game_id+'-v1','title':'Foundations: '+s.title} for s in FOUNDATION_SPECS]},
             {'source': 'synthetic', 'label': 'Synthetic · Skills and legacy', 'games': [
+                {'source': 'synthetic', 'id': 'mc01-v1', 'title': 'Square Cross Maze'},
                 {'source': 'synthetic', 'id': 'sc01-v1', 'title': 'Square Cross'},
                 {'source': 'synthetic', 'id': 'si01-v1', 'title': 'Square Cross Interactions'},
                 *[{'source':'synthetic','id':s.game_id+'-v1','title':'Skills: '+s.title} for s in SPECS]]},
@@ -196,6 +197,20 @@ class ProtocolTests(unittest.TestCase):
         returned = self.select('sc01-v1', 'synthetic').get_json()
         self.assertEqual(returned['frame'], initial['frame'])
         self.assertEqual(returned['available_actions'], [1, 2, 3, 4])
+
+    def test_maze_selection_help_and_native_pixels(self):
+        initial = self.select('mc01-v1', 'synthetic').get_json()
+        self.assertEqual(initial['win_levels'], 6)
+        self.assertEqual(initial['available_actions'], [1, 2, 3, 4])
+        self.assertEqual(initial['frame'], self.session.env.observation_space.frame[-1].tolist())
+        info = self.client.get('/play/help', query_string={'epoch':initial['epoch']}).get_json()
+        self.assertEqual(info['help']['title'], 'Square Cross Maze')
+        self.assertIn('dead ends and loops', info['help']['text'])
+        self.assertFalse(info['debug_available'])
+        self.assertNotIn('route', initial)
+        self.assertEqual(self.action('ACTION6', data={'x':12, 'y':12}).status_code, 400)
+        self.action('ACTION1')
+        self.assertEqual(self.action('RESET').get_json()['frame'], initial['frame'])
 
     def test_context_help_and_opt_in_teacher_isolation(self):
         def help_info():

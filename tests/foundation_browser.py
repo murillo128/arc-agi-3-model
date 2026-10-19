@@ -33,7 +33,7 @@ def check(page,url,session,mobile):
     catalog=page.request.get(url+'/play/games').json()
     assert catalog['groups'][0]['label']=='Synthetic · Foundations / Basics'
     assert len(catalog['groups'][0]['games'])==8
-    assert len(catalog['groups'][1]['games'])==62
+    assert len(catalog['groups'][1]['games'])==63
     debug_requests=[]
     page.on('request',lambda r: debug_requests.append(r.url) if '/play/debug/' in r.url else None)
     for spec in FOUNDATION_SPECS:

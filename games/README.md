@@ -1,21 +1,25 @@
 # Original synthetic games
 
 This directory contains our own versioned ARCEngine environments, separate from
-ignored downloaded `environment_files/`. The SDK discovers 70 entries: eight six-level foundation games, 60 six-level
-skill curricula, and these two independent five-level legacy games:
+ignored downloaded `environment_files/`. The SDK discovers 71 entries (424 levels):
+eight six-level foundation games, 60 six-level skill curricula, one six-level maze,
+and two independent five-level legacy games:
 
 - [Square Cross](square_cross/README.md), `sc01-v1`: five perception/navigation levels.
 - [Square Cross Interactions](square_cross_interactions/README.md), `si01-v1`:
   five levels: click one square, select two simultaneously, then three
   colour/navigation tasks transferred from former Square Cross levels 6–8.
   Selection in the later tasks remains exclusive.
+- [Square Cross Maze](maze_cross/README.md), `mc01-v1`: six levels with fixed walls
+  and coloured floor, progressing from straight corridors through turns to dead
+  ends and loops. Available for world-model training without a subgoal teacher.
 
 These games are not held-out evaluation games and do not change the repository's
 training/evaluation splits. No learning or training is performed by the launcher.
 
 ## Synthetic subgoal teacher
 
-After the native seeded initialization, both games expose the optional
+After the native seeded initialization, `sc01-v1` and `si01-v1` expose the optional
 `games.subgoals.SyntheticSubgoals` capability to the local training adapter:
 
 - `training_subgoals()` returns an ordered tuple of immutable target images and
@@ -49,6 +53,7 @@ python scripts/play_game.py --mode web --seed 42
 python scripts/play_game.py --mode sdk --seed 42 --max-actions 100
 python scripts/play_game.py --mode web --game si01-v1 --seed 42
 python scripts/play_game.py --mode sdk --game si01-v1 --seed 42 --max-actions 100
+python scripts/play_game.py --mode web --game mc01-v1 --seed 42
 ```
 
 The web command prints `http://127.0.0.1:8001/`. Open it in a local browser.
@@ -57,8 +62,8 @@ The top-left game badge is a native dropdown with **Synthetic · Foundations / B
 a game initializes it with the current seed in the same 64 × 64 console;
 switching away discards its progress. Choosing the current game does not reset it.
 The default remains `sc01-v1`. All entries can be selected without restarting the server. Both legacy entries
-start at 1/5; foundation and skill entries start at 1/6.
-Use RESET to follow the game's SDK restart rules. For both Square Cross games,
+start at 1/5; foundation, skill and maze entries start at 1/6.
+Use RESET to follow the game's SDK restart rules. For all three Square Cross games,
 reset retries the current level after movement/loss and starts at level 1 after a win.
 
 Controls follow the active observation's `available_actions`:

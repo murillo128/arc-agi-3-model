@@ -16,7 +16,7 @@ def synthetic_levels():
     """Bundled catalog metadata; does not instantiate or solve any game."""
     from games.skill_core import SPECS
     from games.skill_common import LEVELS
-    return SYNTHETIC_LEVELS | {spec.game_id + '-v1': LEVELS for spec in SPECS}
+    return SYNTHETIC_LEVELS | {'mc01-v1': 6} | {spec.game_id + '-v1': LEVELS for spec in SPECS}
 
 
 def training_boundary(factory, observation):
