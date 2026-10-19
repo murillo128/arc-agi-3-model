@@ -8,13 +8,17 @@ numbered locally 3–5. The separate
 
 | Local level | Scene and completion | Available actions |
 | --- | --- | --- |
-| 1 | One solid 5×5 square, no cross; click anywhere inside it to advance | 6 |
+| 1 | One solid 5×5 square, no cross; click anywhere inside it to show the white selection marker and advance | 6 |
 | 2 | Two separated, differently coloured solid 5×5 squares, no crosses; select both simultaneously to advance | 6 |
 | 3 | One 5×5 square, a same-colour cross and a lethal different-colour decoy on separate cardinal routes | 1–4 |
 | 4 | One-square navigation; click to select before moving, with a white 2×2 marker | 1–4, 6 |
 | 5 | Two differently coloured 5×5 squares and matching crosses in separate lanes; select and deliver both | 1–4, 6 |
 
-In level 1, clicking empty background or the HUD has no effect. Level 2 uses
+In level 1, clicking empty background or the HUD has no effect. A successful click
+adds the same white 2×2 selection marker used in later levels before advancing.
+The marker appears in the native completion frame, including the final `WIN`
+frame when training on the isolated level. Its synthetic teacher target uses
+that same marked square. Level 2 uses
 cumulative selection: clicking either square toggles only that square, without
 clearing the other. Empty-space clicks clear all selection. Completing the second
 selection shows both markers in the native transition, then advances to level 3.

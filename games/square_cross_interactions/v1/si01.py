@@ -131,7 +131,7 @@ class Si01(SyntheticSubgoals, ARCBaseGame):
 
     def render_interface(self, frame):
         # Pure rendering: redraws never consume moves.
-        indices = self.click_selected if self.number == 2 else (
+        indices = self.click_selected if self.number <= 2 else (
             [self.selected] if self.number >= 4 and self.selected is not None else [])
         for index in indices:
             player = self.players[index]
@@ -152,6 +152,7 @@ class Si01(SyntheticSubgoals, ARCBaseGame):
                         break
             if self.number == 1:
                 if hit is not None:
+                    self.click_selected.add(hit)
                     self._teacher_clicked = True
                     self.next_level()
             elif self.number == 2:
