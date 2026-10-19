@@ -646,8 +646,24 @@ def trajectory_snapshot(report_path):
         return None
 
 
-def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None):
+def sequence_snapshot(path):
+    try:
+        if path.stat().st_size > MAX_READ:
+            raise ValueError('Sequence report exceeds dashboard limit')
+        data = json.loads(path.read_text())
+        if data.get('kind') != 'game_sequences':
+            raise ValueError('Expected a game-sequence report')
+        data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
+        return data
+    except (OSError, ValueError) as error:
+        return dict(kind='game_sequences', status='waiting', message=str(error), history=[], progress={})
+
+
+def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None,
+                sequence_report=None):
     gpu = GpuMonitor()
+    if sequence_report and any(x is not None for x in (monitor, behavior, campaign, subgoal_report, curriculum_service)):
+        raise ValueError('Sequence report selects one independent run')
     if curriculum_service and not subgoal_report:
         raise ValueError('Curriculum controls require a subgoal report')
     control = CurriculumControl(curriculum_service, subgoal_report) if curriculum_service else None
@@ -692,7 +708,8 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
         def do_GET(self):
             route = urlsplit(self.path).path
             if route == '/api/state':
-                state = {'subgoals': subgoal_snapshot(subgoal_report)} if subgoal_report else monitor.snapshot()
+                state = ({'sequences': sequence_snapshot(sequence_report)} if sequence_report else
+                         {'subgoals': subgoal_snapshot(subgoal_report)} if subgoal_report else monitor.snapshot())
                 if control is not None:
                     state['curriculum_control'] = control.snapshot(state['subgoals'])
                 if behavior is not None and subgoal_report is None:
@@ -705,10 +722,12 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             elif route == '/api/trajectory' and subgoal_report:
                 data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js'):
+            elif route in ('/', '/index.html', '/dashboard.css', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js'):
                 name = 'index.html' if route == '/' else route[1:]
                 if subgoal_report and name in ('index.html', 'campaign.html'):
                     name = 'subgoals.html'
+                if sequence_report and name in ('index.html', 'campaign.html'):
+                    name = 'sequences.html'
                 data = (ASSETS / name).read_bytes()
                 mime = {'html': 'text/html', 'css': 'text/css', 'js': 'text/javascript'}[name.rsplit('.', 1)[1]] + '; charset=utf-8'
             else:
@@ -742,13 +761,16 @@ def main():
     parser.add_argument('--campaign-log', type=Path, help='Independent architecture comparison JSON-line log')
     parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
     parser.add_argument('--subgoal-report', type=Path, help='Select the new synthetic-subgoal run for the entire dashboard')
+    parser.add_argument('--sequence-report', type=Path, help='Select a game-sequence training report')
     parser.add_argument('--curriculum-service', help='Opt in to phase/level controls for this systemd user service')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8766)
     parser.add_argument('--max-points', type=int, default=2000)
     args = parser.parse_args()
-    if not args.log and not args.subgoal_report:
-        parser.error('Select --log or --subgoal-report')
+    if not args.log and not args.subgoal_report and not args.sequence_report:
+        parser.error('Select --log, --subgoal-report or --sequence-report')
+    if args.sequence_report and any((args.log, args.subgoal_report, args.behavior_log, args.campaign_log, args.campaign_report, args.curriculum_service)):
+        parser.error('--sequence-report selects one run; do not combine report selectors')
     if args.curriculum_service and not args.subgoal_report:
         parser.error('--curriculum-service requires --subgoal-report')
     if args.subgoal_report and any((args.log, args.behavior_log, args.campaign_log, args.campaign_report)):
@@ -758,7 +780,8 @@ def main():
     monitor = LogMonitor(args.log, args.max_points) if args.log else None
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
     campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
-    with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report, args.curriculum_service) as server:
+    with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report, args.curriculum_service,
+                     args.sequence_report) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

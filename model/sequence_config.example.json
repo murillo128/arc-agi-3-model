@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "phase": "development",
+  "init_config": "subgoal_config.json",
+  "settings": {
+    "actions": 131072,
+    "learning_rate": 0.00003,
+    "representation_learning_rate": 0.00003,
+    "encoder_learning_rate_after_predictor": 0.000003,
+    "prediction_delta_loss": "recall_focal_capped"
+  },
+  "sequence": {
+    "batch_games": 4,
+    "session_steps": 512,
+    "block_steps": 16,
+    "context_steps": 16,
+    "level_steps": 32,
+    "loss_start_weight": 1.0,
+    "loss_warmup_steps": 32,
+    "game_schedule": "interleaved",
+    "representation_updates": 4
+  },
+  "curriculum": [
+    {"source": "synthetic", "game": "sc01-v1", "levels": [1, 2, 3, 4, 5], "objective": "world_model"},
+    {"source": "synthetic", "game": "si01-v1", "levels": [1, 2, 3, 4, 5], "objective": "world_model"}
+  ]
+}

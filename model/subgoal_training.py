@@ -1037,6 +1037,8 @@ def main(argv=None):
         return _main(rest)
     try:
         plan = load_plan(selected.training_config)
+        if 'sequence' in plan.payload:
+            raise ValueError('Sequence plans use python -m model.sequence_training')
     except (ValueError, TypeError, KeyError, OSError) as error:
         bootstrap.error(str(error))
     runtime = argparse.ArgumentParser(description=__doc__)

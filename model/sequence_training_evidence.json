@@ -1,0 +1,123 @@
+{
+  "date": "2026-10-19",
+  "device": "RTX 4070 Ti 12 GiB",
+  "precision": "BF16 autocast, eager, 4 CPU threads",
+  "source": "Existing sc01-v1 campaign world weights; fresh optimizers in each comparison",
+  "grid_protocol": "One batch of 4 independent sessions x 512 real random actions, sc01-v1/si01-v1 levels 1-5. Separate evaluation seeds: 4 x 128 actions. Fixed representation. Same data, loss and LR across configurations. Timings include prefix reconstruction and backward; encoding reported in training_seconds, evaluation/init excluded.",
+  "grid": [
+    {
+      "block_steps": 16,
+      "context_steps": 16,
+      "loss_start_weight": 0.25,
+      "predictor_transitions_per_second": 76.62095291099386,
+      "peak_allocated_gib": 4.211427211761475,
+      "training_seconds": 29.502762805999737,
+      "macro_delta_error": 0.6997942337829313,
+      "macro_error_history_cleared": 0.6909084001582639
+    },
+    {
+      "block_steps": 16,
+      "context_steps": 16,
+      "loss_start_weight": 0.5,
+      "predictor_transitions_per_second": 74.54689048527517,
+      "peak_allocated_gib": 4.234551429748535,
+      "training_seconds": 30.345177283999874,
+      "macro_delta_error": 0.7005756235566803,
+      "macro_error_history_cleared": 0.6906574066191569
+    },
+    {
+      "block_steps": 16,
+      "context_steps": 16,
+      "loss_start_weight": 1.0,
+      "predictor_transitions_per_second": 78.80278846691466,
+      "peak_allocated_gib": 4.234551429748535,
+      "training_seconds": 28.767452598999625,
+      "macro_delta_error": 0.7007501318320266,
+      "macro_error_history_cleared": 0.6917000480916011
+    },
+    {
+      "block_steps": 32,
+      "context_steps": 16,
+      "loss_start_weight": 1.0,
+      "predictor_transitions_per_second": 84.35759325226917,
+      "peak_allocated_gib": 4.367424964904785,
+      "training_seconds": 27.055717874000038,
+      "macro_delta_error": 0.7079875552680925,
+      "macro_error_history_cleared": 0.6930235039385374
+    },
+    {
+      "block_steps": 64,
+      "context_steps": 16,
+      "loss_start_weight": 1.0,
+      "predictor_transitions_per_second": 87.77128492369278,
+      "peak_allocated_gib": 4.642647743225098,
+      "training_seconds": 26.115459676999308,
+      "macro_delta_error": 0.7256207587134598,
+      "macro_error_history_cleared": 0.6904318075350433
+    },
+    {
+      "block_steps": 8,
+      "context_steps": 16,
+      "loss_start_weight": 1.0,
+      "predictor_transitions_per_second": 68.63720666537405,
+      "peak_allocated_gib": 4.148980140686035,
+      "training_seconds": 32.602292617000785,
+      "macro_delta_error": 0.7096763678016793,
+      "macro_error_history_cleared": 0.6858960489992598
+    }
+  ],
+  "schedule_protocol": "Identical 8 x 512 training sessions, grouped mixed or by game; 2 optimizer batches with four real representation updates each. Evaluation: 4 x 512 independent real actions, all configured levels.",
+  "schedules": [
+    {
+      "schedule": "interleaved",
+      "training_transitions": 4096,
+      "training_seconds": 59.55077798599996,
+      "before_macro_error": 0.8350496796483664,
+      "after_macro_error": 0.77735433010623,
+      "history_cleared_macro_error": 0.744569310429125
+    },
+    {
+      "schedule": "blocked",
+      "training_transitions": 4096,
+      "training_seconds": 59.11802029499995,
+      "before_macro_error": 0.8350496796483664,
+      "after_macro_error": 0.8644494125318405,
+      "history_cleared_macro_error": 0.8469657909166379
+    }
+  ],
+  "selected": {
+    "batch_games": 4,
+    "session_steps": 512,
+    "block_steps": 16,
+    "context_steps": 16,
+    "loss_start_weight": 1.0,
+    "game_schedule": "interleaved"
+  },
+  "limitations": [
+    "Short single-initialization trials, not statistical or long-run convergence evidence.",
+    "Longer blocks also reduce optimizer-step count at fixed exposure; no LR retuning.",
+    "Warm-up weights 0.25 and 0.5 differ from uniform by at most about 0.1 percentage points in this grid. Adam and clipping mean weight scaling is not a proportional parameter-update guarantee.",
+    "Clearing history still improves average prediction here: persistent memory is implemented and receives gradients, but reliable benefit from inferred rules is not yet demonstrated.",
+    "Predictor-only example rate is not complete game/planner TPS. No planner training or game-success claim."
+  ],
+  "complete_cli_trial": {
+    "configuration": "sequence_config.example.json; 2 batches; source weights unchanged",
+    "status": "paused",
+    "actions": 4096,
+    "recent_real_actions_per_second": [
+      49.59699515984833,
+      50.05281271943554
+    ],
+    "last_batch_seconds": {
+      "collection_seconds": 0.2866752589998214,
+      "representation_seconds": 0.28035450499919534,
+      "encode_seconds": 3.423588663999908,
+      "predictor_seconds": 25.954932706000363,
+      "evaluation_seconds": 8.014912820000063,
+      "save_seconds": 2.954528267999194,
+      "total_seconds": 40.91678147000039
+    },
+    "peak_allocated_gib": 5.3600053787231445,
+    "note": "Complete-batch throughput includes evaluation and atomic checkpoint save. Setup and initial evaluation collection precede the measured batches."
+  }
+}

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARC · Memoria entre niveles</title><link rel="stylesheet" href="dashboard.css"><script src="sequences.js" defer></script></head>
+<body class="subgoal-dashboard"><main>
+<header><div class="run-heading"><p class="eyebrow">ARC · APRENDIZAJE POR SECUENCIAS</p><h1>Memoria entre niveles</h1>
+<p id="run-info" class="muted">Esperando datos…</p></div><span id="status" class="badge" role="status">Esperando</span></header>
+<p class="notice" id="configuration"></p>
+<div class="metrics summary-metrics">
+<article><h2>Acciones reales</h2><strong id="actions">—</strong><small id="batches"></small></article>
+<article><h2>Velocidad reciente</h2><strong id="tps">—</strong><small>Último batch completo, incluida evaluación y guardado.</small></article>
+<article><h2>Predictor</h2><strong id="examples">—</strong><small>Transiciones entrenadas / segundo del predictor.</small></article>
+<article><h2>Memoria GPU</h2><strong id="memory">—</strong><small>Pico asignado por PyTorch en este proceso.</small></article>
+</div>
+<div class="charts">
+<article class="chart-card"><h3>Error del delta <span>evaluación separada · menor es mejor</span></h3>
+<p>Primeras interacciones frente al resto de la sesión. Sin ponderación del loss. La dificultad de los niveles también cambia: una diferencia no demuestra por sí sola que la memoria ayude.</p>
+<div id="quality-legend" class="legend"></div><svg id="quality" viewBox="0 0 700 260" role="img" aria-label="Error temprano y tardío por batch"></svg></article>
+<article class="chart-card"><h3>Velocidad <span>acciones reales / segundo</span></h3><p>Medida por batch completo. No es una media acumulada ni incluye acciones de evaluación en el numerador.</p>
+<div id="speed-legend" class="legend"></div><svg id="speed" viewBox="0 0 700 260" role="img" aria-label="Velocidad reciente por batch"></svg></article>
+<article class="chart-card"><h3>Pérdida del predictor <span>entrenamiento</span></h3><p>Media de los bloques, normalizada por sesión y con el mismo peso para cada juego. No es un porcentaje de errores.</p>
+<div id="loss-legend" class="legend"></div><svg id="loss" viewBox="0 0 700 260" role="img" aria-label="Pérdida por batch"></svg></article>
+<article class="chart-card"><h3>Tiempo del último batch</h3><p>El predictor incluye reconstruir su memoria con los pesos actuales al comenzar cada bloque.</p><div id="timings" class="legend"></div></article>
+</div>
+<article class="chart-card"><h3>Las sesiones del batch</h3><p>Cada fila tiene memoria independiente. Los cambios de nivel y reinicios conservan contexto; al terminar la sesión empieza una memoria nueva.</p>
+<div class="table-scroll"><table><thead><tr><th>Sesión</th><th>Juego</th><th>Movimientos</th><th>Fronteras</th><th>Fin</th></tr></thead><tbody id="sessions"></tbody></table></div></article>
+<article class="chart-card"><h3>Predicción por juego</h3><p>Evaluación con semillas separadas y pesos congelados. La media por juego da el mismo peso a cada juego; no mide victorias.</p><p id="macro-error"></p>
+<div class="table-scroll"><table><thead><tr><th>Juego</th><th>Error del delta</th><th>Transiciones</th></tr></thead><tbody id="game-quality"></tbody></table></div></article>
+<footer>Datos de transiciones reales. Política de recogida aleatoria; no se entrena el planner en este modo.</footer>
+</main></body></html>

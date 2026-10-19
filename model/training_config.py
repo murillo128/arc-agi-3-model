@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 
 from arc3.envs.splits import load_split
-from .config import NetworkConfig, TrainConfig
+from .config import NetworkConfig, TrainConfig, SequenceConfig
 from .curriculum import CurriculumConfig
 from .environment import SYNTHETIC_LEVELS, synthetic_levels
 
@@ -79,12 +79,14 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
     if phase not in ('development', 'final'):
         raise ValueError('phase must be development or final')
+    if 'sequence' in value and phase != 'development':
+        raise ValueError('Sequence experiments require phase development')
     def relative(raw):
         if not isinstance(raw, str) or not raw:
             raise ValueError('Expected a nonempty file/directory path')
@@ -144,7 +146,9 @@ def load_plan(path):
             raise ValueError(f'Unknown bundled synthetic game: {game}')
         if source == 'sdk' and (not sdk_config or game.split('-')[0] in {g.split('-')[0] for g in bundled}):
             raise ValueError('SDK entries need sdk settings and a public SDK game')
-        objective = entry.get('objective', 'subgoals' if source == 'synthetic' and game in SYNTHETIC_LEVELS else 'world_model')
+        objective = entry.get('objective', 'subgoals' if 'sequence' not in value and source == 'synthetic' and game in SYNTHETIC_LEVELS else 'world_model')
+        if 'sequence' in value and objective != 'world_model':
+            raise ValueError('Sequence mode trains world_model; it does not train subgoal/planner heads')
         if objective not in ('subgoals', 'world_model') or (objective == 'subgoals' and
                 (source != 'synthetic' or game not in SYNTHETIC_LEVELS)):
             raise ValueError('Subgoal training is only supported by sc01-v1 and si01-v1')
@@ -169,6 +173,9 @@ def load_plan(path):
             stages.append(dict(game=game, level=level, source=source, objective=objective, thresholds=asdict(gates)))
     payload = dict(version=1, phase=phase, initialization=initial, settings=settings,
                    stages=stages, sdk=sdk_config)
+    if 'sequence' in value:
+        payload['sequence'] = asdict(SequenceConfig(**object_keys(
+            value['sequence'], SequenceConfig.__dataclass_fields__, 'sequence')))
     return TrainingPlan(initial_path, settings, tuple(stages), payload)
 
 

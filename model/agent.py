@@ -24,12 +24,15 @@ class AgentConfig:
     planner: PlanConfig = field(default_factory=PlanConfig)
     goal: GoalConfig = field(default_factory=GoalConfig)
     path: PathConfig = field(default_factory=PathConfig)
+    memory_across_levels: bool = False
 
     def __post_init__(self):
         if self.mode not in {'random', 'q', 'mpc', 'value_mpc', 'goal_mpc', 'goal_value_mpc', 'path_mpc'}:
             raise ValueError('Unknown agent policy mode')
         if type(self.max_actions) is not int or self.max_actions < 1:
             raise ValueError('max_actions must be a positive integer')
+        if type(self.memory_across_levels) is not bool:
+            raise ValueError('memory_across_levels must be boolean')
 
 
 def public_observation(raw, action=None):
@@ -112,7 +115,15 @@ class Agent:
                 self.planner.after_real_action(executed, before, observation)
             # Old-level animation frames are not part of a new-level state.
             if executed.id == 0 or observation.starts_new_level(before):
-                self.state = self.engine.initial(observation.level_initial())
+                memory = None
+                if self.config.memory_across_levels:
+                    memory = self.state.h
+                    if self.state.z is not None and executed.id != 0:
+                        with self.engine.autocast():
+                            memory, _ = self.engine.advance(self.state.z[None], memory,
+                                                           self.engine.actions([executed]))
+                self.state = (self.engine.initial(observation.level_initial(), memory=memory) if memory is not None
+                              else self.engine.initial(observation.level_initial()))
                 if hasattr(self.planner, 'reset'):
                     self.planner.reset()
             else:
