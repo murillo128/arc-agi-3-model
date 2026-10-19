@@ -1,0 +1,37 @@
+{
+  "kind": "optimization", "version": 1, "identity": "test", "batch": 4, "tick": 4,
+  "updated_at": 1, "every": 8, "sample_per_tensor": 256,
+  "selected": "dynamics.cell.gates.weight",
+  "catalog": [
+    {"name": "dynamics.cell.gates.weight", "module": "dynamics", "size": 4, "shape": [2, 2]},
+    {"name": "encoder.<unsafe>", "module": "encoder", "size": 1, "shape": [1, 1]}
+  ],
+  "events": [
+    {"id": 1, "batch": 1, "phase": "representation", "clip_scale": 1, "matrices": {}, "detail": null},
+    {"id": 4, "batch": 4, "phase": "predictor", "clip_scale": 0.5,
+      "matrices": {"dynamics.cell.gates.weight": {
+        "status": "measured", "gradient_rms": 0, "weight_rms": 1, "update_rms": 0.002,
+        "relative_update": 0.002, "lr": 0.00003, "alignment": 0.7
+      }},
+      "detail": {"name": "dynamics.cell.gates.weight", "gradient": [[0, 0], [0, 0]],
+        "update": [[0.01, 0.02], [0.03, 0.04]],
+        "histogram": {"counts": [2, 2], "edges": [0.01, 0.025, 0.04]}}
+    }
+  ],
+  "points": [
+    {"batch": 1, "actions": 8, "reference_loss": 4, "event_id": 1},
+    {"batch": 2, "actions": 16, "reference_loss": 3, "event_id": 2},
+    {"batch": 3, "actions": 24, "reference_loss": 2, "event_id": 3},
+    {"batch": 4, "actions": 32, "reference_loss": 1, "event_id": 4}
+  ],
+  "planes": {"dynamics": {"basis_id": 1, "projections": [
+    {"x": 0, "y": 0, "coverage": null, "angle": null, "step_norm": 0},
+    {"x": 1, "y": 0.2, "coverage": 0.25, "angle": 90, "step_norm": 1},
+    {"x": 2, "y": 0.4, "coverage": 0.25, "angle": 90, "step_norm": 1},
+    {"x": 3, "y": 0.6, "coverage": 0.25, "angle": 90, "step_norm": 1}
+  ]}},
+  "probe": {"status": "ready", "session": 0, "game": "<game>", "batch": 4,
+    "session_steps": 512, "context_start": 480, "start": 496, "stop": 512,
+    "boundaries": [496], "steps": [{"t": 480, "rms": 0.001}, {"t": 511, "rms": 0.1}],
+    "loss": 2, "cleared_loss": 3, "seconds": 0.1}
+}

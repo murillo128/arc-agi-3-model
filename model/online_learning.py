@@ -75,7 +75,7 @@ class OnlineRepresentation:
         # SIGReg stays disabled once any predictor has been admitted. update()
         # sets gradient ownership when this level actually trains again.
 
-    def update(self, observations, *, preview=None):
+    def update(self, observations, *, preview=None, telemetry=None):
         """Reconstruct the last two real observations on EVERY learning action.
 
         Targets include unchanged pixels. The auxiliary local readout must also
@@ -120,8 +120,11 @@ class OnlineRepresentation:
             terms['variance_floor'] = c.variance_weight * variance_floor(zs)
         loss = sum(terms.values())
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.parameters, 1., error_if_nonfinite=True)
+        capture = telemetry.before_step('representation', self.optimizer) if telemetry else None
+        norm = torch.nn.utils.clip_grad_norm_(self.parameters, 1., error_if_nonfinite=True)
         self.optimizer.step()
+        if telemetry:
+            telemetry.after_step(capture, norm, loss.detach())
         self.updates += 1
         if not self.freeze_encoder:
             e.invalidate_latent_cache()
