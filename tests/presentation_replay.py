@@ -42,9 +42,12 @@ def replay(root, output, images=False):
     card=arcade.open_scorecard()
     records={}; completed=0; observed_frames=0
     try:
-        ids=sorted(info.game_id for info in arcade.get_environments())
-        assert set(ids)==set(specs)|{'sc01-v1','si01-v1'}
-        for game in ids:
+        ids={info.game_id for info in arcade.get_environments()}
+        baseline_ids=set(specs)|{'sc01-v1','si01-v1'}
+        assert ids in (baseline_ids, baseline_ids|{'mc01-v1'})
+        # The accepted symbols-v1 fixture predates Maze. Keep its original 70
+        # identities and digests; test_maze_cross owns the new game's proof.
+        for game in sorted(baseline_ids):
             logical=hashlib.sha256(); pixels=hashlib.sha256(); native=[]; gallery=[]
             def record(value): logical.update(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
             for seed in (0,1,42,123):

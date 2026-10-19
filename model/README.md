@@ -257,10 +257,11 @@ Los umbrales pueden sobrescribirse dentro de cada entrada:
 | `minimum_samples` | Transiciones mínimas en las evaluaciones de uno y tres pasos. |
 | `minimum_changed` | Transiciones con cambios mínimas; la excepción estacionaria exige una terminación nativa observada. |
 
-Los 70 sintéticos del catálogo permiten seleccionar directamente el nivel.
+Los 71 sintéticos del catálogo permiten seleccionar directamente el nivel.
 Square Cross y su variante admiten `objective: "subgoals"` (valor por defecto para
 esos dos juegos): encoder/decoder, predictor y planner con su profesor.
-Los 68 juegos de fundamentos/habilidades usan `objective: "world_model"`:
+Los 68 juegos de fundamentos/habilidades y Square Cross Maze (`mc01-v1`, niveles
+1–6) usan `objective: "world_model"`:
 representación y predictor con acciones aleatorias, sin un profesor compatible.
 También se puede elegir ese modo para Square Cross. En el SDK,
 no hay selección portátil de nivel ni profesor: se llega al nivel solicitado

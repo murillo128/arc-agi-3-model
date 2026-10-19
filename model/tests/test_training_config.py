@@ -50,7 +50,8 @@ def config(root, entries=None, **overrides):
 
 class TrainingConfigTests(unittest.TestCase):
     def test_complete_synthetic_catalog_and_real_sdk_level_isolation(self):
-        self.assertEqual(len(synthetic_levels()), 70)
+        self.assertEqual(len(synthetic_levels()), 71)
+        self.assertEqual(synthetic_levels()['mc01-v1'], 6)
         self.assertEqual(synthetic_levels()['bf01-v1'], 6)
         self.assertEqual(synthetic_levels()['sy60-v1'], 6)
         with tempfile.TemporaryDirectory() as tmp:
@@ -67,6 +68,27 @@ class TrainingConfigTests(unittest.TestCase):
                 self.assertEqual([r['goal'] for r in result['records']], ['Dinámica del entorno'] * 2)
             finally:
                 factory.arcade.close_scorecard()
+
+    def test_maze_world_model_registration_isolation_and_no_teacher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path, values = config(root, [dict(source='synthetic', game='mc01-v1', levels=[6, 3, 1])],
+                                  sequence=dict(batch_games=4, session_steps=16, level_steps=4))
+            plan = load_plan(path)
+            self.assertEqual([s['objective'] for s in plan.stages], ['world_model']*3)
+            self.assertEqual([s['level'] for s in plan.stages], [6, 3, 1])
+            factory = SyntheticWorldFactory('mc01-v1', Path('games'))
+            try:
+                env = factory.make(42, 6)
+                self.assertEqual(env.wrapper._game.number, 6)
+                self.assertEqual(env.observation.final.shape, (64, 64))
+                with self.assertRaisesRegex(ValueError, 'do not use a subgoal teacher'):
+                    factory.teacher(env)
+            finally:
+                factory.arcade.close_scorecard()
+            values['curriculum'][0]['objective'] = 'subgoals'
+            path.write_text(json.dumps(values))
+            with self.assertRaises(ValueError): load_plan(path)
 
     def test_explicit_order_thresholds_relative_paths_and_pure_preview(self):
         with tempfile.TemporaryDirectory() as tmp:

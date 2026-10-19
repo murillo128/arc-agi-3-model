@@ -44,6 +44,16 @@ def skill_game(session):
 
 
 def human_help(session):
+    if session.selected['source'] == 'synthetic' and session.selected['id'] == 'mc01-v1':
+        return {
+            'title': 'Square Cross Maze',
+            'text': 'Move the square onto the cross through the floor corridors. The other background colour marks fixed walls: the whole square must fit through a passage. Six levels introduce horizontal and vertical paths, one turn, two turns, dead ends and loops with alternative routes. Colours vary between seeds.',
+            'controls': ['↑ / ACTION1: Up', '↓ / ACTION2: Down', '← / ACTION3: Left', '→ / ACTION4: Right'],
+            'later_practice': [],
+            'addressing': 'The square is already selected. The cross stays fixed until you reach it.',
+            'keyboard': 'Use the arrow keys or D-pad. Each command moves one corridor cell. Click, Space and Undo are unavailable.',
+            'cost': 'Every arrow costs one move, even against a wall. The bar shows moves remaining. Reaching the cross on the last move still succeeds. RESET retries the current level after an attempt; after WIN it starts at level 1.',
+        }
     game = skill_game(session)
     if game is None:
         return None
