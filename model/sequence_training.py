@@ -1,4 +1,4 @@
-"""Train four independent game sessions with cross-level recurrent context.
+"""Train independent game sessions with cross-level recurrent context.
 
 Run: python -m model.sequence_training --training-config CONFIG --output DIR
 Use --source CHECKPOINT to warm-start weights, or --resume to retain optimizers.
@@ -62,10 +62,11 @@ def close_factories(factories):
 
 
 def collect_batch(factories, config, batch_index, seed, *, evaluation=False):
-    games = schedule_games(list(factories), batch_index, config)
+    games = schedule_games(list(factories), batch_index, config, seed=seed)
     sessions = []
     for i, game in enumerate(games):
         # Even training / odd evaluation seeds, including intra-session resets.
+        # Reserve a full batch's seed slots even when a shuffled round ends short.
         session_seed = 4_000_000 + 2 * (seed * 10_000 + batch_index * config.batch_games + i) + int(evaluation)
         factory, levels = factories[game]
         sessions.append(collect_session(factory, levels, session_seed, config))

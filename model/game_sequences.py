@@ -96,9 +96,19 @@ def collect_session(factory, levels, seed, config):
     return session
 
 
-def schedule_games(games, batch_index, config):
+def schedule_games(games, batch_index, config, *, seed=0):
+    """Choose sessions; shuffled rounds are reproducible from the saved batch count."""
     if not games or len(set(games)) != len(games):
         raise ValueError('Expected distinct configured games')
+    if type(batch_index) is not int or batch_index < 0 or type(seed) is not int or seed < 0:
+        raise ValueError('Batch index and seed must be nonnegative integers')
+    if config.game_schedule == 'shuffled':
+        batches_per_round = (len(games) + config.batch_games - 1) // config.batch_games
+        round_index, slot = divmod(batch_index, batches_per_round)
+        order = list(games)
+        random.Random(f'sequence-games:{seed}:{round_index}').shuffle(order)
+        start = slot * config.batch_games
+        return order[start:start + config.batch_games]
     return [games[(batch_index * config.batch_games + i) % len(games)]
             if config.game_schedule == 'interleaved' else games[batch_index % len(games)]
             for i in range(config.batch_games)]

@@ -219,6 +219,80 @@ class SequenceTrainingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Encoder changed'):
             learner.update(encoded, 0, 2)
 
+    def test_shuffled_rounds_cover_every_game_once_with_a_short_tail(self):
+        games = [f'game-{i}' for i in range(71)]
+        c = SequenceConfig(batch_games=8, game_schedule='shuffled')
+        rounds = []
+        for epoch in range(4):
+            batches = [schedule_games(games, epoch * 9 + i, c, seed=7) for i in range(9)]
+            self.assertEqual([len(b) for b in batches], [8] * 8 + [7])
+            flat = [g for b in batches for g in b]
+            self.assertCountEqual(flat, games)
+            self.assertEqual(len(set(flat)), 71)
+            for i, batch in enumerate(batches):
+                self.assertEqual(batch, schedule_games(games, epoch * 9 + i, c, seed=7))
+            rounds.append(flat)
+        self.assertNotEqual(rounds[0], rounds[1])
+        self.assertNotEqual(schedule_games(games, 0, c, seed=7), schedule_games(games, 0, c, seed=8))
+        self.assertEqual(games, [f'game-{i}' for i in range(71)], 'caller order is unchanged')
+        self.assertCountEqual(schedule_games(['a', 'b'], 0, c), ['a', 'b'])
+        self.assertEqual(schedule_games(['a'], 1, c), ['a'])
+        self.assertEqual(schedule_games(['a', 'b', 'c'], 1, SequenceConfig()), ['b', 'c', 'a', 'b'])
+        for batch, seed in ((-1, 0), (True, 0), (0, -1), (0, True)):
+            with self.subTest(batch=batch, seed=seed), self.assertRaises(ValueError):
+                schedule_games(games, batch, c, seed=seed)
+
+    def test_shuffled_collection_keeps_unique_seed_slots_across_short_batches(self):
+        from model.sequence_training import collect_batch
+        factories = {name: (SimpleNamespace(game_id=name), [1]) for name in ('a', 'b', 'c')}
+        c = SequenceConfig(batch_games=2, game_schedule='shuffled')
+        def collect(factory, levels, seed, config):
+            return session(game=factory.game_id, seed=seed)
+        with patch('model.sequence_training.collect_session', side_effect=collect):
+            rows = [collect_batch(factories, c, i, 0) for i in range(3)]
+            evaluated = [collect_batch(factories, c, i, 0, evaluation=True) for i in range(3)]
+        self.assertEqual([len(b) for b in rows], [2, 1, 2])
+        self.assertEqual([s.seed for b in rows for s in b], [4000000, 4000002, 4000004, 4000008, 4000010])
+        self.assertEqual([s.seed for b in evaluated for s in b], [4000001, 4000003, 4000005, 4000009, 4000011])
+        self.assertEqual({s.game for b in rows[:2] for s in b}, set(factories))
+
+    def test_shuffled_cpu_resume_crosses_round_boundary_exactly(self):
+        from model import checkpoint
+        from model.sequence_training import run
+        from model.tests.test_training_config import config
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            path, values = config(root, [dict(source='synthetic', game=g, levels=[1], objective='world_model')
+                for g in ('sc01-v1', 'si01-v1', 'bf01-v1')],
+                sequence=dict(batch_games=2, session_steps=2, block_steps=2, context_steps=1,
+                              level_steps=2, representation_updates=2, game_schedule='shuffled'))
+            values['settings']['actions'] = 100
+            path.write_text(json.dumps(values))
+            def args(name, batches, resume=False):
+                return SimpleNamespace(training_config=path, output=root/name, source=None, resume=resume,
+                                       device='cpu', compile=False, max_batches=batches)
+            run(args('resumed', 2))
+            saved = checkpoint.load(root/'resumed/latest.pt')
+            self.assertEqual(saved['progress']['batches'], 2)
+            self.assertTrue(saved['representation_optimizer']['state'])
+            self.assertTrue(saved['predictor_optimizer']['state'])
+            run(args('resumed', 1, resume=True))
+            run(args('continuous', 3))
+            a, b = [checkpoint.load(root/name/'latest.pt') for name in ('resumed', 'continuous')]
+            self.assertEqual(a['progress'], b['progress'])
+            for name, value in a['weights'].items():
+                torch.testing.assert_close(value, b['weights'][name], rtol=0, atol=0)
+            for owner in ('representation_optimizer', 'predictor_optimizer'):
+                self.assertEqual(a[owner]['param_groups'], b[owner]['param_groups'])
+                for key, state in a[owner]['state'].items():
+                    for field, value in state.items():
+                        torch.testing.assert_close(value, b[owner]['state'][key][field], rtol=0, atol=0)
+            torch.testing.assert_close(a['torch_rng'], b['torch_rng'], rtol=0, atol=0)
+            reports = [json.loads((root/name/'report.json').read_text()) for name in ('resumed', 'continuous')]
+            histories = [[row['sessions'] for row in r['history']] for r in reports]
+            self.assertEqual(histories[0], histories[1])
+            self.assertEqual([len(b) for b in histories[0]], [2, 1, 2])
+
     def test_invalid_sequence_options_fail_early(self):
         for kwargs in ({'batch_games': True}, {'session_steps': 0}, {'block_steps': 513},
                        {'loss_start_weight': 0}, {'loss_start_weight': float('nan')},
