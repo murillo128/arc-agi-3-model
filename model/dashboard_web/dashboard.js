@@ -99,9 +99,9 @@ class Chart {
       ctx.restore();
     });
     const selected=this.series.findIndex(s=>s.name===ChartTools.selected(this.id));
-    const last=this.series[selected]?.points.findLast(p=>finite(p.x)&&finite(p.y));
-    if(last)ChartTools.canvasGuide(ctx,{left,right,y:y(last.y),lastX:x(last.x),color:colors[selected%colors.length],
-      text:scalar(last.y)+this.suffix});
+    const last=this.series[selected]&&ChartTools.latestEMA(this.series[selected].points.map(p=>[p.x,p.y]));
+    if(last)ChartTools.canvasGuide(ctx,{left,right,y:y(last[1]),lastX:x(last[0]),color:colors[selected%colors.length],
+      text:scalar(last[1])+this.suffix});
   }
   hover(event) {
     if (!this.bounds || !this.series.some(s => s.points.length)) return;

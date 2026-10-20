@@ -111,7 +111,8 @@
     g.restore();
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText(String(rows[0].batch ?? rows[0].id ?? rows[0].t),left,h-10);
     g.textAlign='right'; g.fillText(String(rows.at(-1).batch ?? rows.at(-1).id ?? rows.at(-1).t),right,h-10);
-    if(ChartTools.selected(id)===label&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:stroke,text:sci(last[1])});
+    const endpoint=ChartTools.latestEMA(points);
+    if(ChartTools.selected(id)===label&&endpoint)ChartTools.canvasGuide(g,{left,right,y:y(endpoint[1]),lastX:x(endpoint[0]),color:stroke,text:sci(endpoint[1])});
   }
   function heatmap(id, grid) {
     if (!Array.isArray(grid) || !grid.length) { empty(id, 'Detail not captured for this update'); return; }
@@ -331,7 +332,8 @@
     ChartTools.canvasEMA(g,points,x,y,C.mint,style.emaWidth);
     g.restore();
     g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Truncation · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Loss · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('Final RMS ∂L / ∂h · log scale · zeros in amber at the floor',left,14);
-    if(ChartTools.selected('memory-gradient')&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:C.mint,text:sci(last[1])});
+    const endpoint=ChartTools.latestEMA(points);
+    if(ChartTools.selected('memory-gradient')&&endpoint)ChartTools.canvasGuide(g,{left,right,y:y(endpoint[1]),lastX:x(endpoint[0]),color:C.mint,text:sci(endpoint[1])});
     text('probe-loss',fmt(p.loss,4));text('probe-cleared',fmt(p.cleared_loss,4));
     text('probe-comparison',p.loss<p.cleared_loss?'History reduces the loss at this step.':p.loss>p.cleared_loss?'Clearing history reduces the loss at this step.':'No loss difference in this probe.');
     text('probe-game',`${p.game} / ${p.session+1}`);text('probe-batch',`${p.batch} / t = ${stop}`);text('probe-window',`${p.context_start}–${stop} · ${p.start-p.context_start} + ${p.stop-p.start} steps`);text('probe-cost',`${fmt(p.seconds,3)} s`);

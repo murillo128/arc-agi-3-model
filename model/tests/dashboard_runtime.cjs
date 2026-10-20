@@ -233,11 +233,11 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   const speed=single.nodes.get('speed'),button=single.nodes.get('speed-legend').children[0];
   assert(speed.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   button.listeners.click();
-  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='20'&&d[2]===8),'actual last value, not EMA');
+  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='2.9'&&d[2]===8),'latest EMA value');
   vm.runInContext("charts.speed.set([{name:'Prueba',points:[{x:0,y:20},{x:1,y:0}]}])",single.context);
   assert.equal(single.nodes.get('speed-legend').children[0],button);
   assert.equal(button['aria-pressed'],'true');
-  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='0'&&d[2]===8));
+  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='18'&&d[2]===8));
   button.listeners.click();
   assert(!speed.draws.some(d=>d[0]==='strokeRect'));
   single.context.fetch = async () => { throw Error('offline'); };

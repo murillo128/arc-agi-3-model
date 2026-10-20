@@ -126,7 +126,8 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   }
   const guide=element('g',{'class':'series-guide','pointer-events':'none','aria-hidden':'true'});svg.append(guide);
   state.update=()=>{
-    const selected=state.hovered??state.focused??labels.find(l=>l.key===state.selected)?.index, last=lastPoints[selected];
+    const selected=state.hovered??state.focused??labels.find(l=>l.key===state.selected)?.index;
+    const current=series[selected], last=current&&(current.pointsOnly?lastPoints[selected]:ChartTools.latestEMA(current.points));
     ChartTools.svgFocus(layers,last?selected:null);
     labels.forEach((label,i)=>{
       legend.children[i].setAttribute('data-highlighted',String(!!last&&label.index===selected));

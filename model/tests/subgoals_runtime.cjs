@@ -65,7 +65,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Update average · up to 512 actions: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Individual update: 2');
   assert.equal(nodes.get('loss-legend').children[1].title,
-    'Latest measurement · action 1 · Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest raw value.',
+    'Latest measurement · action 1 · Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest EMA value.',
     'missing latest sample does not fabricate a zero');
   assert.equal(text('successes'),'Levels solved: 1 · recent window');
   assert.equal(text('gpu-status'),'GPU · 73 % utilization · 71 °C');
@@ -859,10 +859,10 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('speed').children.filter(n=>n.class==='series-ema').length,1);
   legendButton.listeners.click();
   legendButton.listeners.blur();legendButton.listeners.pointerleave();
-  assert.equal(lastGuide().children[3].textContent,'20','pinned guide survives blur and pointer leave');
+  assert.equal(lastGuide().children[3].textContent,'2.9','pinned EMA guide survives blur and pointer leave');
   vm.runInContext("plot('speed',[{name:'Prueba',points:[[0,0],[1,10],[2,20],[3,0]]}])",context);
   assert.equal(nodes.get('speed-legend').children[0],legendButton);
-  assert.equal(lastGuide().children[3].textContent,'0');
+  assert.equal(lastGuide().children[3].textContent,'2.61');
   legendButton.listeners.click();
   assert.equal(lastGuide().children.length,0,'second click removes the guide');
   legendButton.listeners.click();
