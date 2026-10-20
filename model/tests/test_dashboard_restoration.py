@@ -1,5 +1,6 @@
 """Restored monitoring contracts; HTTP and data checks, never visual tests."""
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import threading
@@ -9,7 +10,69 @@ from urllib.request import urlopen
 from model.dashboard import make_server
 
 
+class PageStructure(HTMLParser):
+    """Read ownership of native controls without rendering the page."""
+    def __init__(self, html):
+        super().__init__()
+        self.stack = []
+        self.nodes = []
+        self.feed(html)
+
+    def handle_starttag(self, tag, attrs):
+        node = dict(tag=tag, attrs=dict(attrs), parents=list(self.stack))
+        self.nodes.append(node)
+        if tag not in {'meta', 'link', 'input', 'br', 'hr', 'img', 'source'}:
+            self.stack.append(node)
+
+    def handle_endtag(self, tag):
+        for index in range(len(self.stack) - 1, -1, -1):
+            if self.stack[index]['tag'] == tag:
+                del self.stack[index:]
+                break
+
+
 class DashboardRestorationTests(unittest.TestCase):
+    def test_shared_english_shell_keeps_local_tabs_and_native_links_in_one_navigation(self):
+        assets = Path(__file__).parents[1] / 'dashboard_web'
+        for name, sections in (
+            ('sequences', ('world', 'path', 'evaluation', 'curriculum')),
+            ('optimization', ('pulse', 'path', 'memory')),
+            ('subgoals', ('world', 'path', 'evaluation', 'curriculum')),
+            ('index', ('world', 'behavior', 'evaluations')),
+            ('campaign', ()),
+        ):
+            with self.subTest(page=name):
+                page = PageStructure((assets / f'{name}.html').read_text())
+                html = next(n for n in page.nodes if n['tag'] == 'html')
+                self.assertEqual(html['attrs']['lang'], 'en')
+                navs = [n for n in page.nodes if n['tag'] == 'nav']
+                self.assertEqual(len(navs), 1)
+                nav = navs[0]
+                self.assertEqual(nav['attrs']['class'], 'dashboard-tabs')
+                self.assertTrue(any(p['attrs'].get('class') == 'dashboard-header' for p in nav['parents']))
+                ids = [n['attrs']['id'] for n in page.nodes if 'id' in n['attrs']]
+                self.assertEqual(len(ids), len(set(ids)), 'every control has a unique target')
+                for section in sections:
+                    tab = next(n for n in page.nodes if n['attrs'].get('id') == f'tab-{section}')
+                    self.assertEqual(tab['tag'], 'button')
+                    self.assertEqual(tab['attrs']['role'], 'tab')
+                    self.assertIn(nav, tab['parents'])
+                    self.assertIn(tab['attrs']['aria-controls'], ids)
+                links = [n for n in page.nodes if n['tag'] == 'a' and nav in n['parents']]
+                self.assertTrue(links)
+                self.assertTrue(all(n['attrs'].get('href') for n in links))
+                self.assertTrue(all(n['attrs'].get('role') != 'tab' for n in links))
+                if name == 'sequences':
+                    by_id = {n['attrs']['id']: n for n in page.nodes if 'id' in n['attrs']}
+                    games = by_id['curriculum-games']
+                    self.assertIn(by_id['curriculum'], games['parents'])
+                    self.assertFalse(any(p['attrs'].get('class') == 'dashboard-header' for p in games['parents']))
+                    for key in ('configuration', 'learning-rates', 'run-info'):
+                        parents = by_id[key]['parents']
+                        self.assertTrue(any(p['tag'] == 'details' for p in parents))
+                        self.assertFalse(any(p['attrs'].get('class') == 'dashboard-header' for p in parents))
+                    self.assertEqual(by_id['history-link']['attrs']['href'], 'history.html#path')
+
     def test_sequence_home_retains_monitoring_sections_alongside_optimization(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / 'report.json'

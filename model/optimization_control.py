@@ -144,11 +144,11 @@ class OptimizationControl:
 
     def snapshot(self):
         if self.report_path is None:
-            return dict(status='unavailable', message='Esta ejecución no registra optimización por secuencias.')
+            return dict(status='unavailable', message='This run does not record sequence optimization.')
         try:
             path = self.report_path.with_name('optimization.json')
             if path.stat().st_size > 8 * 1024**2 or self.report_path.stat().st_size > 8 * 1024**2:
-                raise ValueError('El registro de optimización supera el límite de lectura.')
+                raise ValueError('The optimization record exceeds the read limit.')
             def reject_constant(value):
                 raise ValueError('Non-finite diagnostic value')
             def finite_float(value):
@@ -163,14 +163,14 @@ class OptimizationControl:
             if (run.get('kind') != 'game_sequences' or not _integer(run['progress']['batches']) or
                     state.get('identity') != run.get('optimization_identity') or
                     state['batch'] > run['progress']['batches']):
-                raise ValueError('Esperando un registro compatible con el último batch guardado.')
+                raise ValueError('Waiting for a record compatible with the last saved batch.')
             age = max(0., time.time() - state['updated_at'])
             state.update(status='ready', age_seconds=age, running=run.get('status') == 'running',
                          session_count=session_count)
             state['control'] = dict(token=self.token, enabled=state['running'] and age < 300)
             return state
         except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
-            return dict(status='waiting', message='Esperando la primera captura de optimización. El historial anterior no contiene gradientes.')
+            return dict(status='waiting', message='Waiting for the first optimization capture. Earlier history contains no gradients.')
 
     def authorized(self, token):
         return isinstance(token, str) and hmac.compare_digest(self.token, token)
@@ -179,25 +179,25 @@ class OptimizationControl:
         with self.lock:
             state = self.snapshot()
             if state.get('status') != 'ready' or not state['control']['enabled']:
-                raise RuntimeError('El entrenador no está disponible para capturas.')
+                raise RuntimeError('The trainer is unavailable for captures.')
             if not isinstance(data, dict):
-                raise ValueError('Solicitud no válida.')
+                raise ValueError('Invalid request.')
             operation = data.get('operation')
             if operation == 'matrix':
                 if set(data) != {'operation', 'matrix'} or data['matrix'] not in {m['name'] for m in state['catalog']}:
-                    raise ValueError('Selecciona una matriz registrada.')
+                    raise ValueError('Select a registered matrix.')
             elif operation == 'probe':
                 if (set(data) != {'operation', 'session'} or type(data['session']) is not int or
                         not 0 <= data['session'] < state['session_count']):
-                    raise ValueError('Selecciona una sesión válida.')
+                    raise ValueError('Select a valid session.')
             elif operation != 'recalibrate' or set(data) != {'operation'}:
-                raise ValueError('Operación no válida.')
+                raise ValueError('Invalid operation.')
             path = self.report_path.with_name('optimization_request.json')
             if path.exists():
-                raise RuntimeError('Ya hay una captura pendiente; se atenderá al comenzar el próximo batch.')
+                raise RuntimeError('A capture is already pending; it will be handled at the start of the next batch.')
             request_id = secrets.token_hex(8)
             payload = dict(data, identity=state['identity'], id=request_id)
             temporary = path.with_suffix('.tmp')
             temporary.write_text(json.dumps(payload, allow_nan=False))
             temporary.replace(path)
-            return dict(id=request_id, status='pending', message='Solicitud pendiente del próximo batch.')
+            return dict(id=request_id, status='pending', message='Request pending until the next batch.')

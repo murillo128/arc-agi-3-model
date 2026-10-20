@@ -3,30 +3,30 @@ const $ = id => document.getElementById(id);
 const historicalView = globalThis.location?.pathname?.endsWith('/history.html') === true;
 const reportApi = historicalView ? 'api/history/' : 'api/';
 const finite = x => typeof x === 'number' && Number.isFinite(x);
-const fmt = (x, n=0) => finite(x) ? x.toLocaleString('es-ES', {maximumFractionDigits:n}) : '—';
+const fmt = (x, n=0) => finite(x) ? x.toLocaleString('en-US', {maximumFractionDigits:n}) : '—';
 // Same pinned SDK palette as viewer/src/canvas.ts.
 const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31','#1e93ff','#88d8f1','#ffdc00','#ff851b','#921231','#4fcc30','#a356d6'];
 const colors = ['#77dabb','#f4b979','#a9a6ef','#94a7aa'];
-const deltaKinds = [['Inventados','invented'],['Omitidos','missed'],['Color incorrecto','color'],['Acertados','correct']];
-const predictorLossKinds = [['MSE latente','latent'],['NLL visual','delta_nll'],
-  ['Error de solapamiento','delta_overlap'],['Rollout · total','rollout']];
+const deltaKinds = [['Invented','invented'],['Missed','missed'],['Wrong color','color'],['Correct','correct']];
+const predictorLossKinds = [['Latent MSE','latent'],['Visual NLL','delta_nll'],
+  ['Overlap error','delta_overlap'],['Rollout · total','rollout']];
 const namespace = 'http://www.w3.org/2000/svg';
 const chartStates = new Map();
 function gpuStatus(sample) {
   const devices=sample?.devices||[], status=$('gpu-status');
   status.textContent=devices.length ? devices.map(gpu=>
-    `GPU${devices.length>1?' '+gpu.index:''} · ${fmt(gpu.utilization_percent)} % de uso · ${fmt(gpu.temperature_c)} °C`).join('\n')
-    : 'GPU · datos no disponibles';
+    `GPU${devices.length>1?' '+gpu.index:''} · ${fmt(gpu.utilization_percent)} % utilization · ${fmt(gpu.temperature_c)} °C`).join('\n')
+    : 'GPU · data unavailable';
   status.title=devices.length
-    ? `${devices.map(gpu=>gpu.name).join(', ')}. Lectura actual del servidor; incluye otros procesos. Se consulta cada 2 s.`
-    : 'No se ha podido consultar la GPU del servidor.';
+    ? `${devices.map(gpu=>gpu.name).join(', ')}. Current server reading; includes other processes. Polled every 2 s.`
+    : 'Could not read server GPU status.';
 }
 function element(tag, attributes={}, text='') {
   const node = document.createElementNS(namespace, tag);
   for (const [k,v] of Object.entries(attributes)) node.setAttribute(k, v);
   node.textContent=text; return node;
 }
-function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, digits=2, minimumRange=1, empty='Pendiente de datos de esta ejecución'}={}) {
+function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, digits=2, minimumRange=1, empty='Waiting for data from this run'}={}) {
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren();
   if(!chartStates.has(id))chartStates.set(id,{hovered:null,focused:null,selected:null});
   const state=chartStates.get(id), lastPoints=series.map(s=>s.points.findLast(p=>finite(p[0])&&finite(p[1])));
@@ -39,7 +39,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     if(s.legend===false)return;
     const last=lastPoints[i];
     labels.push({key:`series:${s.name}`,index:i,text:`${s.name}: ${last?fmt(last[1],digits)+suffix:'—'}`,
-      title:last?`Último dato medido · acción ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'Sin mediciones',
+      title:last?`Latest measurement · action ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'No measurements',
       className:s.muted?'series-muted':`series-${s.colorIndex??i%4}`});
   });
   // Coincident limits share one line and label, rather than hiding each other.
@@ -51,10 +51,10 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   }
   const references=[...byValue.values()];
   for(const ref of references) {
-    labels.push({key:`threshold:${ref.name}`,text:`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`,
+    labels.push({key:`threshold:${ref.name}`,text:`Threshold · ${ref.name}: ${fmt(ref.value,2)}${suffix}`,
       className:`threshold-label series-${ref.colorIndex??3}`});
   }
-  if(markers.length)labels.push({key:'no-change',text:'Banda inferior: sin cambios reales ni predichos',className:'series-muted'});
+  if(markers.length)labels.push({key:'no-change',text:'Bottom band: no real or predicted changes',className:'series-muted'});
   // Keep the actual buttons across polling redraws, preserving hover and focus.
   const signature=JSON.stringify(labels.map(l=>l.key));
   if(state.signature!==signature) {
@@ -101,7 +101,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   for(const ref of references) {
     const line=element('line',{x1:58,y1:y(ref.value),x2:width-22,y2:y(ref.value),
       stroke:colors[ref.colorIndex??3],'stroke-width':1,'stroke-dasharray':'2 4',opacity:.75});
-    line.append(element('title',{},`Límite · ${ref.name}: ${fmt(ref.value,2)}${suffix}`));svg.append(line);
+    line.append(element('title',{},`Threshold · ${ref.name}: ${fmt(ref.value,2)}${suffix}`));svg.append(line);
   }
   const layers=series.map(()=>[]);
   series.forEach((s,i)=>{
@@ -115,14 +115,14 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
       if(!finite(p[0])||!finite(p[1])) {flush();continue;}
       if(!s.pointsOnly)segment.push(p);
       const circle=element('circle',{cx:x(p[0]),cy:y(p[1]),r:s.pointsOnly?3:2,fill:color,opacity});
-      circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
+      circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · action ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
     }
     flush();
     if(!s.pointsOnly)for(const node of ChartTools.svgEMA(s.points,x,y,color,opacity))append(node);
   });
   if(markers.length) {
-    for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`Sin cambios reales ni predichos · acciones ${m.start}–${m.end}`));svg.append(mark);}
-    if(!points.length)svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},'Sin cambios: no hay porcentaje de error que medir'));
+    for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`No real or predicted changes · actions ${m.start}–${m.end}`));svg.append(mark);}
+    if(!points.length)svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},'No changes: no error percentage to measure'));
   }
   const guide=element('g',{'class':'series-guide','pointer-events':'none','aria-hidden':'true'});svg.append(guide);
   state.update=()=>{
@@ -168,7 +168,7 @@ function predictionSample(sample) {
   picture('prediction-difference',difference,null,colors);
   const legend=$('prediction-difference-legend');legend.replaceChildren();
   if(!sample) {
-    $('prediction-sample-info').textContent='Esperando una predicción y su resultado real…';
+    $('prediction-sample-info').textContent='Waiting for a prediction and its actual outcome…';
     $('prediction-sample-error').textContent='';return;
   }
   deltaKinds.forEach(([name],i)=>{
@@ -177,10 +177,10 @@ function predictionSample(sample) {
   });
   const command=sample.action, coordinates=command.id===6?` (${command.data.x}, ${command.data.y})`:'';
   const age=Math.max(0,(Date.now()/1000)-sample.captured_at);
-  $('prediction-sample-info').textContent=`${sample.game} · nivel ${fmt(sample.level)} · partida ${sample.episode_seed} · paso ${fmt(sample.episode_action)} · ACTION${command.id}${coordinates} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · acción de entrenamiento ${fmt(sample.training_action)} · hace ${fmt(age)} s`;
+  $('prediction-sample-info').textContent=`${sample.game} · level ${fmt(sample.level)} · episode ${sample.episode_seed} · step ${fmt(sample.episode_action)} · ACTION${command.id}${coordinates} · ${sample.phase==='training'?'Training':'Evaluation'} · training action ${fmt(sample.training_action)} · ${fmt(age)} s ago`;
   $('prediction-sample-error').textContent=sample.union>0
-    ? `Error de esta muestra: ${fmt(100*sample.wrong/sample.union,2)} % · ${fmt(sample.wrong)} / ${fmt(sample.union)} píxeles cambiados en cualquiera de los dos deltas.`
-    : 'Sin cambios reales ni predichos en esta acción.';
+    ? `Error in this sample: ${fmt(100*sample.wrong/sample.union,2)} % · ${fmt(sample.wrong)} / ${fmt(sample.union)} pixels changed in either delta.`
+    : 'No real or predicted changes in this action.';
 }
 const trajectoryPlayer={sample:null,frames:[],states:[],steps:[],extent:0,position:0,playing:false,timer:null,fetching:false,matrixId:null,cells:[]};
 function stopTrajectory(){
@@ -191,9 +191,9 @@ function frameImage(frame){
   return frame?Array.from({length:frame.height},(_,y)=>Array.from({length:frame.width},(_,x)=>frame.pixels.charCodeAt(frame.offset+y*frame.width+x))):null;
 }
 function actionLabel(action){
-  if(!action)return 'Inicio';
+  if(!action)return 'Start';
   // Official input controls (https://docs.arcprize.org/actions), not inferred game effects.
-  const names={0:'Reiniciar',1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'↶ Deshacer'};
+  const names={0:'Reset',1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'↶ Undo'};
   return `A${action.id} ${names[action.id]||''}${action.id===6?` (${action.data.x}, ${action.data.y})`:''}`.trim();
 }
 function sameAction(a,b){
@@ -204,20 +204,20 @@ function renderObservationContext(){
   const player=trajectoryPlayer, sample=player.sample, frame=player.frames[player.position], p=displayedReport?.progress||{};
   if(!sample){
     picture('observation',p.observation);picture('goal',p.goal_frame,p.goal_mask);
-    $('observation-context').textContent='Interacción actual';
-    $('observation-detail').textContent=p.game?`${p.game} / nivel ${fmt(p.level)}`:'Esperando una observación…';
-    $('goal-context').textContent=p.goal||'Objetivo actual';
+    $('observation-context').textContent='Current interaction';
+    $('observation-detail').textContent=p.game?`${p.game} / level ${fmt(p.level)}`:'Waiting for an observation…';
+    $('goal-context').textContent=p.goal||'Current goal';
     const curriculum=displayedReport?.curriculum;
     $('goal-detail').textContent=curriculum?.ordered_stages?.[curriculum.index]?.objective==='world_model'
-      ?'Etapa sin profesor de subobjetivos: se aprende la dinámica con acciones aleatorias.'
-      :'Imagen del profesor. Cuadrícula: zona excluida del objetivo.';
+      ?'Stage without a subgoal teacher: dynamics are learned from random actions.'
+      :'Teacher-provided image. Checkerboard: area excluded from the goal.';
     return;
   }
   picture('observation',frameImage(frame));picture('goal',frameImage(frame.goalImage));
-  $('observation-context').textContent=`Muestra seleccionada · t = ${frame.step}`;
-  $('observation-detail').textContent=`${sample.game} / nivel ${sample.level} · partida ${sample.episode_seed} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · frame ${player.position+1}/${player.frames.length}`;
-  $('goal-context').textContent=frame.goal||'Subobjetivo de la muestra';
-  $('goal-detail').textContent=frame.goalImage?'Objetivo de esta acción. Cuadrícula: zona excluida del objetivo.':'Esta muestra antigua no incluye la imagen del subobjetivo.';
+  $('observation-context').textContent=`Selected sample · t = ${frame.step}`;
+  $('observation-detail').textContent=`${sample.game} / level ${sample.level} · episode ${sample.episode_seed} · ${sample.phase==='training'?'Training':'Evaluation'} · frame ${player.position+1}/${player.frames.length}`;
+  $('goal-context').textContent=frame.goal||'Sample subgoal';
+  $('goal-detail').textContent=frame.goalImage?'Goal for this action. Checkerboard: area excluded from the goal.':'This older sample does not include a subgoal image.';
 }
 function buildTrajectoryMatrix(){
   const player=trajectoryPlayer, table=$('trajectory-matrix');
@@ -226,9 +226,9 @@ function buildTrajectoryMatrix(){
   const make=(tag,className='',text='')=>{const node=document.createElement(tag);node.className=className;node.textContent=text;return node;};
   const track=(node,t)=>{player.cells.push({node,t});return node;};
   const thumb=(frame,label)=>{const canvas=make('canvas','trajectory-thumb');canvas.setAttribute('role','img');canvas.setAttribute('aria-label',label);picture(canvas,frameImage(frame));return canvas;};
-  const caption=make('caption','sr-only','Tiempo de izquierda a derecha. Cada fila imaginada parte de un estado real; las columnas alinean el instante de destino.');
+  const caption=make('caption','sr-only','Time advances from left to right. Each imagined row starts from a real state; columns align the destination time.');
   const cols=make('colgroup');cols.append(make('col','trajectory-label-column'));
-  const head=make('thead'), headRow=make('tr');headRow.append(make('th','trajectory-row-label','Instante'));
+  const head=make('thead'), headRow=make('tr');headRow.append(make('th','trajectory-row-label','Time'));
   for(let t=0;t<=player.extent;t++){
     cols.append(track(make('col'),t));
     const cell=track(make('th','trajectory-time',`t = ${t}`),t);cell.setAttribute('scope','col');headRow.append(cell);
@@ -240,34 +240,34 @@ function buildTrajectoryMatrix(){
     const cell=track(make('td','trajectory-cell'),t), frame=player.states[t];
     cell.setAttribute('data-time',t);
     if(frame){
-      const button=make('button','trajectory-state');button.type='button';button.setAttribute('aria-label',`Ver estado real t = ${t} · ${actionLabel(frame.action)}`);
-      button.append(thumb(frame,`Estado real t = ${t}`),make('span','action-badge',actionLabel(frame.action)));
-      if(frame.source==='exploration')button.append(make('small','trajectory-source','Exploración'));
+      const button=make('button','trajectory-state');button.type='button';button.setAttribute('aria-label',`View real state t = ${t} · ${actionLabel(frame.action)}`);
+      button.append(thumb(frame,`Real state t = ${t}`),make('span','action-badge',actionLabel(frame.action)));
+      if(frame.source==='exploration')button.append(make('small','trajectory-source','Exploration'));
       button.addEventListener('click',()=>seekTrajectory(frame.frameIndex));track(button,t);cell.append(button);
-    }else cell.append(make('span','trajectory-absent','Sin observar'));
+    }else cell.append(make('span','trajectory-absent','Not observed'));
     real.append(cell);
   }
   body.append(real);
-  const separator=make('tr','trajectory-section'), section=make('th','','IMAGINACIÓN · una fila por origen');
+  const separator=make('tr','trajectory-section'), section=make('th','','IMAGINATION · one row per origin');
   section.colSpan=player.extent+2;separator.append(section);body.append(separator);
   const spacer=count=>{const node=make('td','trajectory-spacer');node.colSpan=count;return node;};
   player.steps.forEach((step,origin)=>{
     const row=make('tr','trajectory-imagined');row.setAttribute('data-origin',origin);
-    const label=make('th','trajectory-row-label',`Desde t = ${origin}`);label.setAttribute('scope','row');row.append(label);
-    const routeLabel={selected_route:'Ruta elegida',searched_continuation:'Continuación explorada',searched_alternative:'Alternativa explorada'}[step.imagination_source];
+    const label=make('th','trajectory-row-label',`From t = ${origin}`);label.setAttribute('scope','row');row.append(label);
+    const routeLabel={selected_route:'Selected route',searched_continuation:'Explored continuation',searched_alternative:'Explored alternative'}[step.imagination_source];
     if(routeLabel)label.append(make('small','trajectory-route-kind',routeLabel));
-    for(const [name,estimate] of [['Elección',step.selected_estimate],['Vista',step.forecast_estimate]]){
+    for(const [name,estimate] of [['Choice',step.selected_estimate],['Preview',step.forecast_estimate]]){
       if(estimate&&finite(estimate.success_probability)&&estimate.success_probability>=0&&estimate.success_probability<=1
           &&finite(estimate.successful_actions)&&estimate.successful_actions>=0&&finite(estimate.remaining_budget)){
-        const summary=`${name} · ${fmt(100*estimate.success_probability)} % · ${fmt(estimate.successful_actions)} acc.`;
+        const summary=`${name} · ${fmt(100*estimate.success_probability)} % · ${fmt(estimate.successful_actions)} actions`;
         const detail=make('small','trajectory-route-kind',summary);
-        detail.title=`Probabilidad de éxito y duración si tiene éxito. Estimación al decidir, con ${estimate.remaining_budget} acciones disponibles; incluye prefijo imaginado y duración restante. No es un resultado observado.`;
+        detail.title=`Success probability and duration if successful. Estimated at decision time, with ${estimate.remaining_budget} actions available; includes the imagined prefix and remaining duration. This is not an observed outcome.`;
         label.append(detail);
       }
     }
     if(origin)row.append(spacer(origin));
-    const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Origen');
-    button.type='button';button.setAttribute('aria-label',`Ver origen t = ${origin}`);
+    const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Source');
+    button.type='button';button.setAttribute('aria-label',`View origin t = ${origin}`);
     button.addEventListener('click',()=>seekTrajectory(player.states[origin].frameIndex));originCell.append(button);row.append(originCell);
     let diverged=false;
     step.imagination.forEach((prediction,index)=>{
@@ -276,19 +276,19 @@ function buildTrajectoryMatrix(){
       const cell=track(make('td','trajectory-cell trajectory-prediction'),destination);
       cell.setAttribute('data-origin',origin);cell.setAttribute('data-time',destination);
       cell.setAttribute('data-diverged',String(diverged));
-      const label=`Predicción de t = ${destination} desde t = ${origin} · ${actionLabel(prediction.action)}`;
+      const label=`Prediction of t = ${destination} from t = ${origin} · ${actionLabel(prediction.action)}`;
       cell.append(thumb(prediction.image,label),make('span','action-badge',`+${index+1} · ${actionLabel(prediction.action)}`));
-      if(diverged)cell.append(make('small','trajectory-route','Ruta distinta'));
-      else if(!actual)cell.append(make('small','trajectory-source','Sin resultado real'));
-      cell.title=label+(diverged?' · La secuencia imaginada difiere de la ejecutada':'');row.append(cell);
+      if(diverged)cell.append(make('small','trajectory-route','Different route'));
+      else if(!actual)cell.append(make('small','trajectory-source','No real outcome'));
+      cell.title=label+(diverged?' · The imagined sequence differs from the executed sequence':'');row.append(cell);
     });
     const remaining=player.extent-origin-step.imagination.length;
     if(remaining){
       const empty=spacer(remaining);
       if(!step.imagination.length){
         empty.className+=' trajectory-missing';
-        empty.textContent=step.imagination_status==='exploration'?'Exploración aleatoria · sin ruta imaginada'
-          :player.sample.format_version===2?'Sin ruta seleccionada':'Muestra anterior · sin predicciones guardadas';
+        empty.textContent=step.imagination_status==='exploration'?'Random exploration · no imagined route'
+          :player.sample.format_version===2?'No selected route':'Older sample · no saved predictions';
       }
       row.append(empty);
     }
@@ -299,44 +299,44 @@ function buildTrajectoryMatrix(){
 function renderTrajectory(){
   const player=trajectoryPlayer, sample=player.sample, frame=player.frames[player.position];
   $('trajectory-viewer').hidden=!sample;
-  $('trajectory-mode').textContent=$('trajectory-live').checked?'Actualización automática':'Muestra fijada';
+  $('trajectory-mode').textContent=$('trajectory-live').checked?'Auto-refresh':'Sample pinned';
   $('trajectory-mode').setAttribute('data-pinned',String(!$('trajectory-live').checked));
   renderObservationContext();
   if(!sample){if(player.matrixId)buildTrajectoryMatrix();return;}
   if(player.matrixId!==sample.id)buildTrajectoryMatrix();
   for(const {node,t} of player.cells){node.setAttribute('data-selected',String(t===frame.step));if(node.className==='trajectory-state')node.setAttribute('aria-pressed',String(t===frame.step));}
-  const reasons={success:'Nivel resuelto',game_over:'Game over',budget:'Límite de acciones',interrupted:'Interrumpida',unreachable_subgoal:'Objetivo inaccesible'};
-  $('trajectory-info').textContent=`${sample.game} / nivel ${sample.level} · partida ${sample.episode_seed} · ${sample.phase==='training'?'Entrenamiento':'Evaluación'} · ${sample.actions} acciones · ${reasons[sample.reason]||sample.reason} · capturada en acción ${fmt(sample.training_action)}`;
-  $('trajectory-play').textContent=player.playing?'Pausar animación':'Reproducir animación';
+  const reasons={success:'Level solved',game_over:'Game over',budget:'Action limit',interrupted:'Interrupted',unreachable_subgoal:'Unreachable goal'};
+  $('trajectory-info').textContent=`${sample.game} / level ${sample.level} · episode ${sample.episode_seed} · ${sample.phase==='training'?'Training':'Evaluation'} · ${sample.actions} actions · ${reasons[sample.reason]||sample.reason} · captured at action ${fmt(sample.training_action)}`;
+  $('trajectory-play').textContent=player.playing?'Pause animation':'Play animation';
   $('trajectory-prev').disabled=player.position===0;
   $('trajectory-next').disabled=player.position===player.frames.length-1;
   $('trajectory-position').max=String(player.frames.length-1);
   $('trajectory-position').value=String(player.position);
   const command=frame.action;
-  const action=command?`Acción ${frame.step}/${sample.actions} · ACTION${command.id}${command.id===6?` (${command.data.x}, ${command.data.y})`:''} · ${frame.source==='planner'?'Planner':'Exploración aleatoria'}`:'Estado inicial';
+  const action=command?`Action ${frame.step}/${sample.actions} · ACTION${command.id}${command.id===6?` (${command.data.x}, ${command.data.y})`:''} · ${frame.source==='planner'?'Planner':'Random exploration'}`:'Initial state';
   $('trajectory-step').textContent=`${action} · frame ${player.position+1}/${player.frames.length}${frame.goal?' · '+frame.goal:''}`;
   $('trajectory-position').setAttribute('aria-valuetext',$('trajectory-step').textContent);
 }
 function unpackTrajectory(sample){
-  if(!Number.isInteger(sample.actions)||sample.actions<1||sample.actions>128||!Array.isArray(sample.steps)||sample.steps.length!==sample.actions)throw Error('Trayectoria incompleta');
+  if(!Number.isInteger(sample.actions)||sample.actions<1||sample.actions>128||!Array.isArray(sample.steps)||sample.steps.length!==sample.actions)throw Error('Incomplete trajectory');
   const frames=[], states=[], steps=[];let bytes=0, extent=sample.actions;
   const unpack=(packed,maxColor=15)=>{
-    if(!packed||!Array.isArray(packed.shape)||packed.shape.length!==3)throw Error('Frames incompletos');
+    if(!packed||!Array.isArray(packed.shape)||packed.shape.length!==3)throw Error('Incomplete frames');
     const [count,height,width]=packed.shape;
-    if(![count,height,width].every(n=>Number.isInteger(n)&&n>0)||count*height*width>4*1024*1024)throw Error('Dimensiones inválidas');
+    if(![count,height,width].every(n=>Number.isInteger(n)&&n>0)||count*height*width>4*1024*1024)throw Error('Invalid dimensions');
     const pixels=atob(packed.pixels);bytes+=pixels.length;
-    if(pixels.length!==count*height*width||bytes>4*1024*1024)throw Error('Frames incompletos o demasiado grandes');
-    for(let i=0;i<pixels.length;i++)if(pixels.charCodeAt(i)>maxColor)throw Error('Color inválido');
+    if(pixels.length!==count*height*width||bytes>4*1024*1024)throw Error('Frames incomplete or too large');
+    for(let i=0;i<pixels.length;i++)if(pixels.charCodeAt(i)>maxColor)throw Error('Invalid color');
     return Array.from({length:count},(_,i)=>({width,height,pixels,offset:i*height*width}));
   };
-  const single=(packed,maxColor=15)=>{const result=unpack(packed,maxColor);if(result.length!==1)throw Error('Se esperaba un estado final');return result[0];};
+  const single=(packed,maxColor=15)=>{const result=unpack(packed,maxColor);if(result.length!==1)throw Error('Expected one final state');return result[0];};
   const validAction=action=>action&&Number.isInteger(action.id)&&action.id>=0&&action.id<=7&&action.data&&typeof action.data==='object';
   for(const [origin,step] of sample.steps.entries()){
-    if(!validAction(step.action))throw Error('Acción inválida');
+    if(!validAction(step.action))throw Error('Invalid action');
     const predictions=step.imagination??[];
-    if(!Array.isArray(predictions)||predictions.length>3)throw Error('Ruta imaginada inválida');
-    const imagination=predictions.map(p=>{if(!validAction(p.action))throw Error('Acción imaginada inválida');return {...p,image:single(p.frames)};});
-    if(step.source==='exploration'&&imagination.length)throw Error('La exploración no tiene una ruta seleccionada');
+    if(!Array.isArray(predictions)||predictions.length>3)throw Error('Invalid imagined route');
+    const imagination=predictions.map(p=>{if(!validAction(p.action))throw Error('Invalid imagined action');return {...p,image:single(p.frames)};});
+    if(step.source==='exploration'&&imagination.length)throw Error('Exploration has no selected route');
     steps.push({...step,goalImage:step.goal_frame?single(step.goal_frame,16):null,imagination});
     extent=Math.max(extent,origin+imagination.length);
   }
@@ -344,7 +344,7 @@ function unpackTrajectory(sample){
     for(const frame of unpack(entry.frames))frames.push({...entry,...frame,step:t,frameIndex:frames.length});
     states.push(frames.at(-1));
   }
-  if(frames.length!==sample.frame_count)throw Error('Trayectoria incompleta');
+  if(frames.length!==sample.frame_count)throw Error('Incomplete trajectory');
   return {frames,states,steps,extent};
 }
 async function refreshTrajectory(metadata){
@@ -352,7 +352,7 @@ async function refreshTrajectory(metadata){
   $('trajectory-warning').textContent=displayedReport?.trajectory_error||'';
   if(!metadata){
     stopTrajectory();player.sample=null;player.frames=[];player.states=[];player.steps=[];renderTrajectory();
-    $('trajectory-info').textContent=displayedReport?.trajectory_error||'Esperando una trayectoria terminada con el planner activo…';
+    $('trajectory-info').textContent=displayedReport?.trajectory_error||'Waiting for a completed trajectory with the planner active…';
     return;
   }
   if($('path').hidden||!$('trajectory-live').checked||player.fetching||player.sample?.id===metadata.id)return;
@@ -362,10 +362,10 @@ async function refreshTrajectory(metadata){
     if(!response.ok)throw Error('HTTP '+response.status);
     const sample=(await response.json()).trajectory;
     if(displayedReport?.planner_trajectory?.id!==metadata.id||!$('trajectory-live').checked)return;
-    if(!sample||sample.id!==metadata.id){$('trajectory-info').textContent='Esperando la nueva muestra completa…';return;}
+    if(!sample||sample.id!==metadata.id){$('trajectory-info').textContent='Waiting for the complete new sample…';return;}
     const decoded=unpackTrajectory(sample);
     stopTrajectory();Object.assign(player,decoded,{sample,position:0});renderTrajectory();
-  }catch(error){$('trajectory-info').textContent='No se pudo cargar la trayectoria: '+error.message;}
+  }catch(error){$('trajectory-info').textContent='Could not load trajectory: '+error.message;}
   finally{player.fetching=false;}
 }
 function trajectoryTick(){
@@ -437,35 +437,35 @@ function renderGoalOutcomes(goals){
   // Missing/censored records must not silently become failures.
   const completed=goals.filter(g=>finite(g.x)&&typeof g.success==='boolean'&&finite(g.reward)).sort((a,b)=>a.x-b.x);
   const outcomes=completed.map(g=>[g.x,g.success?100:0,
-    `${g.game||'Juego sin dato'} / nivel ${fmt(g.level)} · ${g.goal||'Subobjetivo'} · ${fmt(g.actions)} acciones · mínimo ${fmt(g.minimum_actions)}`]);
+    `${g.game||'Unknown game'} / level ${fmt(g.level)} · ${g.goal||'Subgoal'} · ${fmt(g.actions)} actions · minimum ${fmt(g.minimum_actions)}`]);
   let start=0,end=0,wins=0;
   const rates=[...new Set(completed.map(g=>g.x))].map(x=>{
     while(end<completed.length&&completed[end].x<=x){wins+=Number(completed[end].success);end++;}
     while(start<end&&completed[start].x<=x-512){wins-=Number(completed[start].success);start++;}
     const total=end-start;
-    return [x,100*wins/total,`${fmt(wins)} ${wins===1?'éxito':'éxitos'} · ${fmt(total-wins)} ${total-wins===1?'fracaso':'fracasos'} · ${fmt(total)} ${total===1?'subobjetivo terminado':'subobjetivos terminados'}`];
+    return [x,100*wins/total,`${fmt(wins)} ${wins===1?'success':'successes'} · ${fmt(total-wins)} ${total-wins===1?'failure':'failures'} · ${fmt(total)} ${total===1?'completed subgoal':'completed subgoals'}`];
   });
   plot('subgoal-outcomes',[
-    {name:'Éxito',colorIndex:0,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===100)},
-    {name:'Fracaso',colorIndex:1,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===0)},
-    {name:'Éxito · hasta 512 acciones',colorIndex:2,points:rates}
-  ],{percent:true,empty:'Sin resultados de subobjetivos terminados'});
+    {name:'Success',colorIndex:0,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===100)},
+    {name:'Failure',colorIndex:1,legend:false,pointsOnly:true,points:outcomes.filter(p=>p[1]===0)},
+    {name:'Success · up to 512 actions',colorIndex:2,points:rates}
+  ],{percent:true,empty:'No completed subgoal results'});
   const last=rates.at(-1);
   $('subgoal-outcomes-summary').textContent=last
-    ?`Ventana en acción ${fmt(last[0])}: ${last[2]}. Cada subobjetivo cuenta una vez.`
-    :'Sin resultados registrados. Los intentos incompletos no cuentan como fracasos.';
+    ?`Window at action ${fmt(last[0])}: ${last[2]}. Each subgoal counts once.`
+    :'No results recorded. Incomplete attempts do not count as failures.';
 }
 function lossBreakdown(id, rows, key) {
   const target=$(id);target.replaceChildren();
   const row=rows.findLast(r=>r[key]&&Object.values(r[key]).some(finite));
-  if(!row){target.textContent='Sin una actualización registrada';return;}
-  const labels={color_ce:'Color',delta_nll:'Delta visual',delta_overlap:'Unión del delta',
-    local_reconstruction:'Reconstrucción local',sigreg:'SIGReg',variance_floor:'Varianza',
-    latent:'Delta latente',rollout:'Predicción encadenada'};
+  if(!row){target.textContent='No update recorded';return;}
+  const labels={color_ce:'Color',delta_nll:'Visual delta',delta_overlap:'Delta union',
+    local_reconstruction:'Local reconstruction',sigreg:'SIGReg',variance_floor:'Variance',
+    latent:'Latent delta',rollout:'Chained prediction'};
   Object.entries(row[key]).filter(([,v])=>finite(v)).forEach(([name,value],i)=>{
     const span=document.createElement('span');span.className=`series-${i%4}`;
     span.textContent=`${labels[name]||name}: ${fmt(value,4)}`;
-    span.title=`Contribución al total, con su peso aplicado · acción ${fmt(row.actions)}`;
+    span.title=`Contribution to total, with weight applied · action ${fmt(row.actions)}`;
     target.append(span);
   });
 }
@@ -516,7 +516,7 @@ function renderPlannerSuccess(report) {
   if(signature!==successOptionsKey) {
     successOptionsKey=signature;
     selector.replaceChildren(...pairs.map(r=>{const option=document.createElement('option');
-      option.value=pair(r);option.textContent=`${r.game} / nivel ${r.level}`;return option;}));
+      option.value=pair(r);option.textContent=`${r.game} / level ${r.level}`;return option;}));
   }
   selector.value=selected||'';selector.disabled=pairs.length<2;
   const byAction=new Map();
@@ -531,15 +531,15 @@ function renderPlannerSuccess(report) {
   const firstPlanner=sweeps.findIndex(([,policies])=>valid(policies.get('path_mpc')));
   // Earlier random-only evaluations would compress the planner's history to a sliver.
   if(firstPlanner>=0)sweeps=sweeps.slice(firstPlanner);
-  const series=[['Planner','path_mpc'],[baseline?'Azar · referencia fija':'Azar','random']].map(([name,policy])=>({name,
+  const series=[['Planner','path_mpc'],[baseline?'Random · fixed baseline':'Random','random']].map(([name,policy])=>({name,
     points:sweeps.map(([actions,policies])=>{const r=policy==='random'&&baseline?baseline:policies.get(policy);
-      return [actions,valid(r)?100*r.successes/r.episodes:null,valid(r)?`${r.successes}/${r.episodes} victorias`:''];})}));
+      return [actions,valid(r)?100*r.successes/r.episodes:null,valid(r)?`${r.successes}/${r.episodes} wins`:''];})}));
   const success=report.curriculum?.thresholds?.success??report.config?.success;
   plot('planner-success',series,{percent:true,responsive:true,
-    thresholds:finite(success)&&success>=0&&success<=1?[{name:'Éxito del currículo',value:100*success,colorIndex:2}]:[],
-    empty:'Pendiente de evaluaciones de éxito de este nivel'});
+    thresholds:finite(success)&&success>=0&&success<=1?[{name:'Curriculum success',value:100*success,colorIndex:2}]:[],
+    empty:'Waiting for success evaluations for this level'});
   $('planner-success-summary').textContent=series.map((s,i)=>{const last=s.points.findLast(p=>finite(p[1]));
-    return last?`${s.name}: ${last[2]} · ${i===1&&baseline?'medida una vez en acción':'acción'} ${fmt(i===1&&baseline?baseline.actions:last[0])}`:`${s.name}: sin evaluación disponible`;}).join(' · ');
+    return last?`${s.name}: ${last[2]} · ${i===1&&baseline?'measured once at action':'action'} ${fmt(i===1&&baseline?baseline.actions:last[0])}`:`${s.name}: no evaluation available`;}).join(' · ');
 }
 $('planner-success-level').addEventListener('change',()=>{
   successPairSelection=$('planner-success-level').value;
@@ -549,37 +549,36 @@ let displayedReport;
 let curriculumCells=[];
 function render(report) {
   displayedReport=report;
-  $('history-nav').hidden=!historicalView;
+  $('training-nav').hidden=!historicalView;
   $('training-nav').setAttribute('aria-current',historicalView?'false':'page');
-  $('history-nav').setAttribute('aria-current',historicalView?'page':'false');
   const p=report.progress||{}, c=report.config||{};
   const representationFrozen=p.representation_frozen===true;
   const encoderFrozen=representationFrozen||(p.encoder_frozen??c.freeze_encoder)===true;
-  const phases={loading:'Cargando pesos',warmup:'Preparando torch.compile y la primera acción',training:'Entrenando',evaluation:'Evaluando con pesos congelados',checkpoint:'Guardando pesos',complete:'Terminado',converged:'Currículo superado',budget_exhausted:'Presupuesto agotado · currículo pendiente',failed:'Detenido por error'};
-  $('connection').textContent=phases[p.phase]||'Esperando entrenamiento';
+  const phases={loading:'Loading weights',warmup:'Preparing torch.compile and the first action',training:'Training',evaluation:'Evaluating with frozen weights',checkpoint:'Saving weights',complete:'Finished',converged:'Curriculum passed',budget_exhausted:'Budget exhausted · curriculum pending',failed:'Stopped due to an error'};
+  $('connection').textContent=phases[p.phase]||'Waiting for training';
   $('connection').className=report.status==='failed'||report.age_seconds>60?'warn':'';
-  $('freshness').textContent=`Última escritura hace ${fmt(report.age_seconds)} s · consulta cada 2 s`;
-  const initialization=c.initialization==='random'?' · Inicializado desde cero':c.initialization==='checkpoint'?' · Pesos preentrenados':'';
-  $('run-info').textContent=`${p.game||c.game||'Una configuración'} · semilla ${fmt(c.seed)} · ${c.training_plan?'currículo configurado':'currículo acumulativo'}${initialization}`;
+  $('freshness').textContent=`Last write ${fmt(report.age_seconds)} s ago · polling every 2 s`;
+  const initialization=c.initialization==='random'?' · Initialized from scratch':c.initialization==='checkpoint'?' · Pretrained weights':'';
+  $('run-info').textContent=`${p.game||c.game||'One configuration'} · seed ${fmt(c.seed)} · ${c.training_plan?'configured curriculum':'cumulative curriculum'}${initialization}`;
   const curriculum=report.curriculum, limits=curriculum?.thresholds||{};
   const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
   $('curriculum-panel').hidden=!curriculum;
-  $('curriculum-summary').textContent=curriculum?`Etapa ${fmt(curriculum.stage)}${curriculum.ordered_stages?` / ${curriculum.ordered_stages.length}`:''} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: ${curriculum.ordered_stages?'nivel':'niveles 1–'}${n}`).join(' · '):'';
+  $('curriculum-summary').textContent=curriculum?`Stage ${fmt(curriculum.stage)}${curriculum.ordered_stages?` / ${curriculum.ordered_stages.length}`:''} · `+Object.entries(curriculum.unlocked).map(([g,n])=>`${g}: ${curriculum.ordered_stages?'level':'levels 1–'}${n}`).join(' · '):'';
   const control=report.manual_controls?.at(-1);
-  const results={advanced:'aplicado',already_planner:'ya estaba en planner',last_level:'ya está abierto el último nivel',budget_exhausted:'presupuesto terminado'};
+  const results={advanced:'applied',already_planner:'already in planner phase',last_level:'final level already unlocked',budget_exhausted:'budget exhausted'};
   $('manual-controls').textContent=control
-    ? `Última petición manual: ${control.operation==='phase'?'fase':'nivel'} · ${control.game} / ${control.level} · ${control.phase} · ${results[control.result]||control.result} · acción ${fmt(control.actions)}. No acredita una evaluación aprobada.`
-    : 'Sin avances manuales registrados.';
+    ? `Last manual request: ${control.operation==='phase'?'phase':'level'} · ${control.game} / ${control.level} · ${control.phase} · ${results[control.result]||control.result} · action ${fmt(control.actions)}. This does not count as a passed evaluation.`
+    : 'No manual advances recorded.';
   const worldOnly=curriculum?.ordered_stages?.[curriculum.index]?.objective==='world_model';
-  $('thresholds').textContent=curriculum?`Activación tras ${limits.patience} evaluaciones consecutivas: reconstrucción ≤ ${pct(limits.representation_open)}, deriva latente ≤ ${pct(limits.latent_drift)}, predicción a 1 y 3 pasos ≤ ${pct(limits.prediction_open)}. ${worldOnly?'Etapa de modelo del mundo: calidad predictiva; sin profesor de subobjetivos ni entrenamiento del planner.':`Avance: además éxito ≥ ${pct(limits.success)} en el nivel activo de evaluación.`} Se exige cobertura de cambios; si ningún píxel cambia, hace falta observar una terminación nativa.`:'';
+  $('thresholds').textContent=curriculum?`Activation after ${limits.patience} consecutive evaluations: reconstruction ≤ ${pct(limits.representation_open)}, latent drift ≤ ${pct(limits.latent_drift)}, 1- and 3-step prediction ≤ ${pct(limits.prediction_open)}. ${worldOnly?'World-model stage: prediction quality; no subgoal teacher or planner training.':`Advancement also requires success ≥ ${pct(limits.success)} on the active evaluation level.`} Change coverage is required; if no pixel changes, a native termination must be observed.`:'';
   const focusedControl=[phaseButton,levelButton].includes(document.activeElement)?document.activeElement:null;
   curriculumCells=[];
   $('curriculum-rows').replaceChildren(...(curriculum?.levels||[]).map(row=>{
     const m=row.measurements||{}, tr=document.createElement('tr'), rowLimits=row.thresholds||limits;
-    const next=!row.unlocked?'Nivel pendiente':row.objective==='world_model'&&row.predictor?'Validando predictor':row.planner?'Planner activo':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${rowLimits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${rowLimits.patience}`;
-    const active=!row.unlocked?'Pendiente':c.freeze_representation_after_planner&&row.planner
-      ? 'Predictor + planner · representación congelada'
-      : row.planner?'Representación + predictor + planner':row.predictor?'Representación + predictor':'Representación';
+    const next=!row.unlocked?'Level pending':row.objective==='world_model'&&row.predictor?'Validating predictor':row.planner?'Planner active':row.predictor?`Planner: ${fmt(row.prediction_passes)} / ${rowLimits.patience}`:`Predictor: ${fmt(row.representation_passes)} / ${rowLimits.patience}`;
+    const active=!row.unlocked?'Pending':c.freeze_representation_after_planner&&row.planner
+      ? 'Predictor + planner · representation frozen'
+      : row.planner?'Representation + predictor + planner':row.predictor?'Representation + predictor':'Representation';
     for(const value of [`${row.game} / ${row.level}`,active,pct(m.reconstruction_error),pct(m.latent_drift),pct(m.prediction_error),pct(m.rollout_error),pct(m.success),next,row.unlocked?`${Math.min(row.promotion_passes,rowLimits.patience)} / ${rowLimits.patience}`:'—']){const td=document.createElement('td');td.textContent=value;tr.append(td);}
     curriculumCells.push({game:row.game,level:row.level,unlocked:row.unlocked,levelCell:tr.children[0],phaseCell:tr.children[1]});
     return tr;
@@ -587,90 +586,90 @@ function render(report) {
   renderControls(controlState);
   if(focusedControl&&!focusedControl.disabled)focusedControl.focus({preventScroll:true});
   $('representation-updates').textContent=fmt(p.representation_updates);
-  $('representation-update-scope').textContent=representationFrozen ? 'Encoder y decoder congelados'
+  $('representation-update-scope').textContent=representationFrozen ? 'Encoder and decoder frozen'
     : encoderFrozen
-    ? 'Decoder · encoder congelado' : 'Encoder y decoder · cada acción real';
+    ? 'Decoder · encoder frozen' : 'Encoder and decoder · each real action';
   $('world-training-scope').textContent=(representationFrozen
-    ? 'Encoder y decoder congelados en este nivel con planner. En niveles nuevos vuelven a aprender.'
+    ? 'Encoder and decoder are frozen on this level with the planner. They resume learning on new levels.'
     : encoderFrozen
-    ? 'Encoder congelado: los latentes se mantienen fijos para una misma observación. El decoder sigue aprendiendo.'
-    : 'Encoder y decoder aprenden desde el principio.')
-    +' El predictor se añade cuando la representación está preparada. Las evaluaciones no actualizan pesos.';
+    ? 'Encoder frozen: latents stay fixed for the same observation. The decoder keeps learning.'
+    : 'Encoder and decoder learn from the start.')
+    +' The predictor starts when representation is ready. Evaluations do not update weights.';
   const rates=p.representation_learning_rates;
   if(rates) $('world-training-scope').textContent+=` LR encoder: ${finite(rates.encoder)?rates.encoder.toExponential():'—'} · decoder: ${finite(rates.decoder)?rates.decoder.toExponential():'—'}.`;
   $('notice').hidden=!report.error;$('notice').textContent=report.error||'';
-  $('actions').textContent=fmt(p.actions);$('budget').textContent=`De ${fmt(p.total_actions)} · evaluación excluida`;
+  $('actions').textContent=fmt(p.actions);$('budget').textContent=`Of ${fmt(p.total_actions)} · evaluation excluded`;
   $('world-updates').textContent=fmt(p.predictor_updates);$('path-updates').textContent=fmt(p.path_updates);
   $('gate').textContent=p.predictor_enabled
-    ? representationFrozen?'Activo · representación congelada':'Activo · cada acción junto a representación'
-    : 'Pendiente de representación estable';
+    ? representationFrozen?'Active · representation frozen':'Active · each action alongside representation'
+    : 'Waiting for stable representation';
   const replay=p.predictor_replay;
   $('predictor-replay').textContent=replay
-    ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} partidas · ${fmt(replay.transitions)} transiciones · lote ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
-    : c.predictor_replay_episodes>0 ? `Replay: hasta ${fmt(c.predictor_replay_episodes)} partidas · lote objetivo ${fmt(c.predictor_batch_size)}`
-    : 'Sin replay · una transición por actualización';
+    ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} episodes · ${fmt(replay.transitions)} transitions · batch ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
+    : c.predictor_replay_episodes>0 ? `Replay: up to ${fmt(c.predictor_replay_episodes)} episodes · target batch ${fmt(c.predictor_batch_size)}`
+    : 'No replay · one transition per update';
   predictionSample(report.prediction_sample);
   $('tps').textContent=fmt(p.recent_tps,2);
   $('progress').textContent=p.phase==='evaluation'
-    ? `${p.policy} · ${p.evaluation_game} / nivel ${fmt(p.evaluation_level)} · partida ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · acción ${fmt(p.evaluation_action)}`
-    : `${p.game||c.game||'Preparando juego'} / nivel ${fmt(p.level)} · subobjetivo ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} acciones (mínimo inicial ${fmt(p.minimum_actions)}) · exploración ${fmt(p.epsilon*100)} %`;
+    ? `${p.policy} · ${p.evaluation_game} / level ${fmt(p.evaluation_level)} · episode ${fmt(p.evaluation_episode)}/${fmt(p.evaluation_episodes)} · action ${fmt(p.evaluation_action)}`
+    : `${p.game||c.game||'Preparing game'} / level ${fmt(p.level)} · subgoal ${fmt(p.goal_index)}/${fmt(p.goals)} · ${p.goal||''} · ${fmt(p.goal_actions)} actions (initial minimum ${fmt(p.minimum_actions)}) · exploration ${fmt(p.epsilon*100)} %`;
   if(historicalView){
-    $('connection').textContent=report.status==='waiting'?'Histórico no disponible':'Histórico · solo lectura';
+    $('connection').textContent=report.status==='waiting'?'History unavailable':'History · read only';
     $('connection').className='';
     $('notice').hidden=false;
-    $('notice').textContent=report.message||'Ejecución anterior: estas curvas y trayectorias no pertenecen al entrenamiento por secuencias actual.';
-    $('freshness').textContent=finite(report.updated_at)?`Último registro: ${new Date(report.updated_at*1000).toLocaleString('es-ES')}`:'Sin fecha de registro';
+    $('notice').textContent=report.message||'Previous run: these curves and trajectories do not belong to the current sequence training run.';
+    $('freshness').textContent=finite(report.updated_at)?`Last record: ${new Date(report.updated_at*1000).toLocaleString('en-US')}`:'No record timestamp';
     $('gpu-status').textContent='';
   }
   const fixed=fixedEvaluations(report), last=fixed.points.at(-1);
-  const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pares · ${r.episodes} partidas`]);stage=r.stage;}return points;};
-  const qualityThresholds=[{name:'Reconstrucción',value:100*limits.representation_open,colorIndex:1},
-    {name:'Predicción',value:100*limits.prediction_open,colorIndex:0},
-    {name:'Deriva',value:100*limits.latent_drift,colorIndex:3}];
+  const qualityPoints=key=>{let stage=null;const points=[];for(const r of fixed.points){if(stage!==null&&r.stage!==stage)points.push([r.actions,null]);points.push([r.actions,r[key],`${r.pairs} pairs · ${r.episodes} episodes`]);stage=r.stage;}return points;};
+  const qualityThresholds=[{name:'Reconstruction',value:100*limits.representation_open,colorIndex:1},
+    {name:'Prediction',value:100*limits.prediction_open,colorIndex:0},
+    {name:'Drift',value:100*limits.latent_drift,colorIndex:3}];
   // Relative latent drift can exceed 100%; allow this chart to expand its axis.
-  plot('fixed-delta',[{name:'Predicción · 1 paso',points:qualityPoints('error')},
-    {name:'Reconstrucción',points:qualityPoints('reconstruction')},
-    {name:'Predicción · 3 pasos',points:qualityPoints('rollout')},
-    {name:'Deriva latente',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Pendiente de una evaluación fija completa'});
+  plot('fixed-delta',[{name:'Prediction · 1 step',points:qualityPoints('error')},
+    {name:'Reconstruction',points:qualityPoints('reconstruction')},
+    {name:'Prediction · 3 steps',points:qualityPoints('rollout')},
+    {name:'Latent drift',points:qualityPoints('drift')}],{unit:'%',thresholds:qualityThresholds,percent:!fixed.points.some(r=>r.drift>100),responsive:true,empty:'Waiting for a complete fixed evaluation'});
   $('quality-cadence').textContent=finite(c.evaluate_every)
-    ? `Calidad, deriva y activaciones cada ${fmt(c.evaluate_every)} acciones · al terminar la partida.`+
-      (c.evaluation_protocol==='current_level_cached_v1'?' Solo el último nivel desbloqueado · trayectorias reales guardadas; sin volver a jugar al azar.':''):'';
-  $('fixed-summary').textContent=(last?`Última medición: acción ${fmt(last.actions)} · ${fmt(last.pairs)} pares · ${fmt(last.episodes)} partidas.`:'Todavía no hay una evaluación fija completa.')+
-    (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` En curso: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pares; el punto se añadirá al completarlos.`:'');
+    ? `Quality, drift and activations every ${fmt(c.evaluate_every)} actions · at episode end.`+
+      (c.evaluation_protocol==='current_level_cached_v1'?' Only the latest unlocked level · saved real trajectories; random episodes are not replayed.':''):'';
+  $('fixed-summary').textContent=(last?`Latest measurement: action ${fmt(last.actions)} · ${fmt(last.pairs)} pairs · ${fmt(last.episodes)} episodes.`:'No complete fixed evaluation yet.')+
+    (fixed.pending&&(!last||fixed.pending.actions>last.actions)?` In progress: ${fmt(fixed.pending.pairs)}/${fmt(fixed.pending.expected??fixed.expected)} pairs; the point will be added when complete.`:'');
   const latentPoints=key=>{
     const points=qualityPoints(key), first=points.findIndex(p=>finite(p[1]));
     return first<0?[]:points.slice(first); // Older reports have no latent diagnostics.
   };
   const latentLast=fixed.points.findLast(r=>r.latentSamples>0);
   $('latent-summary').textContent=latentLast
-    ?`Última medición: acción ${fmt(latentLast.actions)} · ${fmt(latentLast.latentSamples)} observaciones de ${fmt(latentLast.latentEpisodes)} partidas. Curvas agregadas con igual peso por nivel; una buena reconstrucción o diversidad alta no garantizan buena predicción.`
-    :'Las medidas aparecerán tras una evaluación fija con los nuevos diagnósticos. Los datos anteriores no se rellenan con ceros.';
-  plot('latent-diversity',[{name:'Entre observaciones',points:latentPoints('latentStd')},
-    {name:'Dentro de cada partida',points:latentPoints('latentWithin')}],{digits:4,minimumRange:.0001});
-  plot('latent-rank',[{name:'Rango efectivo',points:latentPoints('latentRank')},
-    {name:'Máximo observable',muted:true,points:latentPoints('latentMaxRank')}]);
-  plot('latent-inactive',[{name:'Casi constantes',points:latentPoints('latentInactive')}],{percent:true});
-  plot('latent-sensitivity',[{name:'Bloques con cambios',points:latentPoints('latentChanged')},
-    {name:'Bloques sin cambios',points:latentPoints('latentUnchanged')}],{digits:4,minimumRange:.0001});
+    ?`Latest measurement: action ${fmt(latentLast.actions)} · ${fmt(latentLast.latentSamples)} observations from ${fmt(latentLast.latentEpisodes)} episodes. Curves give each level equal weight; good reconstruction or high diversity do not guarantee good prediction.`
+    :'Measurements will appear after a fixed evaluation with the new diagnostics. Historical gaps are not filled with zeros.';
+  plot('latent-diversity',[{name:'Across observations',points:latentPoints('latentStd')},
+    {name:'Within each episode',points:latentPoints('latentWithin')}],{digits:4,minimumRange:.0001});
+  plot('latent-rank',[{name:'Effective rank',points:latentPoints('latentRank')},
+    {name:'Observable maximum',muted:true,points:latentPoints('latentMaxRank')}]);
+  plot('latent-inactive',[{name:'Nearly constant',points:latentPoints('latentInactive')}],{percent:true});
+  plot('latent-sensitivity',[{name:'Changed blocks',points:latentPoints('latentChanged')},
+    {name:'Unchanged blocks',points:latentPoints('latentUnchanged')}],{digits:4,minimumRange:.0001});
   const rows=report.curves||[], b=blocks(rows), t=trend(rows,b), series=(name,key)=>({name,points:rows.map(r=>[r.actions,r[key]])});
   const measured=rows.filter(r=>r.counts), unchanged=measured.filter(r=>r.counts.union===0).length;
-  $('interaction-summary').textContent=rows.length?`Ventana reciente: acciones ${fmt(rows[0].actions)}–${fmt(rows.at(-1).actions)}. ${fmt(unchanged)} de ${fmt(measured.length)} acciones medidas sin cambios reales ni predichos.`:'Esperando acciones reales de esta ejecución.';
-  plot('delta',[{name:'Media móvil · hasta 512 acciones',points:t.map(r=>[r.x,r.error])},
-    {name:'Bloque de 32 acciones',muted:true,points:b.map(r=>[r.x,r.error])}],
+  $('interaction-summary').textContent=rows.length?`Recent window: actions ${fmt(rows[0].actions)}–${fmt(rows.at(-1).actions)}. ${fmt(unchanged)} of ${fmt(measured.length)} measured actions without real or predicted changes.`:'Waiting for real actions from this run.';
+  plot('delta',[{name:'Moving average · up to 512 actions',points:t.map(r=>[r.x,r.error])},
+    {name:'Block of 32 actions',muted:true,points:b.map(r=>[r.x,r.error])}],
     {percent:true,markers:b.filter(r=>r.noChange).map(r=>({start:r.start,end:r.x}))});
   plot('changes',[
     ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,faint:true,legend:false,
-      points:b.map(r=>[r.x,r.rates[key],'px/acción · bloque de 32'])})),
+      points:b.map(r=>[r.x,r.rates[key],'px/action · block of 32'])})),
     ...deltaKinds.map(([name,key],colorIndex)=>({name,colorIndex,
-      points:t.map(r=>[r.x,r.rates[key],'px/acción · media móvil de hasta 512 acciones'])}))
-  ],{unit:'px/acción'});
+      points:t.map(r=>[r.x,r.rates[key],'px/action · moving average of up to 512 actions'])}))
+  ],{unit:'px/action'});
   const objectiveStart=report.objective_changes?.at(-1)?.actions;
   const lossRows=finite(objectiveStart)?rows.filter(r=>r.actions>objectiveStart):rows;
   const lossTrend=trend(lossRows,blocks(lossRows));
-  plot('loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:lossTrend.map(r=>[r.x,r.loss])},
-    {name:'Actualización individual',points:lossRows.map(r=>[r.actions,r.predictor_loss]),muted:true}]);
-  plot('representation-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.representationLoss])},
-    {...series('Actualización individual','representation_loss'),muted:true}]);
+  plot('loss',[{name:'Update average · up to 512 actions',points:lossTrend.map(r=>[r.x,r.loss])},
+    {name:'Individual update',points:lossRows.map(r=>[r.actions,r.predictor_loss]),muted:true}]);
+  plot('representation-loss',[{name:'Update average · up to 512 actions',points:t.map(r=>[r.x,r.representationLoss])},
+    {...series('Individual update','representation_loss'),muted:true}]);
   lossBreakdown('representation-loss-terms',rows,'representation_terms');
   lossBreakdown('loss-terms',lossRows,'predictor_terms');
   const lossTerms=predictorLossKinds.map(([name,key],colorIndex)=>({name,colorIndex,
@@ -678,83 +677,91 @@ function render(report) {
   plot('predictor-components',[
     ...lossTerms.map(s=>({...s,faint:true,legend:false})),
     ...lossTerms.map(s=>({...s,points:movingAverage(s.points)}))
-  ],{digits:4,minimumRange:.001,empty:'Todavía no hay componentes de pérdida registrados'});
+  ],{digits:4,minimumRange:.001,empty:'No loss components recorded yet'});
   const lossMode=report.config?.prediction_delta_loss;
   $('predictor-objective').textContent=lossMode==='recall_focal_capped'
-    ? 'NLL activa: 2× el error de color de los cambios reales + penalización focal de píxeles estáticos (γ=2, T=1). Dividida entre max(32, cambios reales) para limitar el peso de los pasos con pocos cambios. Sin argmax ni solapamiento; aplicada también al rollout de 3 pasos.'
+    ? 'Active NLL: 2× color error on real changes + focal penalty on static pixels (γ=2, T=1). Divided by max(32, real changes) to limit the weight of steps with few changes. No argmax or overlap; also applied to the 3-step rollout.'
     : lossMode==='recall_focal'
-    ? 'NLL activa: 2× el error de color de los cambios reales + penalización focal de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales. Se penalizan omisiones, colores erróneos y cambios inventados; sin argmax ni solapamiento.'
+    ? 'Active NLL: 2× color error on real changes + focal penalty on static pixels (γ=2, T=1). Normalized by real changes. Penalizes omissions, wrong colors and invented changes; no argmax or overlap.'
     : lossMode==='focal'
-    ? 'NLL activa: cambios reales y penalización focal suave de píxeles estáticos (γ=2, T=1). Normalizada por cambios reales, sin máscara de argmax.'
+    ? 'Active NLL: real changes and a soft focal penalty on static pixels (γ=2, T=1). Normalized by real changes, without an argmax mask.'
     : lossMode==='union'
-    ? 'NLL activa: unión de cambios reales y predichos. El fondo correctamente conservado queda fuera de esa NLL.'
-    : lossMode==='balanced' ? 'NLL activa: grupos equilibrados de píxeles cambiados y estáticos.'
-    : 'Este reporte no identifica el modo de NLL.';
+    ? 'Active NLL: union of real and predicted changes. Correctly preserved background is excluded from this NLL.'
+    : lossMode==='balanced' ? 'Active NLL: balanced groups of changed and static pixels.'
+    : 'This report does not identify the NLL mode.';
   $('representation-regularization').textContent=representationFrozen
-    ? 'Encoder y decoder congelados · reconstrucción detenida'
+    ? 'Encoder and decoder frozen · reconstruction paused'
     : encoderFrozen
-    ? 'Encoder congelado · regularización del encoder desactivada · decoder sigue aprendiendo'
+    ? 'Encoder frozen · encoder regularization disabled · decoder keeps learning'
     : p.sigreg_enabled===true
-    ? 'SIGReg activo · fase inicial de representación'
-    : p.sigreg_enabled===false ? 'SIGReg desactivado · reconstrucción continúa' : 'Estado de SIGReg no registrado';
-  plot('speed',[series('Acciones/s · últimos 60 s','recent_tps')],{unit:'acciones/s'});
+    ? 'SIGReg active · initial representation phase'
+    : p.sigreg_enabled===false ? 'SIGReg disabled · reconstruction continues' : 'SIGReg status not recorded';
+  plot('speed',[series('Actions/s · last 60 s','recent_tps')],{unit:'actions/s'});
   const successFirst=report.config?.path_objective_version>=2;
   const margin=report.config?.path_success_margin;
   $('path-objective').textContent=successFirst
-    ? `Primero éxito estimado dentro del presupuesto; entre rutas a ${fmt(100*(finite(margin)?margin:.02))} puntos porcentuales de la mejor, menos acciones. Empates aleatorios. La estimación aún debe aprenderse; no certifica el éxito.`
-    : 'Criterio histórico: duración estimada más penalización por fracaso.';
+    ? `Prioritize estimated success within budget; among routes within ${fmt(100*(finite(margin)?margin:.02))} percentage points of the best, prefer fewer actions. Ties are random. The estimate still needs to be learned; it does not certify success.`
+    : 'Historical criterion: estimated duration plus a failure penalty.';
   if(finite(report.config?.path_exploration_warmup))$('path-objective').textContent+=
-    ` Exploración de entrenamiento: del 100 % al 20 % durante ${fmt(report.config.path_exploration_warmup)} acciones del planner por nivel. La evaluación del planner no añade exploración.`;
+    ` Training exploration: from 100% to 20% over ${fmt(report.config.path_exploration_warmup)} planner actions per level. Planner evaluation does not add exploration.`;
   const search=report.config?.path_search;
-  if(search)$('path-objective').textContent+=` Búsqueda: hasta ${fmt(search.horizon)} pasos; predictor y evaluación de calidad: 3 pasos.`+
-    (search.noop_cooldown>0?` Se evita repetir durante ${fmt(search.noop_cooldown)} acciones una acción sin efecto observado desde el mismo tablero relevante al objetivo, si hay alternativas. No cambia las acciones legales.`:'');
+  if(search)$('path-objective').textContent+=` Search: up to ${fmt(search.horizon)} steps; predictor and quality evaluation: 3 steps.`+
+    (search.noop_cooldown>0?` Avoid repeating for ${fmt(search.noop_cooldown)} actions any action with no observed effect on the same goal-relevant board, when alternatives exist. This does not change legal actions.`:'');
   const change=report.objective_changes?.at(-1);
-  const since=change?` Cambio de objetivo en la acción ${fmt(change.actions)}; los valores anteriores usan la función previa. Las gráficas del predictor muestran solo el objetivo actual; el historial se conserva en el reporte.`:'';
+  const since=change?` Objective changed at action ${fmt(change.actions)}; earlier values use the previous function. Predictor charts show only the current objective; history remains in the report.`:'';
   const pathReplay=p.path_replay;
-  const replayNote=pathReplay?` Entrenamiento mezclado: ${fmt(pathReplay.segments)} intentos reales guardados (${fmt(pathReplay.successes)} éxitos); hasta ${fmt(pathReplay.batch_segments)} por actualización.`:'';
-  const augmentationNote=pathReplay?.hindsight?' También aprende de objetivos alcanzados realmente dentro de esas partidas, sin convertir los fracasos originales en victorias.':'';
-  const calibrationNote=pathReplay?.predicted_inputs?' Las predicciones se calibran con el resultado de las acciones reales correspondientes.':'';
+  const replayNote=pathReplay?` Mixed training: ${fmt(pathReplay.segments)} saved real attempts (${fmt(pathReplay.successes)} successes); up to ${fmt(pathReplay.batch_segments)} per update.`:'';
+  const augmentationNote=pathReplay?.hindsight?' Also learns from goals actually reached within those episodes, without relabeling the original failures as wins.':'';
+  const calibrationNote=pathReplay?.predicted_inputs?' Predictions are calibrated against the outcomes of the corresponding real actions.':'';
   const recovery=report.path_recovery;
-  const recoveryNote=recovery?` Recuperación previa: ${fmt(recovery.training_episodes)} partidas y ${fmt(recovery.training_actions)} acciones reales adicionales; contabilizadas aparte de estas curvas.`:'';
+  const recoveryNote=recovery?` Prior recovery: ${fmt(recovery.training_episodes)} episodes and ${fmt(recovery.training_actions)} additional real actions; counted separately from these curves.`:'';
   $('path-objective-loss').textContent=(successFirst
-    ? 'BCE de éxito/fracaso + error de duración solo en trayectorias exitosas. Los intentos interrumpidos no entrenan estas salidas.'
-    : 'Error del coste mixto de duración y fracaso.')+replayNote+augmentationNote+calibrationNote+recoveryNote+since;
+    ? 'Success/failure BCE + duration error only on successful trajectories. Interrupted attempts do not train these outputs.'
+    : 'Error on the combined duration and failure cost.')+replayNote+augmentationNote+calibrationNote+recoveryNote+since;
   $('predictor-objective').textContent+=since;
   renderPlannerSuccess(report);
-  plot('path-loss',[{name:'Media de actualizaciones · hasta 512 acciones',points:t.map(r=>[r.x,r.pathLoss])},
-    {...series('Actualización individual','path_loss'),muted:true}]);
+  plot('path-loss',[{name:'Update average · up to 512 actions',points:t.map(r=>[r.x,r.pathLoss])},
+    {...series('Individual update','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action,game:e.game,level:e.level})));
-  $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
+  $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`Levels solved: ${fmt(episodes.filter(e=>e.success).length)} · recent window`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
   renderObservationContext();
-  const efficiency=[['Real','actions'],['Mínimo','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
+  const efficiency=[['Real','actions'],['Minimum','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
   plot('efficiency',[
     ...efficiency.map(s=>({...s,faint:true,legend:false})),
-    ...efficiency.map(s=>({...s,name:`${s.name} · media de hasta 512 acciones`,points:movingAverage(s.points)}))
-  ],{unit:'acciones'});
+    ...efficiency.map(s=>({...s,name:`${s.name} · average over up to 512 actions`,points:movingAverage(s.points)}))
+  ],{unit:'actions'});
   renderGoalOutcomes(goals);
   const rewards=goals.map(g=>[g.x,g.reward]);
-  plot('reward',[{name:'Media por subobjetivo · hasta 512 acciones',points:movingAverage(rewards)},
-    {name:'Reward individual',points:rewards,muted:true}]);
+  plot('reward',[{name:'Average per subgoal · up to 512 actions',points:movingAverage(rewards)},
+    {name:'Individual reward',points:rewards,muted:true}]);
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');
-    const policy=r.fixed_baseline?'Azar · referencia fija':r.policy==='quality_probe'?'Calidad · muestra guardada':r.policy;
+    const policy=r.fixed_baseline?'Random · fixed baseline':r.policy==='quality_probe'?'Quality · saved sample':r.policy;
     for(const value of [fmt(r.actions),r.split,`${r.game} / ${r.level}`,policy,
       finite(r.successes)?`${r.successes}/${r.episodes}`:'—',finite(r.subgoals)?`${r.subgoals}/${r.attempted_subgoals}`:'—',
       finite(r.delta_error)?`${fmt(r.delta_error*100,2)} %`:'—',
-      r.policy==='quality_probe'?`0 nuevas · ${fmt(r.analyzed_actions)} guardadas`:fmt(r.real_actions),fmt(r.decision_ms,2)]) {
+      r.policy==='quality_probe'?`0 new · ${fmt(r.analyzed_actions)} stored`:fmt(r.real_actions),fmt(r.decision_ms,2)]) {
         const td=document.createElement('td');td.textContent=value;tr.append(td);
       }return tr;}));
 }
 const tabs=['world','path','evaluation','curriculum'];
-for(const name of tabs)$('tab-'+name).addEventListener('click',()=>{
-  for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));}
+function selectTab(name) {
+  for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));$('tab-'+tab).tabIndex=tab===name?0:-1;}
   // A hidden SVG has no measured width; fit it as soon as its tab is visible.
   if(name==='world'&&displayedReport)render(displayedReport);
   if(name==='path'){
     if(displayedReport)renderPlannerSuccess(displayedReport);
     refreshTrajectory(displayedReport?.planner_trajectory);
   }
+}
+tabs.forEach((name,index)=>{
+  $('tab-'+name).addEventListener('click',()=>selectTab(name));
+  $('tab-'+name).addEventListener('keydown',event=>{
+    const next=event.key==='ArrowRight'?(index+1)%tabs.length:event.key==='ArrowLeft'?(index+tabs.length-1)%tabs.length:event.key==='Home'?0:event.key==='End'?tabs.length-1:null;
+    if(next===null)return;
+    event.preventDefault();selectTab(tabs[next]);$('tab-'+tabs[next]).focus();
+  });
 });
 let controlState=null, controlBusy=false, controlError='';
 const phaseButton=$('advance-phase'), levelButton=$('advance-level');
@@ -773,23 +780,23 @@ function renderControls(state){
   }
   phaseButton.disabled=controlBusy||!state?.phase||!active;
   levelButton.disabled=controlBusy||!state?.level||!frontier;
-  phaseButton.title=active?`Avanzar la fase de ${active.game} / ${active.level}`:'';
-  levelButton.title=frontier?`Abrir el nivel siguiente a ${frontier.game} / ${frontier.level}`:'';
-  $('control-target').textContent=target?.game&&target?.level?`Nivel de entrenamiento: ${target.game} / ${target.level}`:'';
+  phaseButton.title=active?`Advance phase for ${active.game} / ${active.level}`:'';
+  levelButton.title=frontier?`Open the level after ${frontier.game} / ${frontier.level}`:'';
+  $('control-target').textContent=target?.game&&target?.level?`Training level: ${target.game} / ${target.level}`:'';
   const pending=state?.pending;
   const result=state?.result;
-  let message=state?'El cambio se aplica al terminar la partida o evaluación en curso.':'Controles no habilitados en este dashboard.';
+  let message=state?'The change takes effect when the current episode or evaluation finishes.':'Controls are not enabled on this dashboard.';
   if(state?.message)message=state.message;
   if(result?.status==='applied'){
     const event=result.event;
-    const outcome={advanced:'Avance aplicado',already_planner:'El nivel ya estaba en fase planner',last_level:'El último nivel ya estaba abierto',budget_exhausted:'El presupuesto de entrenamiento ha terminado'};
-    message=`${outcome[event.result]||event.result} · nivel ${event.level} · fase ${event.phase}.`;
+    const outcome={advanced:'Advance applied',already_planner:'This level was already in the planner phase',last_level:'The final level was already unlocked',budget_exhausted:'The training budget has been exhausted'};
+    message=`${outcome[event.result]||event.result} · level ${event.level} · phase ${event.phase}.`;
   }
   if(result?.status==='error')message=result.message;
-  if(pending)message=`Avance de ${pending.operation==='phase'?'fase':'nivel'} pendiente: esperando a que termine la partida o evaluación.`;
-  if(controlBusy)message='Enviando petición…';
+  if(pending)message=`Advancing ${pending.operation==='phase'?'phase':'level'} pending: waiting for the episode or evaluation to finish.`;
+  if(controlBusy)message='Sending request…';
   if(controlError)message=controlError;
-  $('control-status').textContent=historicalView?'Histórico de solo lectura. Los controles del entrenamiento están desactivados.':message;
+  $('control-status').textContent=historicalView?'Read-only history. Training controls are disabled.':message;
 }
 async function advanceCurriculum(operation){
   if(historicalView||controlBusy||!controlState?.[operation])return;
@@ -797,17 +804,17 @@ async function advanceCurriculum(operation){
   controlBusy=true;controlError='';renderControls(controlState);
   try{
     const response=await fetch('api/curriculum',{method:'POST',headers:{'Content-Type':'application/json','X-Curriculum-Token':token},body:JSON.stringify({operation}),signal:AbortSignal.timeout(10000)});
-    if(!response.ok){let reason='No se pudo solicitar el avance.';try{reason=(await response.json()).error||reason;}catch{}throw Error(reason);}
+    if(!response.ok){let reason='Could not request advancement.';try{reason=(await response.json()).error||reason;}catch{}throw Error(reason);}
     controlState=await response.json();
   }catch(error){
     // Never retry an uncertain signal delivery. Polling recovers server state.
-    controlError=`${error.message} Consultando el estado; no se reenviará automáticamente.`;
+    controlError=`${error.message} Checking status; the request will not be resent automatically.`;
     controlState=null;
   }finally{controlBusy=false;renderControls(controlState);}
 }
 phaseButton.addEventListener('click',()=>advanceCurriculum('phase'));
 levelButton.addEventListener('click',()=>advanceCurriculum('level'));
-async function poll(){try{const response=await fetch(reportApi+'state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Esperando contrato de subobjetivos');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Sin conexión · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
+async function poll(){try{const response=await fetch(reportApi+'state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Waiting for subgoal data');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Disconnected · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 const initialTab=globalThis.location?.hash?.slice(1);
-if(tabs.includes(initialTab))$('tab-'+initialTab).click();
+selectTab(tabs.includes(initialTab)?initialTab:'world');
 poll();

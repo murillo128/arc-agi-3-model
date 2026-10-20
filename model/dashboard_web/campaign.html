@@ -1,93 +1,94 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARC · Comparación de variantes</title>
+  <title>ARC · Variant comparison</title>
   <link rel="stylesheet" href="dashboard.css">
   <script src="chart-tools.js" defer></script><script src="campaign.js" defer></script>
 </head>
 <body>
-<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html">Entrenamiento</a><a href="optimization.html">Optimización</a><a href="campaign.html" aria-current="page">Campañas</a></div><span class="nav-caption">WORLD MODEL</span></nav>
+
+<div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a>
+    <div><p class="eyebrow">ARC · EXPERIMENTS</p><h1>Variant comparison</h1><p class="muted">Entire campaign · results for each variant and its seeds.</p></div>
+    <div class="connection"><span id="campaign-connection" role="status">Connecting…</span><small id="campaign-freshness"></small></div>
+  </header><nav class="dashboard-tabs" aria-label="Dashboard navigation"><a href="index.html">Training</a><a href="optimization.html">Optimization</a><a href="campaign.html" aria-current="page">Campaigns</a></nav></div>
 <main>
-<p class="chart-help">Línea fina: EMA (α = 0,1). Pulsa una leyenda para marcar su último valor real; vuelve a pulsar para quitar la guía.</p>
-  <header>
-    <div><p class="eyebrow">ARC · EXPERIMENTOS</p><h1>Comparación de variantes</h1><p class="muted">Toda la campaña · resultados de cada variante y sus semillas.</p><a href="./">← Ver entrenamiento</a></div>
-    <div class="connection"><span id="campaign-connection" role="status">Conectando…</span><small id="campaign-freshness"></small></div>
-  </header>
+<p class="chart-help">Thin line: EMA (α = 0.1). Click a legend to mark its latest actual value; click again to remove the guide.</p>
+
   <p id="campaign-notice" class="notice" hidden></p>
-  <section class="metrics summary-metrics" aria-label="Estado de la campaña">
-    <article><h2>Campaña de comparación</h2><strong id="campaign-current">—</strong><small id="campaign-stage"></small></article>
-    <article><h2>Ejecuciones terminadas</h2><strong id="campaign-completed">—</strong><small id="campaign-budget"></small></article>
-    <article><h2>Candidata provisional</h2><strong id="campaign-candidate">Pendiente</strong><small>No confirmada hasta la evaluación final.</small></article>
-    <article><h2>Confirmación final</h2><strong id="campaign-confirmation">Pendiente</strong><small>Referencia y candidata · episodios separados de desarrollo.</small></article>
+  <section class="metrics summary-metrics" aria-label="Campaign status">
+    <article><h2>Comparison campaign</h2><strong id="campaign-current">—</strong><small id="campaign-stage"></small></article>
+    <article><h2>Completed runs</h2><strong id="campaign-completed">—</strong><small id="campaign-budget"></small></article>
+    <article><h2>Provisional candidate</h2><strong id="campaign-candidate">Pending</strong><small>Unconfirmed until final evaluation.</small></article>
+    <article><h2>Final confirmation</h2><strong id="campaign-confirmation">Pending</strong><small>Reference and candidate · episodes separate from development.</small></article>
   </section>
   <section id="learning-probe" class="campaign-results" hidden>
-    <h2>Ensayo de aprendizaje</h2>
+    <h2>Learning trial</h2>
     <p id="probe-status" role="status"></p>
     <p id="probe-description"></p>
     <div class="charts">
-      <article class="chart-card"><h3>Error visual a un paso <span>% · menor es mejor</span></h3><div id="probe-chart-1"></div></article>
-      <article class="chart-card"><h3>Error visual a dos pasos <span>% · menor es mejor</span></h3><div id="probe-chart-2"></div></article>
+      <article class="chart-card"><h3>One-step visual error <span>% · lower is better</span></h3><div id="probe-chart-1"></div></article>
+      <article class="chart-card"><h3>Two-step visual error <span>% · lower is better</span></h3><div id="probe-chart-2"></div></article>
     </div>
     <div id="probe-selection" hidden>
-      <h3>Mejores pesos de validación</h3>
-      <p>Selección por la media del error visual de cada juego/nivel y de ambos horizontes. Las gráficas anteriores agregan por píxeles. La confirmación usa otras partidas y no selecciona los pesos.</p>
-      <div class="table-scroll"><table><thead><tr><th>Variante</th><th>Acción</th><th>Error de selección</th></tr></thead><tbody id="probe-best"></tbody></table></div>
+      <h3>Best validation weights</h3>
+      <p>Selection uses average visual error across games/levels and both horizons. The charts above aggregate by pixel. Confirmation uses separate episodes and does not select weights.</p>
+      <div class="table-scroll"><table><thead><tr><th>Variant</th><th>Action</th><th>Selection error</th></tr></thead><tbody id="probe-best"></tbody></table></div>
       <p id="probe-selected"></p>
-      <div class="table-scroll"><table><thead><tr><th>Confirmación independiente</th><th>1 paso</th><th>2 pasos</th></tr></thead><tbody id="probe-confirmation"></tbody></table></div>
-      <details><summary>Cambios reales frente a imágenes sin cambio</summary>
-        <p>Medidas de los mejores pesos. Si no hay cambios reales, el error de cambios queda sin dato. En imágenes sin cambio se cuentan píxeles inventados por imagen, no aciertos de dinámica.</p>
-        <div class="table-scroll"><table><thead><tr><th>Pesos / conjunto</th><th>Juego / nivel</th><th>Pasos</th><th>Con cambios</th><th>Error</th><th>Sin cambios</th><th>Píxeles inventados / imagen</th></tr></thead><tbody id="probe-measurements"></tbody></table></div>
+      <div class="table-scroll"><table><thead><tr><th>Independent confirmation</th><th>1 step</th><th>2 steps</th></tr></thead><tbody id="probe-confirmation"></tbody></table></div>
+      <details><summary>Real changes versus unchanged images</summary>
+        <p>Measurements using the best weights. Change error is absent when there are no real changes. Unchanged images count invented pixels per image, not correct dynamics predictions.</p>
+        <div class="table-scroll"><table><thead><tr><th>Weights / split</th><th>Game / level</th><th>Steps</th><th>Changed</th><th>Error</th><th>No changes</th><th>Invented pixels / image</th></tr></thead><tbody id="probe-measurements"></tbody></table></div>
       </details>
     </div>
     <div id="probe-behavior" hidden>
-      <h3>V/Q recalibrado · mundo congelado</h3>
+      <h3>Recalibrated V/Q · frozen world model</h3>
       <p id="probe-calibration"></p>
-      <p>Éxito significa alcanzar el primer progreso de nivel o WIN dentro del presupuesto.</p>
-      <div class="table-scroll"><table><thead><tr><th>Política</th><th>Éxitos / partidas</th><th>Éxito</th><th>Acciones / éxito</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="probe-policies"></tbody></table></div>
+      <p>Success means reaching the first level progress or WIN within the budget.</p>
+      <div class="table-scroll"><table><thead><tr><th>Policy</th><th>Successes / episodes</th><th>Success</th><th>Actions / success</th><th>ms / decision</th><th>Status</th></tr></thead><tbody id="probe-policies"></tbody></table></div>
     </div>
-    <details><summary>Cobertura de las partidas reales del ensayo</summary>
-      <p>Éxitos y fracasos observados durante la recogida; no son resultados del planner. El presupuesto corto puede terminar sin ninguno de los dos.</p>
-      <div class="table-scroll"><table><thead><tr><th>Juego / nivel</th><th>Partidas</th><th>Acciones</th><th>Éxitos</th><th>Game over</th><th>Fin de presupuesto</th></tr></thead><tbody id="probe-coverage"></tbody></table></div>
+    <details><summary>Coverage of real trial episodes</summary>
+      <p>Successes and failures observed during collection; these are not planner results. A short budget may end with neither outcome.</p>
+      <div class="table-scroll"><table><thead><tr><th>Game / level</th><th>Episodes</th><th>Actions</th><th>Successes</th><th>Game over</th><th>Budget limit</th></tr></thead><tbody id="probe-coverage"></tbody></table></div>
     </details>
   </section>
   <section id="diagnostics" class="campaign-results" hidden>
-    <h2>Diagnósticos con pesos congelados</h2>
+    <h2>Diagnostics with frozen weights</h2>
     <p id="diagnostic-status" class="muted"></p>
-    <p>Prueba corta de desarrollo. Mismos pesos y presupuestos para azar, Q directa y planner. No selecciona automáticamente una arquitectura. Las filas parciales aún no cubren todos los juegos y niveles: no deben compararse directamente con las terminadas.</p>
-    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Política</th><th>Victorias / partidas</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Estado</th></tr></thead><tbody id="diagnostic-policies"></tbody></table></div>
-    <h3>Acciones alternativas desde el mismo estado real</h3>
-    <p>Error visual del delta; menor es mejor. «Sin cambio» conserva el tablero. Las dos últimas columnas comparan la acción correcta con otra sólo cuando sus resultados reales difieren.</p>
-    <div class="table-scroll"><table><thead><tr><th>Pesos</th><th>Juego / nivel</th><th>Predictor</th><th>Sin cambio</th><th>Acción correcta · distintos</th><th>Otra acción · distintos</th><th>Pares distintos</th></tr></thead><tbody id="diagnostic-actions"></tbody></table></div>
+    <p>Short development trial using the same weights and budgets for random, direct Q and planner policies. Does not automatically select an architecture. Partial rows do not yet cover all games and levels and should not be compared directly with completed rows.</p>
+    <div class="table-scroll"><table><thead><tr><th>Weights</th><th>Policy</th><th>Wins / episodes</th><th>Success</th><th>Actions / win</th><th>ms / decision</th><th>Status</th></tr></thead><tbody id="diagnostic-policies"></tbody></table></div>
+    <h3>Alternative actions from the same real state</h3>
+    <p>Visual delta error; lower is better. “No change” preserves the board. The last two columns compare the correct action with an alternative only when their actual outcomes differ.</p>
+    <div class="table-scroll"><table><thead><tr><th>Weights</th><th>Game / level</th><th>Predictor</th><th>No change</th><th>Correct action · distinct predictions</th><th>Other action · distinct predictions</th><th>Distinct pairs</th></tr></thead><tbody id="diagnostic-actions"></tbody></table></div>
   </section>
-  <section class="campaign-results" aria-label="Gráficas de comparación">
-    <h2>Comparación visual</h2>
-    <p class="muted">Medias de las semillas terminadas. Cada variante indica cuántas aporta; las pendientes no se dibujan como cero. Las barras comparan resultados, no la evolución temporal.</p>
-    <p id="campaign-charts-empty" class="muted">Las gráficas aparecerán al terminar la primera evaluación de desarrollo.</p>
+  <section class="campaign-results" aria-label="Comparison charts">
+    <h2>Visual comparison</h2>
+    <p class="muted">Averages over completed seeds. Each variant shows its contribution count; pending seeds are not drawn as zeros. Bars compare results rather than progress over time.</p>
+    <p id="campaign-charts-empty" class="muted">Charts appear after the first development evaluation completes.</p>
     <div id="campaign-charts" class="charts" hidden>
-      <article class="chart-card"><h3>Éxito en el juego <span>más alto es mejor · 0–100 %</span></h3><div id="campaign-success-chart" class="comparison-bars"></div></article>
-      <article class="chart-card"><h3>Error visual <span>más bajo es mejor · 0–100 %</span></h3><div id="campaign-error-chart" class="comparison-bars"></div></article>
-      <article class="chart-card"><h3>Acciones por victoria <span>más bajo es mejor</span></h3><p>Acciones de evaluación / victorias. Sin victorias, el cociente no está definido.</p><div id="campaign-actions-chart" class="comparison-bars"></div></article>
-      <article class="chart-card"><h3>Coste de decidir <span>ms / decisión · más bajo es mejor</span></h3><p>Tiempo observado; puede incluir efectos de compilación y caché. No demuestra por sí solo una mejora de velocidad.</p><div id="campaign-latency-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Game success <span>higher is better · 0–100%</span></h3><div id="campaign-success-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Visual error <span>lower is better · 0–100%</span></h3><div id="campaign-error-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Actions per win <span>lower is better</span></h3><p>Evaluation actions / wins. Undefined when there are no wins.</p><div id="campaign-actions-chart" class="comparison-bars"></div></article>
+      <article class="chart-card"><h3>Decision cost <span>ms / decision · lower is better</span></h3><p>Observed time may include compilation and cache effects. It does not alone demonstrate a speed improvement.</p><div id="campaign-latency-chart" class="comparison-bars"></div></article>
     </div>
   </section>
   <section class="campaign-results">
-    <h2>Resultados de desarrollo</h2>
-    <p class="muted">Sólo evaluaciones completas de cada semilla. Errores y éxito: media entre semillas terminadas; resultados parciales hasta completar todas. Las acciones por victoria usan el total de acciones y victorias. Las acciones de evaluación no cuentan como entrenamiento.</p>
-    <div class="table-scroll"><table><thead><tr><th>Variante</th><th>Semillas y progreso</th><th>Estado</th><th>Error predictor</th><th>Error decoder</th><th>Éxito</th><th>Acciones / victoria</th><th>ms / decisión</th><th>Comparación con control</th></tr></thead><tbody id="campaign-table"></tbody></table></div>
-    <p class="muted">La comparación muestra el cambio de éxito en puntos porcentuales y su intervalo del 95 %. Conservar rendimiento y simplificar también puede justificar una promoción. «Aplazada» significa que no pasó el control de calidad necesario para imaginar. No se mezclan automáticamente variantes ganadoras.</p>
+    <h2>Development results</h2>
+    <p class="muted">Only complete evaluations for each seed. Errors and success are averaged over completed seeds; results remain partial until all finish. Actions per win use total actions and wins. Evaluation actions do not count as training.</p>
+    <div class="table-scroll"><table><thead><tr><th>Variant</th><th>Seeds and progress</th><th>Status</th><th>Predictor error</th><th>Decoder error</th><th>Success</th><th>Actions / win</th><th>ms / decision</th><th>Comparison with control</th></tr></thead><tbody id="campaign-table"></tbody></table></div>
+    <p class="muted">The comparison shows the success-rate change in percentage points and its 95% interval. Preserving performance while simplifying can also justify promotion. “Deferred” means the required quality check for imagination was not passed. Winning variants are not combined automatically.</p>
   </section>
   <section id="campaign-final" hidden>
-    <h2>Confirmación final</h2>
-    <p class="muted">Pesos representativos de la semilla 0; estos episodios no intervienen en la selección. No son tres entrenamientos nuevos.</p>
-    <div class="table-scroll"><table><thead><tr><th>Configuración</th><th>Victorias / episodios</th><th>Éxito</th><th>Acciones / victoria</th></tr></thead><tbody id="campaign-final-table"></tbody></table></div>
+    <h2>Final confirmation</h2>
+    <p class="muted">Representative weights from seed 0; these episodes do not influence selection. These are not three new training runs.</p>
+    <div class="table-scroll"><table><thead><tr><th>Configuration</th><th>Wins / episodes</th><th>Success</th><th>Actions / win</th></tr></thead><tbody id="campaign-final-table"></tbody></table></div>
   </section>
-  <details id="calibration-coverage" hidden><summary>Datos reales conservados para recalibrar V/Q</summary>
-    <p>Partidas de aprendizaje completas conservadas en RAM, sin descartar éxitos antiguos. Los finales por presupuesto y los cortes de recogida se distinguen. Estas cifras describen los datos, no la calidad del planner.</p>
-    <div class="table-scroll"><table><thead><tr><th>Variante / semilla</th><th>Juego / nivel</th><th>Partidas</th><th>Éxitos</th><th>Game over</th><th>Fin de presupuesto</th><th>Recogida interrumpida</th></tr></thead><tbody id="calibration-table"></tbody></table></div>
+  <details id="calibration-coverage" hidden><summary>Real data retained to recalibrate V/Q</summary>
+    <p>Complete training episodes retained in RAM without discarding earlier successes. Budget endings and collection cutoffs are distinguished. These figures describe the data, not planner quality.</p>
+    <div class="table-scroll"><table><thead><tr><th>Variant / seed</th><th>Game / level</th><th>Episodes</th><th>Successes</th><th>Game over</th><th>Budget limit</th><th>Collection cutoff</th></tr></thead><tbody id="calibration-table"></tbody></table></div>
   </details>
-  <footer>Actualización automática cada 2 segundos. Lee el informe existente y el progreso del log; no crea historial adicional ni modifica el entrenamiento.</footer>
+  <footer>Updates every 2 seconds from the existing report and progress log. Does not create extra history or modify training.</footer>
 </main>
 </body>
 </html>

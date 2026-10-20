@@ -2,9 +2,9 @@
 (() => {
   const $ = id => document.getElementById(id);
   const C = {mint: '#8fd8bf', lilac: '#bcaafa', amber: '#e9b86c', text: '#e7efec', muted: '#9db2a8', grid: '#2b4038', dark: '#152321'};
-  const fmt = (v, d = 3) => Number.isFinite(v) ? v.toLocaleString('es-ES', {maximumFractionDigits: d}) : '—';
+  const fmt = (v, d = 3) => Number.isFinite(v) ? v.toLocaleString('en-US', {maximumFractionDigits: d}) : '—';
   const sci = v => !Number.isFinite(v) ? '—' : v === 0 ? '0' : Math.abs(v) < .001 ? v.toExponential(2) : fmt(v, 4);
-  const moduleName = m => ({encoder: 'Encoder visual', decoder: 'Decoder', dynamics: 'Predictor'})[m] || m;
+  const moduleName = m => ({encoder: 'Visual encoder', decoder: 'Decoder', dynamics: 'Predictor'})[m] || m;
   const shortName = n => n.split('.').slice(1).join('.');
   let latest = null, pinned = null, eventIndex = 0, pointIndex = 0, tab = 'pulse', dimension = 3, yaw = -.6, playing = null, requestId = null, revision = null;
   let selection = 'dynamics.cell.gates.weight', module = 'dynamics', drawHits = [];
@@ -78,7 +78,7 @@
     const values = points.map(p=>p[1]).filter(Number.isFinite);
     ChartTools.legend($(`${id}-legend`),id,[{key:label,text:`${label}: ${sci(last?.[1])}`,color:stroke,disabled:!last}],
       ()=>line(id,rows,key,{label,color:stroke,selected,log,ceiling}));
-    if (!values.length) { empty(id, 'Sin mediciones para este intervalo'); return; }
+    if (!values.length) { empty(id, 'No measurements in this interval'); return; }
     const {g, w, h} = canvas(id), left = 60, right = w-20, top = 27, bottom = h-32;
     const transform = v => log ? Math.log10(Math.max(1e-12, v)) : v;
     const minimum = log ? Math.min(-1, ...values.map(transform)) - .5 : Math.min(0, ...values);
@@ -99,14 +99,14 @@
     if(ChartTools.selected(id)===label&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:stroke,text:sci(last[1])});
   }
   function heatmap(id, grid) {
-    if (!Array.isArray(grid) || !grid.length) { empty(id, 'Detalle no capturado en esta actualización'); return; }
+    if (!Array.isArray(grid) || !grid.length) { empty(id, 'Detail not captured for this update'); return; }
     const {g,w,h}=canvas(id), vals=grid.flat().filter(Number.isFinite), positive=vals.filter(v=>v>0);
     const lo=positive.length ? Math.log10(Math.min(...positive)) : -8, hi=positive.length ? Math.max(lo+1,Math.log10(Math.max(...positive))) : -1;
     const left=38, top=14, width=w-68, height=h-49, cellW=width/grid[0].length, cellH=height/grid.length;
     grid.forEach((row,i)=>row.forEach((v,j)=>{g.fillStyle=color(v,lo,hi); g.fillRect(left+j*cellW,top+i*cellH,Math.max(1,cellW-1),Math.max(1,cellH-1));}));
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText('1',left-20,top+10); g.fillText(String(grid.length),left-25,top+height);
     g.fillText(`RMS  ${sci(Math.min(...vals))} — ${sci(Math.max(...vals))}`,left,h-9);
-    g.textAlign='right'; g.fillText(`${grid.length} × ${grid[0].length} bloques`,w-25,h-9);
+    g.textAlign='right'; g.fillText(`${grid.length} × ${grid[0].length} blocks`,w-25,h-9);
   }
   function freeze() { if (!pinned && latest) pinned=latest; $('live').checked=false; }
   function chooseEvent(i) {
@@ -137,42 +137,42 @@
       if(matching) eventIndex=matching.i;
     }
     if($('probe-session').options.length!==s.session_count && Number.isInteger(s.session_count)) {
-      $('probe-session').replaceChildren(...Array.from({length:s.session_count},(_,i)=>{const o=node('option',`Sesión ${i+1}`);o.value=i;return o;}));
+      $('probe-session').replaceChildren(...Array.from({length:s.session_count},(_,i)=>{const o=node('option',`Session ${i+1}`);o.value=i;return o;}));
     }
   }
   function renderPulse(s) {
     const event=s.events[eventIndex], item=event?.matrices?.[selection], meta=s.catalog.find(m=>m.name===selection);
-    text('matrix-title',shortName(selection));text('matrix-shape',meta?`${meta.shape.join(' × ') || 'Escalar'} · ${fmt(meta.size,0)} parámetros`:'');
+    text('matrix-title',shortName(selection));text('matrix-shape',meta?`${meta.shape.join(' × ') || 'Scalar'} · ${fmt(meta.size,0)} parameters`:'');
     const status=event ? item?.status || 'frozen' : 'unavailable';
-    text('matrix-state',({measured:'Aprende',no_gradient:'Sin gradiente',frozen:'Congelada en este paso',unavailable:'Captura no disponible'})[status] || 'Sin datos');
+    text('matrix-state',({measured:'Learning',no_gradient:'No gradient',frozen:'Frozen at this step',unavailable:'Capture unavailable'})[status] || 'No data');
     text('gradient-value',sci(item?.gradient_rms));text('update-value',Number.isFinite(item?.relative_update)?`${sci(item.relative_update*100)} %`:'—');
     text('learning-rate',sci(item?.lr));text('clip-value',event?fmt(event.clip_scale,4):'—');text('alignment-value',Number.isFinite(item?.alignment)?fmt(item.alignment,3):'—');
     const detail=event?.detail?.name===selection ? event.detail : null;
-    text('capture-note',!event?'No se conserva una captura de optimización para el batch seleccionado.':detail?'Los mapas corresponden a esta matriz y a esta actualización. Cada celda resume un bloque completo.':'El detalle de esta matriz no se guardó en este instante. Solicita una captura para una próxima actualización.');
+    text('capture-note',!event?'No optimization capture is retained for the selected batch.':detail?'These maps correspond to this matrix and update. Each cell summarizes an entire block.':'Matrix detail was not saved at this point. Request a capture for a future update.');
     const measure=$('measure').value, rows=s.catalog.filter(m=>m.module===module && m.shape.length>1);
-    const table=$('activity'), head=node('tr');head.append(node('th','Matriz / actualización'));
-    s.events.forEach((e,i)=>{const th=node('th'),b=node('button',String(e.id));b.dataset.event=i;b.title=`Batch ${e.batch} · ${e.phase==='predictor'?'Predictor':'Representación'}`;th.append(b);head.append(th);});
+    const table=$('activity'), head=node('tr');head.append(node('th','Matrix / update'));
+    s.events.forEach((e,i)=>{const th=node('th'),b=node('button',String(e.id));b.dataset.event=i;b.title=`Batch ${e.batch} · ${e.phase==='predictor'?'Predictor':'Representation'}`;th.append(b);head.append(th);});
     table.querySelector('thead').replaceChildren(head);
     const fragment=document.createDocumentFragment();
     rows.forEach(meta=>{const tr=node('tr'),th=node('th'),b=node('button',shortName(meta.name));b.dataset.matrix=meta.name;b.title=meta.name;th.append(b);tr.append(th);tr.dataset.selected=String(meta.name===selection);
       s.events.forEach((e,i)=>{const row=e.matrices[meta.name],td=node('td');td.dataset.event=i;td.dataset.matrix=meta.name;td.dataset.status=row?.status||'frozen';
-        const value=row?.[measure];td.title=`${meta.name} · actualización ${e.id}: ${Number.isFinite(value)?sci(value):row?.status==='no_gradient'?'Sin gradiente':'Congelada'}`;
+        const value=row?.[measure];td.title=`${meta.name} · update ${e.id}: ${Number.isFinite(value)?sci(value):row?.status==='no_gradient'?'No gradient':'Frozen'}`;
         if(Number.isFinite(value)) td.style.backgroundColor=color(value);else td.textContent='—';
         td.dataset.selected=String(i===eventIndex&&meta.name===selection);tr.append(td);
       });fragment.append(tr);
     });table.querySelector('tbody').replaceChildren(fragment);
-    text('activity-scale','Escala logarítmica fija: 10⁻⁸ a 10⁻¹. Los extremos saturan el color; el inspector conserva el valor.');
+    text('activity-scale','Fixed logarithmic scale: 10⁻⁸ to 10⁻¹. Colors saturate at the extremes; the inspector retains the value.');
     const g=$('heat-scale').getContext('2d');for(let x=0;x<160;x++){g.fillStyle=color(10**(-8+7*x/159));g.fillRect(x,0,1,12);}
     heatmap('gradient-map',detail?.gradient);heatmap('update-map',detail?.update);
     if(detail?.histogram){const {g,w,h}=canvas('update-histogram'),{counts,edges}=detail.histogram,max=Math.max(1,...counts),width=(w-30)/counts.length;
       counts.forEach((v,i)=>{g.fillStyle=(edges[i]+edges[i+1])<0?C.lilac:C.mint;g.fillRect(15+i*width,h-22-v/max*(h-47),Math.max(1,width-2),v/max*(h-47));});
-      g.fillStyle=C.muted;g.fillText('ΔW con signo · muestra fija',15,11);g.fillText(sci(edges[0]),15,h-5);g.textAlign='right';g.fillText(sci(edges.at(-1)),w-15,h-5);
-    }else empty('update-histogram','Distribución no capturada');
-    line('matrix-history',s.events,e=>Number.isFinite(e.matrices?.[selection]?.relative_update)?e.matrices[selection].relative_update*100:null,{label:'Cambio de pesos (%) · norma sobre muestra fija',selected:eventIndex});
+      g.fillStyle=C.muted;g.fillText('Signed ΔW · fixed sample',15,11);g.fillText(sci(edges[0]),15,h-5);g.textAlign='right';g.fillText(sci(edges.at(-1)),w-15,h-5);
+    }else empty('update-histogram','Distribution not captured');
+    line('matrix-history',s.events,e=>Number.isFinite(e.matrices?.[selection]?.relative_update)?e.matrices[selection].relative_update*100:null,{label:'Weight change (%) · norm on a fixed sample',selected:eventIndex});
   }
   function trajectory(s) {
     const plane=s.planes[module], projections=plane?.projections || [], points=s.points;
-    if(!projections.length) { empty('parameter-path','Calibrando el plano con cuatro batches medidos…');drawHits=[];return; }
+    if(!projections.length) { empty('parameter-path','Calibrating the plane with four measured batches…');drawHits=[];return; }
     const {g,w,h}=canvas('parameter-path');
     const xs=projections.map(p=>p.x),ys=projections.map(p=>p.y),zs=points.map(p=>p.reference_loss).filter(Number.isFinite);
     const bounds=values=>[Math.min(...values),Math.max(...values)], [xmin,xmax]=bounds(xs),[ymin,ymax]=bounds(ys),[zmin,zmax]=zs.length?bounds(zs):[0,1];
@@ -182,8 +182,8 @@
       return [w/2+a*w*.24,h*.69+b*h*.105-z*h*.47]; }
     function segment(a,b,color=C.grid){g.strokeStyle=color;g.beginPath();g.moveTo(...a);g.lineTo(...b);g.stroke();}
     for(let i=0;i<=4;i++){const k=-1+i*.5;segment(project(-1,k,0),project(1,k,0));segment(project(k,-1,0),project(k,1,0));}
-    if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('NLL visual',10,30);g.fillText(s.reference_source==='training_pre_update'?'antes de aprender':'de referencia',10,46);}
-    g.fillStyle=C.muted;g.textAlign='center';g.fillText('PC1 · muestra fija',w/2,h-6);g.textAlign='right';g.fillText('PC2',w-12,h-25);
+    if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('Visual NLL',10,30);g.fillText(s.reference_source==='training_pre_update'?'before learning':'reference',10,46);}
+    g.fillStyle=C.muted;g.textAlign='center';g.fillText('PC1 · fixed sample',w/2,h-6);g.textAlign='right';g.fillText('PC2',w-12,h-25);
     drawHits=projections.map((p,i)=>project(normal(p.x,xmin,xmax),normal(p.y,ymin,ymax),(points[i]?.reference_loss-zmin)/Math.max(1e-9,zmax-zmin)));
     g.lineWidth=2;
     drawHits.forEach((p,i)=>{if(i)segment(drawHits[i-1],p,i<pointIndex?C.lilac:C.mint);});
@@ -193,30 +193,30 @@
   }
   function renderPath(s) {
     const plane=s.planes[module], p=s.points[pointIndex], projection=plane?.projections?.[pointIndex],previous=s.points[pointIndex-1];
-    text('basis-note',plane?.basis_id?`Plano fijo ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} batches medidos. Cobertura calculada sobre la muestra.`:'Esperando cuatro batches para fijar el plano PCA.');
-    text('point-title',p?`Batch ${p.batch}`:'Esperando batches');text('reference-value',fmt(p?.reference_loss,4));
+    text('basis-note',plane?.basis_id?`Fixed plane ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches. Coverage is calculated on the sample.`:'Waiting for four batches to establish the PCA plane.');
+    text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',fmt(p?.reference_loss,4));
     const change=Number.isFinite(p?.reference_loss)&&Number.isFinite(previous?.reference_loss)?p.reference_loss-previous.reference_loss:null;
     text('loss-change',Number.isFinite(change)?`${change>0?'+':''}${fmt(change,4)}`:'—');
     $('coverage').value=projection?.coverage ?? 0; text('coverage-value',Number.isFinite(projection?.coverage)?`${fmt(projection.coverage*100,1)} %`:'—');
-    text('outside-plane',Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % del movimiento queda fuera del plano. Muestra estratificada, no modelo completo.`:'Sin desplazamiento medible para calcular cobertura.');
+    text('outside-plane',Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % of movement lies outside the plane. Stratified sample, not the full model.`:'No measurable displacement to calculate coverage.');
     text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',sci(projection?.step_norm));
-    trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'NLL visual · batch antes de aprender':'NLL visual · referencia fija',color:C.lilac,selected:pointIndex});
-    line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Giro entre desplazamientos (°)',selected:pointIndex,ceiling:180});
+    trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
+    line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
   }
   function renderMemory(s) {
     const p=s.probe;
     if(!p || p.status!=='ready'){
-      text('probe-description',p?.reason || 'Solicita una sonda para medir la señal temporal de una pérdida.');
+      text('probe-description',p?.reason || 'Request a probe to measure the temporal signal of a loss.');
       for(const id of ['probe-loss','probe-cleared','probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
-      text('probe-comparison','');empty('memory-window','Sin sonda registrada');empty('memory-gradient','Sin sonda registrada');
+      text('probe-comparison','');empty('memory-window','No probe recorded');empty('memory-gradient','No probe recorded');
       ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[],()=>{});return;
     }
-    text('probe-description',`Sonda del batch ${p.batch} · sesión ${p.session+1} · ${p.game}. Derivada de la pérdida visual del paso ${p.stop-1} respecto a los estados de memoria anteriores.`);
+    text('probe-description',`Probe from batch ${p.batch} · session ${p.session+1} · ${p.game}. Derivative of the visual loss at step ${p.stop-1} with respect to earlier memory states.`);
     {const {g,w,h}=canvas('memory-window'),left=22,width=w-44,y=37,x=t=>left+t/p.session_steps*width;
       g.fillStyle=C.dark;g.fillRect(left,y,width,22);g.fillStyle='#71618e';g.fillRect(x(p.context_start),y,x(p.start)-x(p.context_start),22);g.fillStyle=C.mint;g.fillRect(x(p.start),y,x(p.stop)-x(p.start),22);
-      g.fillStyle=C.muted;g.fillText('Sesión completa',left,17);g.fillText('0',left,y+43);g.textAlign='right';g.fillText(String(p.session_steps),w-22,y+43);
-      g.textAlign='center';g.fillStyle=C.lilac;g.fillText(`Corte en ${p.context_start}`,Math.max(75,Math.min(w-90,x(p.context_start))),y-8);
+      g.fillStyle=C.muted;g.fillText('Complete session',left,17);g.fillText('0',left,y+43);g.textAlign='right';g.fillText(String(p.session_steps),w-22,y+43);
+      g.textAlign='center';g.fillStyle=C.lilac;g.fillText(`Truncation at ${p.context_start}`,Math.max(75,Math.min(w-90,x(p.context_start))),y-8);
     }
     const {g,w,h}=canvas('memory-gradient'),left=64,right=w-30,top=28,bottom=h-45;
     const start=p.context_start,stop=p.stop-1,x=t=>left+(t-start)*(right-left)/Math.max(1,stop-start);
@@ -232,25 +232,25 @@
     const points=p.steps.map(row=>[row.t,row.rms]),last=points.findLast(ChartTools.valid);
     ChartTools.canvasEMA(g,points,x,y,C.mint);
     ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[{key:'rms',text:`RMS ∂L / ∂h: ${sci(last?.[1])}`,color:C.mint,disabled:!last}],()=>renderMemory(s));
-    g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Corte · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Pérdida · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('RMS ∂L final / ∂h · escala log · ceros en ámbar sobre el suelo',left,14);
+    g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Truncation · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Loss · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('Final RMS ∂L / ∂h · log scale · zeros in amber at the floor',left,14);
     if(ChartTools.selected('memory-gradient')&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:C.mint,text:sci(last[1])});
     text('probe-loss',fmt(p.loss,4));text('probe-cleared',fmt(p.cleared_loss,4));
-    text('probe-comparison',p.loss<p.cleared_loss?'En este paso, el historial reduce la pérdida.':p.loss>p.cleared_loss?'En este paso, borrar el historial reduce la pérdida.':'No hay diferencia de pérdida en esta sonda.');
-    text('probe-game',`${p.game} / ${p.session+1}`);text('probe-batch',`${p.batch} / t = ${stop}`);text('probe-window',`${p.context_start}–${stop} · ${p.start-p.context_start} + ${p.stop-p.start} pasos`);text('probe-cost',`${fmt(p.seconds,3)} s`);
+    text('probe-comparison',p.loss<p.cleared_loss?'History reduces the loss at this step.':p.loss>p.cleared_loss?'Clearing history reduces the loss at this step.':'No loss difference in this probe.');
+    text('probe-game',`${p.game} / ${p.session+1}`);text('probe-batch',`${p.batch} / t = ${stop}`);text('probe-window',`${p.context_start}–${stop} · ${p.start-p.context_start} + ${p.stop-p.start} steps`);text('probe-cost',`${fmt(p.seconds,3)} s`);
   }
   function render() {
     const s=data();if(!s || s.status!=='ready') return;
     eventIndex=Math.min(eventIndex,Math.max(0,s.events.length-1));pointIndex=Math.min(pointIndex,Math.max(0,s.points.length-1));
-    text('reference-label',s.reference_source==='training_pre_update'?'NLL visual antes de aprender':'NLL visual de referencia');
-    text('reference-source',s.reference_source==='training_pre_update'?'Datos nuevos de cada batch, medidos antes de actualizar; los pesos del punto son posteriores.':'Mismas observaciones reales de referencia');
-    populateSelects(s);text('sample-note',`Hasta ${s.sample_per_tensor} coeficientes / tensor · muestra fija`);
-    text('optimization-status',pinned?'Instante fijado':s.running?'Midiendo entrenamiento':'Entrenamiento detenido');
-    text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensores · captura cada ${s.every} actualizaciones del predictor`);
+    text('reference-label',s.reference_source==='training_pre_update'?'Visual NLL before learning':'Reference visual NLL');
+    text('reference-source',s.reference_source==='training_pre_update'?'New data from each batch, measured before updates; the weights at each point are from after the update.':'Same real reference observations');
+    populateSelects(s);text('sample-note',`Up to ${s.sample_per_tensor} coefficients / tensor · fixed sample`);
+    text('optimization-status',pinned?'Pinned instant':s.running?'Measuring training':'Training stopped');
+    text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensors · capture every ${s.every} predictor updates`);
     const enabled=latest?.control?.enabled === true;
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=!enabled;
     $('event-scrubber').max=Math.max(0,s.events.length-1);$('event-scrubber').value=Math.max(0,eventIndex);
     const event=s.events[eventIndex], point=s.points[pointIndex];
-    const label=event?`Actualización ${event.id} · batch ${event.batch}`:point?`Batch ${point.batch} · captura no disponible`:'Sin capturas';
+    const label=event?`Update ${event.id} · batch ${event.batch}`:point?`Batch ${point.batch} · capture unavailable`:'No captures';
     text('event-label',label);$('event-scrubber').setAttribute('aria-valuetext',label);
     if(tab==='pulse')renderPulse(s);if(tab==='path')renderPath(s);if(tab==='memory')renderMemory(s);
   }
@@ -258,16 +258,16 @@
     tab=name;for(const id of ['pulse','path','memory']){const active=id===name;$(id).hidden=!active||!data();$(`tab-${id}`).setAttribute('aria-selected',String(active));$(`tab-${id}`).tabIndex=active?0:-1;}render();
   }
   async function request(payload) {
-    try { const response=await fetch('api/optimization',{method:'POST',headers:{'Content-Type':'application/json','X-Optimization-Token':latest?.control?.token || ''},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error || 'No se pudo solicitar');requestId=result.id;text('request-status',result.message);$('optimization-notice').hidden=false;text('optimization-notice',result.message);
+    try { const response=await fetch('api/optimization',{method:'POST',headers:{'Content-Type':'application/json','X-Optimization-Token':latest?.control?.token || ''},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error || 'Could not submit request');requestId=result.id;text('request-status',result.message);$('optimization-notice').hidden=false;text('optimization-notice',result.message);
       pinned=null;$('live').checked=true;
     } catch(error){$('optimization-notice').hidden=false;text('optimization-notice',error.message);}
   }
-  function stopPlayback(){clearInterval(playing);playing=null;text('playback','Reproducir');}
+  function stopPlayback(){clearInterval(playing);playing=null;text('playback','Play');}
   function clearData(status,message) {
     latest=null;pinned=null;revision=null;requestId=null;eventIndex=-1;pointIndex=-1;drawHits=[];drag=null;stopPlayback();
     $('live').checked=true;text('optimization-status',status);text('optimization-summary',message);
-    $('optimization-notice').hidden=false;text('optimization-notice',message);text('event-label','Sin capturas');
-    text('request-status','');text('sample-note','Sin mediciones');$('matrix').replaceChildren();
+    $('optimization-notice').hidden=false;text('optimization-notice',message);text('event-label','No captures');
+    text('request-status','');text('sample-note','No measurements');$('matrix').replaceChildren();
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=true;
     for(const id of ['pulse','path','memory'])$(id).hidden=true;
     for(const id of ['gradient-value','update-value','learning-rate','clip-value','alignment-value','matrix-state',
@@ -287,7 +287,7 @@
   $('view-2d').addEventListener('click',()=>{dimension=2;$('view-2d').setAttribute('aria-pressed','true');$('view-3d').setAttribute('aria-pressed','false');render();});
   $('view-3d').addEventListener('click',()=>{dimension=3;$('view-2d').setAttribute('aria-pressed','false');$('view-3d').setAttribute('aria-pressed','true');render();});
   ['pulse','path','memory'].forEach((id,i)=>{const button=$(`tab-${id}`);button.addEventListener('click',()=>setTab(id));button.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const names=['pulse','path','memory'];const j=e.key==='Home'?0:e.key==='End'?2:(i+(e.key==='ArrowRight'?1:2))%3;setTab(names[j]);$(`tab-${names[j]}`).focus();});});
-  $('playback').addEventListener('click',()=>{if(playing){stopPlayback();return;}freeze();if(!data()?.events?.length)return;text('playback','Pausar');if(eventIndex>=data().events.length-1)eventIndex=-1;playing=setInterval(()=>{if(eventIndex>=data().events.length-1){stopPlayback();return;}chooseEvent(eventIndex+1);},900);});
+  $('playback').addEventListener('click',()=>{if(playing){stopPlayback();return;}freeze();if(!data()?.events?.length)return;text('playback','Pause');if(eventIndex>=data().events.length-1)eventIndex=-1;playing=setInterval(()=>{if(eventIndex>=data().events.length-1){stopPlayback();return;}chooseEvent(eventIndex+1);},900);});
   let drag=null;
   $('parameter-path').addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw};e.target.setPointerCapture(e.pointerId);});
   $('parameter-path').addEventListener('pointermove',e=>{if(!drag||dimension!==3||!data())return;yaw=drag.yaw+(e.clientX-drag.x)/180;trajectory(data());});
@@ -296,19 +296,19 @@
   window.addEventListener('resize',render);
   async function refresh(){
     let received=false;
-    try{const response=await fetch('api/optimization',{cache:'no-store',headers:revision?{'If-None-Match':revision}:{}});if(response.status===304){if(data())text('optimization-status',pinned?'Instante fijado':latest.running?'Midiendo entrenamiento':'Entrenamiento detenido');return;}if(!response.ok)throw Error('No se pudo leer el diagnóstico');received=true;const next=await response.json();
+    try{const response=await fetch('api/optimization',{cache:'no-store',headers:revision?{'If-None-Match':revision}:{}});if(response.status===304){if(data())text('optimization-status',pinned?'Pinned instant':latest.running?'Measuring training':'Training stopped');return;}if(!response.ok)throw Error('Could not read diagnostics');received=true;const next=await response.json();
       if(next?.status==='waiting' || next?.status==='unavailable'){
         if(typeof next.message!=='string')throw Error('Invalid diagnostic message');
-        clearData(next.status==='unavailable'?'No instrumentado':'Esperando capturas',next.message);
+        clearData(next.status==='unavailable'?'Not instrumented':'Waiting for captures',next.message);
       }
       else {if(next?.status!=='ready' || !validSnapshot(next))throw Error('Invalid diagnostic snapshot');
         const changed=!latest||latest.identity!==next.identity||latest.updated_at!==next.updated_at||latest.running!==next.running||latest.control?.enabled!==next.control?.enabled;if(latest&&latest.identity!==next.identity){pinned=null;$('live').checked=true;}latest=next;for(const id of ['pulse','path','memory'])$(id).hidden=id!==tab;
-        if(requestId&&next.last_request===requestId){text('request-status','Captura completada.');requestId=null;}
-        if(!requestId){$('optimization-notice').hidden=next.age_seconds<180;text('optimization-notice','La última captura tiene más de tres minutos. Comprueba el estado del entrenamiento.');}
+        if(requestId&&next.last_request===requestId){text('request-status','Capture completed.');requestId=null;}
+        if(!requestId){$('optimization-notice').hidden=next.age_seconds<180;text('optimization-notice','The latest capture is over three minutes old. Check training status.');}
         if(!pinned){eventIndex=next.events.length-1;pointIndex=next.points.length-1;}if(changed)render();
         revision=response.headers?.get('ETag') || null;
       }
-    }catch{if(received)clearData('Datos no válidos','El registro de optimización no es válido. Esperando una captura compatible.');else text('optimization-status','Sin conexión');}
+    }catch{if(received)clearData('Invalid data','The optimization record is invalid. Waiting for a compatible capture.');else text('optimization-status','Disconnected');}
     finally{setTimeout(refresh,2000);}
   }
   refresh();

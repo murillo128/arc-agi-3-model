@@ -25,7 +25,7 @@ class CurriculumControl:
                                  '--', self.service], capture_output=True, text=True, timeout=2, check=True)
         pid = int(result.stdout.strip())
         if pid <= 1:
-            raise ValueError('El entrenador está detenido.')
+            raise ValueError('The trainer is stopped.')
         fd = os.pidfd_open(pid)
         try:
             proc = Path('/proc') / str(pid)
@@ -38,7 +38,7 @@ class CurriculumControl:
             if not output.is_absolute():
                 output = (proc / 'cwd').resolve() / output
             if (output / 'report.json').resolve() != self.report:
-                raise ValueError('El servicio corresponde a otra campaña.')
+                raise ValueError('The service belongs to a different campaign.')
             caught = next(line.split()[1] for line in (proc / 'status').read_text().splitlines()
                           if line.startswith('SigCgt:'))
             if not all(int(caught, 16) & (1 << (s - 1)) for s in (signal.SIGUSR2, signal.SIGHUP)):
@@ -52,7 +52,7 @@ class CurriculumControl:
         events = report.get('manual_controls', [])
         if self.pending:
             if pid != self.pending['pid'] or report.get('status') != 'running':
-                self.result = dict(status='error', message='El entrenador se detuvo o reinició antes de confirmar la petición.')
+                self.result = dict(status='error', message='The trainer stopped or restarted before confirming the request.')
                 self.pending = None
             else:
                 event = next((e for e in events if e not in self.pending['previous']
@@ -79,10 +79,10 @@ class CurriculumControl:
                 pid, fd = self._target()
                 os.close(fd)
                 state = self._state(report, pid)
-                state['message'] = '' if report.get('status') == 'running' else 'El entrenamiento no está activo.'
+                state['message'] = '' if report.get('status') == 'running' else 'Training is not active.'
             except (OSError, ValueError, IndexError, StopIteration, subprocess.SubprocessError):
                 state = self._state(report, None)
-                state['message'] = 'Controles no disponibles: comprueba que el entrenador de esta campaña está activo.'
+                state['message'] = 'Controls unavailable: check that the trainer for this campaign is active.'
             return state
 
     def request(self, operation, report):
@@ -91,7 +91,7 @@ class CurriculumControl:
             try:
                 state = self._state(report, pid)
                 if not state[operation]:
-                    raise ValueError('Ese avance no está disponible o hay una petición pendiente.')
+                    raise ValueError('That advancement is unavailable or a request is pending.')
                 number = signal.SIGUSR2 if operation == 'phase' else signal.SIGHUP
                 signal.pidfd_send_signal(fd, number)
                 self.pending = dict(pid=pid, operation=operation, previous=list(report.get('manual_controls', [])))
