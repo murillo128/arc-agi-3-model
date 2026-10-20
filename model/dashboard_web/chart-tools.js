@@ -1,7 +1,7 @@
 'use strict';
 // Shared presentation only: never changes recorded measurements or phase gates.
 globalThis.ChartTools = (() => {
-  const alpha = .1, hint = 'Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest raw value.';
+  const alpha = .1, hint = 'Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest EMA value.';
   const states = new Map();
   const valid = p => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]);
   function focusStyle(selected, key, opacity=1) {
@@ -25,6 +25,7 @@ globalThis.ChartTools = (() => {
       return [p[0], previous];
     });
   }
+  const latestEMA = points => ema(points).findLast(valid);
   function svgNode(tag, attrs, text='') {
     const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
     for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
@@ -105,6 +106,6 @@ globalThis.ChartTools = (() => {
     });
     state.sync();
   }
-  return {alpha, hint, ema, valid, focusStyle, svgFocus, svgEMA, canvasEMA, svgGuide, canvasGuide, legend,
+  return {alpha, hint, ema, latestEMA, valid, focusStyle, svgFocus, svgEMA, canvasEMA, svgGuide, canvasGuide, legend,
     selected:id=>states.get(id)?.selected??null};
 })();

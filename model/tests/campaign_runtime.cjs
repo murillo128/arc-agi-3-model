@@ -105,7 +105,7 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.equal(probeSvg.children.filter(n=>n.class==='series-ema').length,2);
   probeButton.listeners.click();
   const probeGuide=()=>probeSvg.children.find(n=>n.class==='series-guide');
-  assert.equal(probeGuide().children[3].textContent,'0 %','guide uses actual last fit error, not EMA');
+  assert.equal(probeGuide().children[3].textContent,'45 %','guide uses latest EMA fit error');
   await vm.runInContext('pollCampaign()',context);
   assert.equal(probeLegend.children[0],probeButton);
   assert.equal(probeButton['aria-pressed'],'true');

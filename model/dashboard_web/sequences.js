@@ -63,8 +63,9 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
   updateGuide=()=>{
     const selected=data.find(d=>d.s.label===ChartTools.selected(id));guide.replaceChildren();
     ChartTools.svgFocus(layers,data.indexOf(selected));
-    if(selected?.last)ChartTools.svgGuide(guide,{left:50,right:680,y:y(selected.last.value),lastX:x(selected.last.row.batch),
-      color:selected.color,text:number(selected.last.value,selected.s.digits??4)});
+    const last=selected&&ChartTools.latestEMA(selected.points);
+    if(last)ChartTools.svgGuide(guide,{left:50,right:680,y:y(last[1]),lastX:x(last[0]),
+      color:selected.color,text:number(last[1],selected.s.digits??4)});
   };
   updateGuide();
 }
