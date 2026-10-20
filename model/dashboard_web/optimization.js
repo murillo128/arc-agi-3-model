@@ -6,7 +6,9 @@
   const sci = v => !Number.isFinite(v) ? '—' : v === 0 ? '0' : Math.abs(v) < .001 ? v.toExponential(2) : fmt(v, 4);
   const moduleName = m => ({encoder: 'Visual encoder', decoder: 'Decoder', dynamics: 'Predictor'})[m] || m;
   const shortName = n => n.split('.').slice(1).join('.');
-  let latest = null, pinned = null, eventIndex = 0, pointIndex = 0, tab = 'pulse', dimension = 3, yaw = -.6, playing = null, requestId = null, revision = null;
+  const defaultCamera = () => ({yaw: -.6, pitch: .45, roll: 0, zoom: 1});
+  let camera = defaultCamera();
+  let latest = null, pinned = null, eventIndex = 0, pointIndex = 0, tab = 'pulse', dimension = 3, playing = null, requestId = null, revision = null;
   let selection = 'dynamics.cell.gates.weight', module = 'dynamics', drawHits = [];
   const data = () => pinned || latest;
   const text = (id, value) => { $(id).textContent = value; };
@@ -17,6 +19,14 @@
     const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
     const integer = (v, min=0) => Number.isSafeInteger(v) && v >= min;
     const number = v => v === null || Number.isFinite(v);
+    const coverage = v => v === null || (Number.isFinite(v) && v >= 0 && v <= 1);
+    const spatialPair = v => {
+      if (Object.hasOwn(v,'z') !== Object.hasOwn(v,'coverage_3d')) return false;
+      if (!Object.hasOwn(v,'z')) return true;
+      return Number.isFinite(v.z) && coverage(v.coverage_3d) && (v.step_norm === 0
+        ? v.coverage === null && v.coverage_3d === null
+        : v.coverage !== null && v.coverage_3d !== null && v.coverage_3d + 1e-9 >= v.coverage);
+    };
     const list = (v, check, max=Infinity) => Array.isArray(v) && v.length <= max && v.every(check);
     const grid = v => Array.isArray(v) && v.length > 0 && v.length <= 16 &&
       list(v, row => Array.isArray(row) && row.length > 0 && row.length === v[0].length && list(row, Number.isFinite, 16));
@@ -44,7 +54,8 @@
           !s.events.some(e=>e.id === p.event_id && e.batch > p.batch),96) || !object(s.planes)) return false;
       if (!Object.entries(s.planes).every(([name,p]) => s.catalog.some(m=>m.module===name) && object(p) && integer(p.basis_id) &&
           list(p.projections, v => object(v) && Number.isFinite(v.x) && Number.isFinite(v.y) &&
-            number(v.coverage) && number(v.angle) && Number.isFinite(v.step_norm)) &&
+            coverage(v.coverage) && number(v.angle) && Number.isFinite(v.step_norm) && v.step_norm >= 0 && spatialPair(v)) &&
+          new Set(p.projections.map(v=>Object.hasOwn(v,'z'))).size <= 1 &&
           p.projections.length === (p.basis_id ? s.points.length : 0))) return false;
       const p=s.probe;
       if (p == null) return true;
@@ -170,66 +181,115 @@
     }else empty('update-histogram','Distribution not captured');
     line('matrix-history',s.events,e=>Number.isFinite(e.matrices?.[selection]?.relative_update)?e.matrices[selection].relative_update*100:null,{label:'Weight change (%) · norm on a fixed sample',selected:eventIndex});
   }
-  function outsideStep(projection) {
+  function hasThirdAxis(s) {
+    const projections=s?.planes[module]?.projections;
+    return projections?.length > 0 && projections.every(p=>Number.isFinite(p.z));
+  }
+  const displayedDimension = s => dimension===3 && hasThirdAxis(s) ? 3 : 2;
+  const movementCoverage = (projection, dims) => dims===3 ? projection?.coverage_3d : projection?.coverage;
+  function outsideStep(projection, dims=2) {
     if (!Number.isFinite(projection?.step_norm) || projection.step_norm < 0) return null;
     if (projection.step_norm === 0) return 0;
-    if (!Number.isFinite(projection.coverage)) return null;
+    const coverage=movementCoverage(projection,dims);
+    if (!Number.isFinite(coverage)) return null;
     // Coverage is a ratio of squared norms, so recover length with a square root.
-    return projection.step_norm * Math.sqrt(1 - Math.max(0, Math.min(1, projection.coverage)));
+    return projection.step_norm * Math.sqrt(1 - Math.max(0, Math.min(1, coverage)));
   }
-  function sizeScale(maximum) {
+  function sizeScale(maximum, dims=2) {
+    const space=dims===3?'3D subspace':'2D plane';
+    text('path-size-label',`Movement outside the ${space}`);
     $('path-size-scale').hidden=!(maximum>0);
     text('path-size-half',maximum>0?sci(maximum/2):'—');text('path-size-max',maximum>0?sci(maximum):'—');
     text('path-size-note',maximum>0
-      ? 'Bubble area above the small position marker represents outside-plane step length. Scale follows this module’s visible history; the first point has no previous step.'
-      : maximum===0 ? 'No measurable movement outside the plane in this window. Small markers show positions only.'
+      ? `Bubble area above the small position marker represents step length outside the ${space}. Scale follows this module’s visible history; the first point has no previous step.`
+      : maximum===0 ? `No measurable movement outside the ${space} in this window. Small markers show positions only.`
       : 'Waiting for measured steps to size the bubbles.');
+  }
+  function lossColor(value, low, high) {
+    if (!Number.isFinite(value)) return C.muted;
+    const t=high>low?Math.max(0,Math.min(1,(value-low)/(high-low))):.5;
+    return '#'+[143,216,191].map((v,i)=>Math.round(v+([233,184,108][i]-v)*t).toString(16).padStart(2,'0')).join('');
+  }
+  function lossScale(points) {
+    const values=points.map(p=>p.reference_loss).filter(Number.isFinite);
+    const low=values.length?Math.min(...values):null, high=values.length?Math.max(...values):null;
+    text('path-loss-low',values.length?`Lower NLL · ${sci(low)}`:'NLL unavailable');
+    text('path-loss-high',values.length?(high>low?`Higher NLL · ${sci(high)}`:'Constant NLL'):'');
+    $('path-loss-scale').style.background=high>low
+      ? `linear-gradient(to right, ${lossColor(low,low,high)}, ${lossColor(high,low,high)})`
+      : lossColor(low,low,high);
+    $('path-loss-scale').title=values.length?`Visual NLL: ${low} to ${high}`:'Visual NLL unavailable';
+    return value=>lossColor(value,low,high);
+  }
+  function rotate(x,y,z) {
+    const a=x*Math.cos(camera.yaw)+z*Math.sin(camera.yaw), b=-x*Math.sin(camera.yaw)+z*Math.cos(camera.yaw);
+    const c=y*Math.cos(camera.pitch)-b*Math.sin(camera.pitch), depth=y*Math.sin(camera.pitch)+b*Math.cos(camera.pitch);
+    return [a*Math.cos(camera.roll)-c*Math.sin(camera.roll),a*Math.sin(camera.roll)+c*Math.cos(camera.roll),depth];
   }
   function trajectory(s) {
     const plane=s.planes[module], projections=plane?.projections || [], points=s.points;
-    const outside=projections.map((p,i)=>i?outsideStep(p):null), known=outside.filter(Number.isFinite);
+    const dims=displayedDimension(s), pointColor=lossScale(points);
+    const outside=projections.map((p,i)=>i?outsideStep(p,dims):null), known=outside.filter(Number.isFinite);
     const maximum=known.length?Math.max(...known):null;
-    sizeScale(maximum);
+    sizeScale(maximum,dims);
+    text('camera-zoom',`${fmt(camera.zoom*100,0)} %`);
+    $('zoom-out').disabled=camera.zoom<=.5;$('zoom-in').disabled=camera.zoom>=4;
     if(!projections.length) { empty('parameter-path','Calibrating the plane with four measured batches…');drawHits=[];return; }
     const {g,w,h}=canvas('parameter-path');
-    const xs=projections.map(p=>p.x),ys=projections.map(p=>p.y),zs=points.map(p=>p.reference_loss).filter(Number.isFinite);
-    const bounds=values=>[Math.min(...values),Math.max(...values)], [xmin,xmax]=bounds(xs),[ymin,ymax]=bounds(ys),[zmin,zmax]=zs.length?bounds(zs):[0,1];
-    const normal=(v,lo,hi)=>hi>lo?2*(v-lo)/(hi-lo)-1:0;
-    function project(x,y,z){ if(dimension===2)return [60+(x+1)*(w-100)/2,30+(1-y)*(h-75)/2];
-      const a=x*Math.cos(yaw)-y*Math.sin(yaw),b=x*Math.sin(yaw)+y*Math.cos(yaw);
-      return [w/2+a*w*.24,h*.69+b*h*.105-z*h*.47]; }
-    function segment(a,b,color=C.grid){g.strokeStyle=color;g.beginPath();g.moveTo(...a);g.lineTo(...b);g.stroke();}
+    const coordinates=projections.map(p=>[p.x,p.y,dims===3?p.z:0]);
+    const center=[0,1,2].map(axis=>{const v=coordinates.map(p=>p[axis]);return Math.min(...v)/2+Math.max(...v)/2;});
+    const centered=coordinates.map(p=>p.map((v,i)=>v-center[i]));
+    const extent=Math.max(...centered.map(p=>Math.hypot(...p))) || 1;
+    const left=16,right=w-16,top=16,bottom=h-34;
+    // One scale for every weight coordinate; orthographic camera rotations
+    // preserve distance before the intentional projection onto the screen.
+    const scale=Math.min(right-left,bottom-top)*.43*camera.zoom;
+    function project(x,y,z){const p=dims===3?rotate(x,y,z):[x,y,0];
+      return [(left+right)/2+p[0]*scale,(top+bottom)/2-p[1]*scale,p[2]]; }
+    function segment(a,b,color=C.grid){g.strokeStyle=color;g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(b[0],b[1]);g.stroke();}
+    g.save();g.beginPath();g.rect(left,top,right-left,bottom-top);g.clip();
     for(let i=0;i<=4;i++){const k=-1+i*.5;segment(project(-1,k,0),project(1,k,0));segment(project(k,-1,0),project(k,1,0));}
-    if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('Visual NLL',10,30);g.fillText(s.reference_source==='training_pre_update'?'before learning':'reference',10,46);}
-    g.fillStyle=C.muted;g.textAlign='center';g.fillText('PC1 · fixed sample',w/2,h-6);g.textAlign='right';g.fillText('PC2',w-12,h-25);
-    // Keep the same screen-space area in 2D and 3D; camera depth is not update size.
-    drawHits=projections.map((p,i)=>({
-      position:project(normal(p.x,xmin,xmax),normal(p.y,ymin,ymax),(points[i]?.reference_loss-zmin)/Math.max(1e-9,zmax-zmin)),
+    [[1,0,0],[0,1,0],[0,0,1]].slice(0,dims).forEach((axis,i)=>{
+      const end=project(...axis);segment(project(0,0,0),end,C.muted);
+      g.fillStyle=C.text;g.textAlign='center';g.fillText(`PC${i+1}`,end[0],end[1]-8);
+    });
+    // Bubble size remains screen-space area, independent of camera depth/zoom.
+    drawHits=centered.map((p,i)=>{const position=project(...p.map(v=>v/extent));return {
+      position:position.slice(0,2),depth:position[2],
+      visible:position[0]>=left&&position[0]<=right&&position[1]>=top&&position[1]<=bottom,
       radius:maximum>0&&Number.isFinite(outside[i])?Math.sqrt(3**2+(14**2-3**2)*outside[i]/maximum):3,
-    }));
+    };});
     g.lineWidth=2;
-    drawHits.forEach((hit,i)=>{if(i)segment(drawHits[i-1].position,hit.position,i<pointIndex?C.lilac:C.mint);});
+    drawHits.forEach((hit,i)=>{if(i)segment(drawHits[i-1].position,hit.position,C.muted);});
     function bubble(hit,i) {
-      const p=hit.position, radius=hit.radius, color=i<pointIndex?C.lilac:C.mint;
+      const p=hit.position, radius=hit.radius, color=pointColor(points[i]?.reference_loss);
       if(radius>3){g.fillStyle=`${color}24`;g.strokeStyle=`${color}70`;g.lineWidth=1;g.beginPath();g.arc(...p,radius,0,2*Math.PI);g.fill();g.stroke();}
-      g.fillStyle=i===pointIndex?C.text:color;g.beginPath();g.arc(...p,3,0,2*Math.PI);g.fill();
-      if(i===pointIndex){g.lineWidth=2;g.strokeStyle=C.mint;g.beginPath();g.arc(...p,radius+4,0,2*Math.PI);g.stroke();g.textAlign='left';g.fillStyle=C.text;g.fillText(`Batch ${points[i].batch}`,Math.min(w-100,p[0]+radius+8),Math.max(18,p[1]-radius-8));}
+      g.fillStyle=color;g.beginPath();g.arc(...p,3,0,2*Math.PI);g.fill();
+      if(i===pointIndex){g.lineWidth=2;g.strokeStyle=C.text;g.beginPath();g.arc(...p,radius+4,0,2*Math.PI);g.stroke();g.textAlign='left';g.fillStyle=C.text;g.fillText(`Batch ${points[i].batch}`,Math.min(w-100,p[0]+radius+8),Math.max(18,p[1]-radius-8));}
     }
-    drawHits.forEach((hit,i)=>{if(i!==pointIndex)bubble(hit,i);});
+    drawHits.map((hit,i)=>({hit,i})).sort((a,b)=>a.hit.depth-b.hit.depth).forEach(({hit,i})=>{if(i!==pointIndex)bubble(hit,i);});
     if(drawHits[pointIndex])bubble(drawHits[pointIndex],pointIndex);
+    g.restore();g.fillStyle=C.muted;g.textAlign='center';g.fillText(`PC1 / PC2${dims===3?' / PC3':''} · common parameter scale`,w/2,h-9);
   }
   function renderPath(s) {
     const plane=s.planes[module], p=s.points[pointIndex], projection=plane?.projections?.[pointIndex],previous=s.points[pointIndex-1];
-    text('basis-note',plane?.basis_id?`Fixed plane ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches · module-wide fixed sample.`:'Waiting for four batches to establish the PCA plane.');
-    text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',fmt(p?.reference_loss,4));
+    const dims=displayedDimension(s),space=dims===3?'3D subspace':'2D plane',coverage=movementCoverage(projection,dims);
+    const legacy=plane?.projections?.length>0&&!hasThirdAxis(s);
+    $('view-2d').setAttribute('aria-pressed',String(dims===2));$('view-3d').setAttribute('aria-pressed',String(dims===3));
+    $('view-3d').disabled=!hasThirdAxis(s);
+    text('basis-note',plane?.basis_id?`Fixed basis ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches · module-wide fixed sample.${legacy?' 2D fallback: this capture has no PC3. Follow training for updated telemetry.':''}`:'Waiting for four batches to establish the PCA basis.');
+    text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',Number.isFinite(p?.reference_loss)?String(p.reference_loss):'—');
+    $('reference-value').title=Number.isFinite(p?.reference_loss)?String(p.reference_loss):'Visual NLL unavailable';
     const change=Number.isFinite(p?.reference_loss)&&Number.isFinite(previous?.reference_loss)?p.reference_loss-previous.reference_loss:null;
     text('loss-change',Number.isFinite(change)?`${change>0?'+':''}${fmt(change,4)}`:'—');
-    $('coverage').value=projection?.coverage ?? 0; text('coverage-value',Number.isFinite(projection?.coverage)?`${fmt(projection.coverage*100,1)} %`:'—');
+    text('coverage-label',`Squared movement captured by the ${space}`);text('outside-step-label',`Step outside the ${space}`);
+    $('coverage').setAttribute('aria-label',`Fraction of squared step length captured by the ${space}`);
+    $('coverage').value=coverage ?? 0; text('coverage-value',Number.isFinite(coverage)?`${fmt(coverage*100,1)} %`:'—');
     text('outside-plane',projection&&pointIndex===0?'First retained batch: no previous step in this window.'
-      : Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % of squared step length lies outside the plane. Measured on sampled coefficients.`
+      : Number.isFinite(coverage)?`${fmt((1-coverage)*100,1)} % of squared step length lies outside the ${space}. Measured on sampled coefficients.`
       : projection?.step_norm===0?'No measurable change between these sampled weights.':'No measurable displacement to calculate coverage.');
     text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',pointIndex>0?sci(projection?.step_norm):'—');
-    text('outside-step-value',pointIndex>0?sci(outsideStep(projection)):'—');
+    text('outside-step-value',pointIndex>0?sci(outsideStep(projection,dims)):'—');
     trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
@@ -272,7 +332,10 @@
     const s=data();if(!s || s.status!=='ready') return;
     eventIndex=Math.min(eventIndex,Math.max(0,s.events.length-1));pointIndex=Math.min(pointIndex,Math.max(0,s.points.length-1));
     text('reference-label',s.reference_source==='training_pre_update'?'Visual NLL before learning':'Reference visual NLL');
-    text('reference-source',s.reference_source==='training_pre_update'?'New data from each batch, measured before updates; the weights at each point are from after the update.':'Same real reference observations');
+    const lossSource=s.reference_source==='training_pre_update'
+      ? 'Visual NLL uses different training data in each batch and is measured before learning; each point records weights after that batch.'
+      : 'Visual NLL uses the same real reference observations across batches.';
+    text('reference-source',lossSource);text('path-loss-note',`${lossSource} Colors span the retained window; they do not describe a loss landscape.`);
     populateSelects(s);text('sample-note',`Up to ${s.sample_per_tensor} coefficients / tensor · fixed sample`);
     text('optimization-status',pinned?'Pinned instant':s.running?'Measuring training':'Training stopped');
     text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensors · capture every ${s.every} predictor updates`);
@@ -314,15 +377,59 @@
   $('capture-matrix').addEventListener('click',()=>request({operation:'matrix',matrix:selection}));
   $('capture-probe').addEventListener('click',()=>request({operation:'probe',session:Number($('probe-session').value)}));
   $('recalibrate').addEventListener('click',()=>request({operation:'recalibrate'}));
-  $('view-2d').addEventListener('click',()=>{dimension=2;$('view-2d').setAttribute('aria-pressed','true');$('view-3d').setAttribute('aria-pressed','false');render();});
-  $('view-3d').addEventListener('click',()=>{dimension=3;$('view-2d').setAttribute('aria-pressed','false');$('view-3d').setAttribute('aria-pressed','true');render();});
+  $('view-2d').addEventListener('click',()=>{dimension=2;render();});
+  $('view-3d').addEventListener('click',()=>{dimension=3;render();});
   ['pulse','path','memory'].forEach((id,i)=>{const button=$(`tab-${id}`);button.addEventListener('click',()=>setTab(id));button.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return;e.preventDefault();const names=['pulse','path','memory'];const j=e.key==='Home'?0:e.key==='End'?2:(i+(e.key==='ArrowRight'?1:2))%3;setTab(names[j]);$(`tab-${names[j]}`).focus();});});
   $('playback').addEventListener('click',()=>{if(playing){stopPlayback();return;}freeze();if(!data()?.events?.length)return;text('playback','Pause');if(eventIndex>=data().events.length-1)eventIndex=-1;playing=setInterval(()=>{if(eventIndex>=data().events.length-1){stopPlayback();return;}chooseEvent(eventIndex+1);},900);});
   let drag=null;
-  $('parameter-path').addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw};e.target.setPointerCapture(e.pointerId);});
-  $('parameter-path').addEventListener('pointermove',e=>{if(!drag||dimension!==3||!data())return;yaw=drag.yaw+(e.clientX-drag.x)/180;trajectory(data());});
-  $('parameter-path').addEventListener('pointerup',e=>{if(drag&&Math.abs(e.clientX-drag.x)<5){const box=e.target.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;let closest=-1,distance=Infinity;drawHits.forEach((hit,i)=>{const d=Math.hypot(hit.position[0]-x,hit.position[1]-y);if(d<=Math.max(24,hit.radius+4)&&d<distance){distance=d;closest=i;}});if(closest>=0)choosePoint(closest);}drag=null;});
-  $('parameter-path').addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();choosePoint(pointIndex+(e.key==='ArrowRight'?1:-1));}});
+  const pathCanvas=$('parameter-path');
+  const redrawCamera=()=>{if(data())trajectory(data());};
+  const zoomBy=factor=>{camera.zoom=Math.max(.5,Math.min(4,camera.zoom*factor));redrawCamera();};
+  const resetCamera=()=>{camera=defaultCamera();redrawCamera();};
+  $('zoom-out').addEventListener('click',()=>zoomBy(1/1.2));
+  $('zoom-in').addEventListener('click',()=>zoomBy(1.2));
+  $('reset-view').addEventListener('click',resetCamera);
+  pathCanvas.addEventListener('pointerdown',e=>{
+    if(e.button!==0 || e.isPrimary===false || !data())return;
+    drag={id:e.pointerId,x:e.clientX,y:e.clientY,camera:{...camera},roll:e.shiftKey,moved:false};
+    pathCanvas.focus();pathCanvas.setPointerCapture(e.pointerId);
+  });
+  pathCanvas.addEventListener('pointermove',e=>{
+    if(!drag || drag.id!==e.pointerId)return;
+    const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+    drag.moved ||= Math.hypot(dx,dy)>=5;
+    if(!drag.moved || !data() || displayedDimension(data())!==3)return;
+    if(drag.roll)camera.roll=drag.camera.roll+(dx+dy)/180;
+    else {camera.yaw=drag.camera.yaw+dx/180;camera.pitch=drag.camera.pitch+dy/180;}
+    redrawCamera();
+  });
+  pathCanvas.addEventListener('pointerup',e=>{
+    if(!drag || drag.id!==e.pointerId)return;
+    const click=!drag.moved&&Math.hypot(e.clientX-drag.x,e.clientY-drag.y)<5;
+    drag=null;
+    if(pathCanvas.hasPointerCapture(e.pointerId))pathCanvas.releasePointerCapture(e.pointerId);
+    if(!click)return;
+    const box=pathCanvas.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;
+    if(x<16||x>box.width-16||y<16||y>box.height-34)return;
+    let closest=-1,distance=Infinity;
+    drawHits.forEach((hit,i)=>{const d=Math.hypot(hit.position[0]-x,hit.position[1]-y);
+      if(hit.visible&&d<=Math.max(24,hit.radius+4)&&d<distance){distance=d;closest=i;}});
+    if(closest>=0)choosePoint(closest);
+  });
+  for(const event of ['pointercancel','lostpointercapture'])pathCanvas.addEventListener(event,()=>{drag=null;});
+  pathCanvas.addEventListener('wheel',e=>{
+    e.preventDefault();
+    const unit=e.deltaMode===1?16:e.deltaMode===2?pathCanvas.getBoundingClientRect().height:1;
+    zoomBy(Math.exp(Math.max(-1,Math.min(1,-e.deltaY*unit*.002))));
+  },{passive:false});
+  pathCanvas.addEventListener('keydown',e=>{
+    if(e.ctrlKey||e.metaKey||e.altKey)return;
+    const key=e.key.toLowerCase(),rotation={a:['yaw',-.12],d:['yaw',.12],w:['pitch',-.12],s:['pitch',.12],q:['roll',-.12],e:['roll',.12]}[key];
+    if(key==='arrowleft'||key==='arrowright'){e.preventDefault();choosePoint(pointIndex+(key==='arrowright'?1:-1));}
+    else if(key==='+'||key==='='||key==='-'){e.preventDefault();zoomBy(key==='-'?1/1.2:1.2);}
+    else if(key==='0'||key==='home'){e.preventDefault();resetCamera();}
+    else if(rotation&&data()&&displayedDimension(data())===3){e.preventDefault();camera[rotation[0]]+=rotation[1];redrawCamera();}
+  });
   window.addEventListener('resize',render);
   async function refresh(){
     let received=false;
