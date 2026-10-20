@@ -42,7 +42,50 @@ class SequenceControlTests(unittest.TestCase):
         return SequencePhaseControl(stages(), {'encoder_learning_rate_after_predictor': 3e-7},
                                     SequenceControlConfig(**options))
 
-    def test_pool_counts_and_require_every_level_with_new_evidence(self):
+    def test_sparse_observed_levels_do_not_veto_qualified_peers(self):
+        sparse_rows = (
+            counts(changed=0, reconstruction_wrong=0, reconstruction_union=0),
+            counts(samples=1, drift_samples=1),
+            counts(drift_samples=1),
+        )
+        for sparse in sparse_rows:
+            with self.subTest(sparse=sparse):
+                c = self.controller(window_batches=1)
+                for batch in (1, 2):
+                    c.observe(batch, {'game/1': counts(), 'game/2': sparse})
+                self.assertEqual((c.phase, c.admitted_batch), ('predictor', 2))
+                row = c.rows()[1]
+                self.assertTrue(row['observed'])
+                self.assertTrue(row['required'], 'catalog membership is not a pass')
+                self.assertFalse(row['eligible'])
+                self.assertFalse(row['passing'])
+                self.assertEqual(row['passes'], 0)
+                self.assertEqual(row['samples'], sparse['samples'])
+
+    def test_all_sparse_or_absent_evidence_cannot_admit_predictor(self):
+        for sparse in (counts(changed=0), counts(samples=1, drift_samples=1)):
+            with self.subTest(sparse=sparse):
+                c = self.controller(window_batches=1)
+                for batch in (1, 2, 3):
+                    c.observe(batch, {'game/1': sparse, 'game/2': sparse})
+                self.assertTrue(all(row['observed'] for row in c.rows()))
+                self.assertFalse(any(row['eligible'] for row in c.rows()))
+                self.assertEqual(c.phase, 'representation')
+                c.observe(4, {})
+                self.assertEqual(c.phase, 'representation', 'empty all() is not qualification')
+
+    def test_sparse_level_participates_when_fresh_evidence_becomes_sufficient(self):
+        c = self.controller(window_batches=1)
+        c.observe(1, {'game/1': counts(), 'game/2': counts(changed=0)})
+        c.observe(2, {'game/1': counts(), 'game/2': counts(reconstruction_wrong=10)})
+        self.assertTrue(c.rows()[1]['eligible'])
+        self.assertEqual(c.phase, 'representation', 'a newly eligible measured failure blocks')
+        c.observe(3, {'game/1': counts(), 'game/2': counts()})
+        self.assertEqual(c.phase, 'representation', 'the new level still needs two fresh passes')
+        c.observe(4, {'game/1': counts(), 'game/2': counts()})
+        self.assertEqual((c.phase, c.admitted_batch), ('predictor', 4))
+
+    def test_pool_counts_fresh_confirmations_and_latched_admission(self):
         c = self.controller(window_batches=2)
         c.observe(1, {'game/1': counts(reconstruction_wrong=1, reconstruction_union=2), 'game/2': counts()})
         c.observe(2, {'game/1': counts(reconstruction_wrong=0, reconstruction_union=18), 'game/2': counts()})
@@ -54,9 +97,11 @@ class SequenceControlTests(unittest.TestCase):
         c.observe(4, {'game/1': counts(changed=0), 'game/2': counts()})
         self.assertFalse(c.rows()[0]['enough'], 'expired changed evidence must not qualify')
         self.assertEqual(c.rows()[0]['passes'], 0)
+        self.assertEqual((c.phase, c.admitted_batch), ('predictor', 4),
+                         'the sparse observed level no longer vetoes its qualified peer')
         c.observe(5, {'game/1': counts(), 'game/2': counts()})
         c.observe(6, {'game/1': counts(), 'game/2': counts()})
-        self.assertEqual((c.phase, c.admitted_batch), ('predictor', 6))
+        self.assertEqual((c.phase, c.admitted_batch), ('predictor', 4))
         c.observe(7, {'game/1': counts(reconstruction_wrong=20), 'game/2': counts()})
         self.assertEqual(c.phase, 'predictor', 'admission latches; continuing quality stays visible')
         with self.assertRaisesRegex(ValueError, 'new batch'):
@@ -64,13 +109,14 @@ class SequenceControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Nonfinite'):
             c.observe(8, {'game/1': counts(drift_delta=float('nan'))})
 
-    def test_one_bad_level_or_stationary_only_data_cannot_be_hidden(self):
+    def test_sufficient_evidence_with_bad_or_undefined_metrics_still_blocks(self):
         for bad in (counts(reconstruction_wrong=10), counts(drift_delta=.04),
-                    counts(changed=0), counts(samples=0), counts(drift_scale=0)):
+                    counts(reconstruction_union=0), counts(drift_scale=0)):
             c = self.controller()
             for batch in range(1, 6):
                 c.observe(batch, {'game/1': counts(), 'game/2': bad})
             self.assertEqual(c.phase, 'representation')
+            self.assertTrue(c.rows()[1]['eligible'])
             self.assertEqual(c.rows()[1]['passes'], 0)
 
     def test_native_unreached_levels_wait_but_first_levels_and_synthetics_are_required(self):
@@ -80,6 +126,7 @@ class SequenceControlTests(unittest.TestCase):
         c.observe(1, {'game/1': counts()})
         c.observe(2, {'game/1': counts()})
         self.assertEqual(c.phase, 'representation', 'synthetic evidence remains mandatory')
+        self.assertFalse(c.rows()[2]['observed'])
         for batch in (3, 4):
             c.observe(batch, {'game/1': counts(), 'synthetic/1': counts()})
         self.assertEqual(c.phase, 'predictor')
@@ -93,17 +140,51 @@ class SequenceControlTests(unittest.TestCase):
         catalog = [dict(s, source='sdk') for s in stages()]
         c = SequencePhaseControl(catalog, {}, SequenceControlConfig(window_batches=2))
         c.observe(1, {'game/1': counts(), 'game/2': counts(reconstruction_wrong=20)})
-        for batch in (2, 3, 4):
-            c.observe(batch, {'game/1': counts()})
+        c.observe(2, {})
+        c.observe(3, {})
+        c.observe(4, {'game/1': counts()})
         self.assertEqual(c.phase, 'representation')
         other = SequencePhaseControl(catalog, {}, c.config)
         other.restore(c.snapshot())
         self.assertTrue(other.rows()[1]['required'])
+        self.assertTrue(other.rows()[1]['observed'])
+        self.assertFalse(other.rows()[1]['eligible'], 'expired data is ignored, not a pass')
         self.assertEqual(other.rows()[1]['samples'], 0)
-        other.observe(5, {'game/1': counts(), 'game/2': counts()})
-        self.assertEqual(other.phase, 'representation', 'native levels still need patience')
+        other.observe(5, {'game/1': counts(), 'game/2': counts(reconstruction_wrong=20)})
+        self.assertEqual(other.phase, 'representation', 'fresh sufficient data restores the veto')
         other.observe(6, {'game/1': counts(), 'game/2': counts()})
+        other.observe(7, {'game/1': counts(), 'game/2': counts()})
+        self.assertEqual(other.phase, 'representation', 'native levels still need patience')
+        other.observe(8, {'game/1': counts(), 'game/2': counts()})
         self.assertEqual(other.phase, 'predictor')
+
+    def test_observed_synthetic_coverage_survives_expiry_and_resume(self):
+        c = self.controller(window_batches=1)
+        c.observe(1, {'game/1': counts(), 'game/2': counts(changed=0)})
+        c.observe(2, {})
+        other = self.controller(window_batches=1)
+        other.restore(c.snapshot())
+        self.assertTrue(all(row['observed'] for row in other.rows()))
+        self.assertFalse(any(row['eligible'] for row in other.rows()))
+        for batch in (3, 4):
+            other.observe(batch, {'game/1': counts()})
+        self.assertEqual(other.phase, 'predictor', 'old observed sparse levels do not veto forever')
+        self.assertFalse(other.rows()[1]['passing'])
+
+    def test_legacy_snapshot_infers_coverage_without_altering_evidence(self):
+        catalog = [dict(stages()[0], game=g, source='synthetic') for g in ('recent', 'confirmed')]
+        catalog += [dict(stages()[0], game='native', source='sdk')]
+        c = SequencePhaseControl(catalog, {}, SequenceControlConfig(window_batches=1))
+        legacy = dict(version=1, config=asdict(c.config), phase='representation', admitted_batch=None,
+                      window=[dict(batch=10, pairs={'recent/1': counts(changed=0)})],
+                      streaks={'recent/1': 0, 'confirmed/1': 2, 'native/1': 0},
+                      observed_native_levels=['native/1'])
+        c.restore(legacy)
+        self.assertTrue(all(row['observed'] for row in c.rows()))
+        self.assertFalse(c.rows()[0]['passing'], 'coverage is not qualification')
+        self.assertEqual(c.snapshot()['window'], legacy['window'])
+        self.assertEqual(c.snapshot()['streaks'], legacy['streaks'])
+        self.assertEqual(c.phase, 'representation')
 
     def test_exact_phase_rates_and_moments_survive_transition_and_restore(self):
         e = Engine(WorldModel(NetworkConfig.small()), TrainConfig())

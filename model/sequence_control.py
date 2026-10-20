@@ -41,6 +41,7 @@ class SequencePhaseControl:
         self.window = deque(maxlen=config.window_batches)
         self.streaks = dict.fromkeys(self.stages, 0)
         self.observed_native_levels = set()
+        self.observed_pairs = set()
         self.phase, self.admitted_batch = 'representation', None
 
     def apply(self, representation):
@@ -73,9 +74,10 @@ class SequencePhaseControl:
                       counts['drift_samples'] >= gates['minimum_samples'])
             passing = (enough and reconstruction is not None and drift is not None and
                        reconstruction <= gates['representation_open'] and drift <= gates['latent_drift'])
+            required = (stage.get('source') != 'sdk' or stage['level'] == 1 or
+                        key in self.observed_native_levels)
             rows.append(dict(game=stage['game'], level=stage['level'], key=key,
-                required=(stage.get('source') != 'sdk' or stage['level'] == 1 or
-                          key in self.observed_native_levels),
+                required=required, observed=key in self.observed_pairs, eligible=required and enough,
                 samples=int(counts['samples']), changed=int(counts['changed']),
                 reconstruction_error=reconstruction, latent_drift=drift,
                 prediction_error=ratio(counts['prediction_wrong'], counts['prediction_union']),
@@ -91,6 +93,7 @@ class SequencePhaseControl:
             raise ValueError('Nonfinite or negative phase evidence')
         self.observed_native_levels.update(key for key, row in pairs.items()
             if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0)
+        self.observed_pairs.update(key for key, row in pairs.items() if row.get('samples', 0) > 0)
         self.window.append(dict(batch=batch, pairs=pairs))
         for row in self.rows():
             key = row['key']
@@ -98,14 +101,20 @@ class SequencePhaseControl:
                 self.streaks[key] = 0
             elif pairs.get(key, {}).get('samples', 0):
                 self.streaks[key] += 1
-        if self.phase == 'representation' and all(
-                row['passes'] >= row['thresholds']['patience'] for row in self.rows() if row['required']):
+        rows = self.rows()
+        eligible = [row for row in rows if row['eligible']]
+        # Cover the catalog once before ignoring sparse/expired observations.
+        # An empty eligible set is not evidence that representation is ready.
+        covered = all(row['observed'] for row in rows if row['required'])
+        if self.phase == 'representation' and covered and eligible and all(
+                row['passing'] and row['passes'] >= row['thresholds']['patience'] for row in eligible):
             self.phase, self.admitted_batch = 'predictor', batch
 
     def snapshot(self):
         return dict(version=1, config=asdict(self.config), phase=self.phase,
                     admitted_batch=self.admitted_batch, window=list(self.window), streaks=dict(self.streaks),
-                    observed_native_levels=sorted(self.observed_native_levels))
+                    observed_native_levels=sorted(self.observed_native_levels),
+                    observed_pairs=sorted(self.observed_pairs))
 
     def restore(self, saved, *, extend=False):
         previous = set(saved['streaks'])
@@ -126,6 +135,12 @@ class SequencePhaseControl:
         self.observed_native_levels = set(saved.get('observed_native_levels', (
             key for entry in self.window for key, row in entry['pairs'].items()
             if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0)))
+        # Existing version-1 checkpoints predate the all-source coverage set.
+        known_pairs = {key for entry in self.window for key, row in entry['pairs'].items()
+                       if row.get('samples', 0) > 0}
+        known_pairs.update(key for key, passes in self.streaks.items() if passes > 0)
+        known_pairs.update(self.observed_native_levels)
+        self.observed_pairs = set(saved.get('observed_pairs', known_pairs))
 
     def report(self):
         return dict(phase=self.phase, admitted_batch=self.admitted_batch,
