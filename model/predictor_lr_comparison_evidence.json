@@ -1,0 +1,304 @@
+{
+  "experiment_source_commit": "6edf471f1b95545eebf80e2e95e2073331d8e41d",
+  "checkpoint_sha256": "92a301c5d40c0e9f9b93d9a31d48fdffa20958c8f3e932323e6938574f1d0dd8",
+  "corpus_sha256": "00db46395e2270afe353e1e404b0ae9c69e74f1ab9aee097a7ecf8ea59c52e6f",
+  "source_progress": {
+    "batches": 1061,
+    "actions": 4250112,
+    "updates": 4192
+  },
+  "sequence": {
+    "batch_games": 8,
+    "session_steps": 512,
+    "block_steps": 16,
+    "context_steps": 16,
+    "level_steps": 32,
+    "loss_start_weight": 1.0,
+    "loss_warmup_steps": 32,
+    "game_schedule": "shuffled",
+    "representation_updates": 8
+  },
+  "games": {
+    "synthetic": 71,
+    "sdk_public_training": 20
+  },
+  "protocol": "One shared shuffled training corpus; independent 128-step probe session per game. Both trials restore the same complete model, optimizer moments and RNG. Ordinary representation updates at unchanged rates. No probe optimization or live phase-gate changes.",
+  "probe_steps": 128,
+  "training_transitions_per_trial": 46589,
+  "predictor_updates_per_trial": 384,
+  "initial": {
+    "all": {
+      "wrong": 213495,
+      "union": 225127,
+      "transitions": 11648,
+      "invented": 44915,
+      "missed": 166084,
+      "color": 2496,
+      "correct": 11632,
+      "pooled_error": 0.9483313862841862,
+      "macro_error": 0.9745642494202069,
+      "measured_games": 91
+    },
+    "synthetic": {
+      "wrong": 134248,
+      "union": 138101,
+      "transitions": 9088,
+      "invented": 32107,
+      "missed": 100829,
+      "color": 1312,
+      "correct": 3853,
+      "pooled_error": 0.9721001296152816,
+      "macro_error": 0.9900857991902491,
+      "measured_games": 71
+    },
+    "sdk": {
+      "wrong": 79247,
+      "union": 87026,
+      "transitions": 2560,
+      "invented": 12808,
+      "missed": 65255,
+      "color": 1184,
+      "correct": 7779,
+      "pooled_error": 0.9106129202766989,
+      "macro_error": 0.9194627477365576,
+      "measured_games": 20
+    }
+  },
+  "trials": [
+    {
+      "learning_rate": 3e-05,
+      "representation_rates": {
+        "encoder": 3e-07,
+        "decoder": 3e-07
+      },
+      "final_representation_rates": {
+        "encoder": 3e-07,
+        "decoder": 3e-07
+      },
+      "updates": 4576,
+      "summary": {
+        "all": {
+          "wrong": 236642,
+          "union": 256646,
+          "transitions": 11648,
+          "invented": 76434,
+          "missed": 157731,
+          "color": 2477,
+          "correct": 20004,
+          "pooled_error": 0.9220560616569127,
+          "macro_error": 0.9643769846391715,
+          "measured_games": 91
+        },
+        "synthetic": {
+          "wrong": 151728,
+          "union": 159246,
+          "transitions": 9088,
+          "invented": 53252,
+          "missed": 96893,
+          "color": 1583,
+          "correct": 7518,
+          "pooled_error": 0.9527900229833088,
+          "macro_error": 0.9848391903157224,
+          "measured_games": 71
+        },
+        "sdk": {
+          "wrong": 84914,
+          "union": 97400,
+          "transitions": 2560,
+          "invented": 23182,
+          "missed": 60838,
+          "color": 894,
+          "correct": 12486,
+          "pooled_error": 0.8718069815195072,
+          "macro_error": 0.8917361544874165,
+          "measured_games": 20
+        }
+      },
+      "mean_training_loss": 2.2250338694526968,
+      "training_seconds": 561.268734909987,
+      "probe_full_image_nll": 0.055223723063316174
+    },
+    {
+      "learning_rate": 0.0001,
+      "representation_rates": {
+        "encoder": 3e-07,
+        "decoder": 3e-07
+      },
+      "final_representation_rates": {
+        "encoder": 3e-07,
+        "decoder": 3e-07
+      },
+      "updates": 4576,
+      "summary": {
+        "all": {
+          "wrong": 270495,
+          "union": 282935,
+          "transitions": 11648,
+          "invented": 102723,
+          "missed": 164574,
+          "color": 3198,
+          "correct": 12440,
+          "pooled_error": 0.9560323042394896,
+          "macro_error": 0.9785787688320788,
+          "measured_games": 91
+        },
+        "synthetic": {
+          "wrong": 152992,
+          "union": 160026,
+          "transitions": 9088,
+          "invented": 54032,
+          "missed": 96996,
+          "color": 1964,
+          "correct": 7034,
+          "pooled_error": 0.9560446427455539,
+          "macro_error": 0.9834123910706052,
+          "measured_games": 71
+        },
+        "sdk": {
+          "wrong": 117503,
+          "union": 122909,
+          "transitions": 2560,
+          "invented": 48691,
+          "missed": 67578,
+          "color": 1234,
+          "correct": 5406,
+          "pooled_error": 0.956016239656982,
+          "macro_error": 0.9614194098853105,
+          "measured_games": 20
+        }
+      },
+      "mean_training_loss": 2.1929732747764015,
+      "training_seconds": 564.9146483229852,
+      "probe_full_image_nll": 0.06864719223803159
+    }
+  ],
+  "comparison": {
+    "candidate_better": false,
+    "paired_games": 91,
+    "improved_games": 17,
+    "worsened_games": 25,
+    "tied_games": 49,
+    "macro_difference": 0.014201784192907288,
+    "macro_ci95": [
+      0.005366835107189524,
+      0.025644545686581137
+    ],
+    "pooled_difference": 0.03397624258257692,
+    "pooled_ci95": [
+      0.017002580038431258,
+      0.051723417123467716
+    ]
+  },
+  "decision": "Retain predictor LR 3e-5. Candidate 1e-4 worsens pooled and equal-game probe delta error, especially SDK games, despite slightly lower training loss. Resume the untouched live checkpoint; do not import either experimental branch.",
+  "limits": "One training round and one independent probe seed per game. Bootstrap resamples paired games, not independent reruns. These are public/synthetic training games, not a held-out-game evaluation.",
+  "validation": {
+    "cpu_tests": 43,
+    "command": "PYTHONPATH=src python -m unittest model.tests.test_predictor_lr model.tests.test_sequence_training model.tests.test_sequence_control model.tests.test_sequence_extension -v"
+  },
+  "source_checkpoint_unchanged": true,
+  "resume_verified": {
+    "batch": 1062,
+    "actions": 4254208,
+    "predictor_updates": 4224,
+    "learning_rates": {
+      "predictor": 3e-05,
+      "encoder": 3e-07,
+      "decoder": 3e-07
+    },
+    "production_checkpoint_identical_to_source_before_resume": true,
+    "public_dashboard_report_verified": true
+  },
+  "per_game_probe": [
+    {"game":"sc01-v1","source":"synthetic","baseline":{"wrong":14831,"union":15393,"transitions":128,"delta_error":0.9634898980055869,"invented":9842,"missed":4981,"color":8,"correct":562},"candidate":{"wrong":8934,"union":9007,"transitions":128,"delta_error":0.991895192627956,"invented":3456,"missed":5323,"color":155,"correct":73}},
+    {"game":"si01-v1","source":"synthetic","baseline":{"wrong":5426,"union":5710,"transitions":128,"delta_error":0.9502626970227671,"invented":3811,"missed":1615,"color":0,"correct":284},"candidate":{"wrong":5173,"union":5378,"transitions":128,"delta_error":0.9618817404239495,"invented":3479,"missed":1685,"color":9,"correct":205}},
+    {"game":"mc01-v1","source":"synthetic","baseline":{"wrong":2866,"union":2866,"transitions":128,"delta_error":1.0,"invented":1312,"missed":1551,"color":3,"correct":0},"candidate":{"wrong":1676,"union":1676,"transitions":128,"delta_error":1.0,"invented":122,"missed":1552,"color":2,"correct":0}},
+    {"game":"bf01-v1","source":"synthetic","baseline":{"wrong":223,"union":223,"transitions":128,"delta_error":1.0,"invented":0,"missed":223,"color":0,"correct":0},"candidate":{"wrong":3442,"union":3442,"transitions":128,"delta_error":1.0,"invented":3219,"missed":190,"color":33,"correct":0}},
+    {"game":"bf02-v1","source":"synthetic","baseline":{"wrong":57,"union":57,"transitions":128,"delta_error":1.0,"invented":0,"missed":57,"color":0,"correct":0},"candidate":{"wrong":58,"union":58,"transitions":128,"delta_error":1.0,"invented":1,"missed":57,"color":0,"correct":0}},
+    {"game":"bf03-v1","source":"synthetic","baseline":{"wrong":12911,"union":13413,"transitions":128,"delta_error":0.9625736226049355,"invented":6408,"missed":6482,"color":21,"correct":502},"candidate":{"wrong":10636,"union":11302,"transitions":128,"delta_error":0.9410723765705185,"invented":4297,"missed":6179,"color":160,"correct":666}},
+    {"game":"bf04-v1","source":"synthetic","baseline":{"wrong":787,"union":787,"transitions":128,"delta_error":1.0,"invented":0,"missed":787,"color":0,"correct":0},"candidate":{"wrong":787,"union":787,"transitions":128,"delta_error":1.0,"invented":0,"missed":787,"color":0,"correct":0}},
+    {"game":"bf05-v1","source":"synthetic","baseline":{"wrong":11959,"union":13557,"transitions":128,"delta_error":0.8821273143025743,"invented":529,"missed":11375,"color":55,"correct":1598},"candidate":{"wrong":12346,"union":13440,"transitions":128,"delta_error":0.9186011904761905,"invented":412,"missed":11886,"color":48,"correct":1094}},
+    {"game":"bf06-v1","source":"synthetic","baseline":{"wrong":551,"union":551,"transitions":128,"delta_error":1.0,"invented":0,"missed":551,"color":0,"correct":0},"candidate":{"wrong":551,"union":551,"transitions":128,"delta_error":1.0,"invented":0,"missed":551,"color":0,"correct":0}},
+    {"game":"bf07-v1","source":"synthetic","baseline":{"wrong":57,"union":57,"transitions":128,"delta_error":1.0,"invented":0,"missed":57,"color":0,"correct":0},"candidate":{"wrong":62,"union":62,"transitions":128,"delta_error":1.0,"invented":5,"missed":57,"color":0,"correct":0}},
+    {"game":"bf08-v1","source":"synthetic","baseline":{"wrong":2150,"union":2150,"transitions":128,"delta_error":1.0,"invented":0,"missed":2150,"color":0,"correct":0},"candidate":{"wrong":2150,"union":2150,"transitions":128,"delta_error":1.0,"invented":0,"missed":2150,"color":0,"correct":0}},
+    {"game":"sy01-v1","source":"synthetic","baseline":{"wrong":671,"union":671,"transitions":128,"delta_error":1.0,"invented":614,"missed":57,"color":0,"correct":0},"candidate":{"wrong":1314,"union":1314,"transitions":128,"delta_error":1.0,"invented":1257,"missed":57,"color":0,"correct":0}},
+    {"game":"sy02-v1","source":"synthetic","baseline":{"wrong":97,"union":97,"transitions":128,"delta_error":1.0,"invented":4,"missed":93,"color":0,"correct":0},"candidate":{"wrong":96,"union":96,"transitions":128,"delta_error":1.0,"invented":3,"missed":93,"color":0,"correct":0}},
+    {"game":"sy03-v1","source":"synthetic","baseline":{"wrong":297,"union":297,"transitions":128,"delta_error":1.0,"invented":84,"missed":213,"color":0,"correct":0},"candidate":{"wrong":612,"union":612,"transitions":128,"delta_error":1.0,"invented":399,"missed":213,"color":0,"correct":0}},
+    {"game":"sy04-v1","source":"synthetic","baseline":{"wrong":93,"union":93,"transitions":128,"delta_error":1.0,"invented":0,"missed":93,"color":0,"correct":0},"candidate":{"wrong":93,"union":93,"transitions":128,"delta_error":1.0,"invented":0,"missed":93,"color":0,"correct":0}},
+    {"game":"sy05-v1","source":"synthetic","baseline":{"wrong":129,"union":129,"transitions":128,"delta_error":1.0,"invented":4,"missed":125,"color":0,"correct":0},"candidate":{"wrong":157,"union":157,"transitions":128,"delta_error":1.0,"invented":32,"missed":125,"color":0,"correct":0}},
+    {"game":"sy06-v1","source":"synthetic","baseline":{"wrong":200,"union":200,"transitions":128,"delta_error":1.0,"invented":0,"missed":200,"color":0,"correct":0},"candidate":{"wrong":200,"union":200,"transitions":128,"delta_error":1.0,"invented":0,"missed":200,"color":0,"correct":0}},
+    {"game":"sy07-v1","source":"synthetic","baseline":{"wrong":74,"union":74,"transitions":128,"delta_error":1.0,"invented":17,"missed":57,"color":0,"correct":0},"candidate":{"wrong":1022,"union":1022,"transitions":128,"delta_error":1.0,"invented":965,"missed":57,"color":0,"correct":0}},
+    {"game":"sy08-v1","source":"synthetic","baseline":{"wrong":278,"union":278,"transitions":128,"delta_error":1.0,"invented":221,"missed":57,"color":0,"correct":0},"candidate":{"wrong":1856,"union":1856,"transitions":128,"delta_error":1.0,"invented":1799,"missed":57,"color":0,"correct":0}},
+    {"game":"sy09-v1","source":"synthetic","baseline":{"wrong":1132,"union":1149,"transitions":128,"delta_error":0.9852045256744996,"invented":317,"missed":779,"color":36,"correct":17},"candidate":{"wrong":1517,"union":1565,"transitions":128,"delta_error":0.9693290734824281,"invented":733,"missed":714,"color":70,"correct":48}},
+    {"game":"sy10-v1","source":"synthetic","baseline":{"wrong":208,"union":208,"transitions":128,"delta_error":1.0,"invented":2,"missed":206,"color":0,"correct":0},"candidate":{"wrong":240,"union":240,"transitions":128,"delta_error":1.0,"invented":34,"missed":206,"color":0,"correct":0}},
+    {"game":"sy11-v1","source":"synthetic","baseline":{"wrong":4143,"union":4287,"transitions":128,"delta_error":0.966410076976907,"invented":1007,"missed":3111,"color":25,"correct":144},"candidate":{"wrong":4701,"union":4943,"transitions":128,"delta_error":0.9510418774023872,"invented":1663,"missed":3003,"color":35,"correct":242}},
+    {"game":"sy12-v1","source":"synthetic","baseline":{"wrong":8816,"union":8994,"transitions":128,"delta_error":0.9802090282410496,"invented":926,"missed":7766,"color":124,"correct":178},"candidate":{"wrong":10945,"union":11469,"transitions":128,"delta_error":0.954311622634929,"invented":3401,"missed":7342,"color":202,"correct":524}},
+    {"game":"sy13-v1","source":"synthetic","baseline":{"wrong":7993,"union":8412,"transitions":128,"delta_error":0.9501902044698051,"invented":729,"missed":7115,"color":149,"correct":419},"candidate":{"wrong":7674,"union":7892,"transitions":128,"delta_error":0.9723770907247846,"invented":209,"missed":7361,"color":104,"correct":218}},
+    {"game":"sy14-v1","source":"synthetic","baseline":{"wrong":4003,"union":4554,"transitions":128,"delta_error":0.8790074659639877,"invented":782,"missed":3194,"color":27,"correct":551},"candidate":{"wrong":4186,"union":4453,"transitions":128,"delta_error":0.9400404221872894,"invented":681,"missed":3415,"color":90,"correct":267}},
+    {"game":"sy15-v1","source":"synthetic","baseline":{"wrong":8830,"union":9459,"transitions":128,"delta_error":0.9335024844063855,"invented":4175,"missed":4469,"color":186,"correct":629},"candidate":{"wrong":8082,"union":8484,"transitions":128,"delta_error":0.9526166902404526,"invented":3200,"missed":4739,"color":143,"correct":402}},
+    {"game":"sy16-v1","source":"synthetic","baseline":{"wrong":987,"union":987,"transitions":128,"delta_error":1.0,"invented":14,"missed":973,"color":0,"correct":0},"candidate":{"wrong":984,"union":984,"transitions":128,"delta_error":1.0,"invented":11,"missed":972,"color":1,"correct":0}},
+    {"game":"sy17-v1","source":"synthetic","baseline":{"wrong":841,"union":841,"transitions":128,"delta_error":1.0,"invented":478,"missed":360,"color":3,"correct":0},"candidate":{"wrong":662,"union":662,"transitions":128,"delta_error":1.0,"invented":299,"missed":363,"color":0,"correct":0}},
+    {"game":"sy18-v1","source":"synthetic","baseline":{"wrong":929,"union":929,"transitions":128,"delta_error":1.0,"invented":28,"missed":901,"color":0,"correct":0},"candidate":{"wrong":1384,"union":1384,"transitions":128,"delta_error":1.0,"invented":483,"missed":900,"color":1,"correct":0}},
+    {"game":"sy19-v1","source":"synthetic","baseline":{"wrong":9496,"union":10251,"transitions":128,"delta_error":0.9263486489123013,"invented":2759,"missed":6695,"color":42,"correct":755},"candidate":{"wrong":7857,"union":8114,"transitions":128,"delta_error":0.9683263495193493,"invented":622,"missed":7213,"color":22,"correct":257}},
+    {"game":"sy20-v1","source":"synthetic","baseline":{"wrong":6034,"union":6213,"transitions":128,"delta_error":0.9711894414936424,"invented":116,"missed":5918,"color":0,"correct":179},"candidate":{"wrong":6023,"union":6380,"transitions":128,"delta_error":0.9440438871473354,"invented":283,"missed":5740,"color":0,"correct":357}},
+    {"game":"sy21-v1","source":"synthetic","baseline":{"wrong":5278,"union":5483,"transitions":128,"delta_error":0.9626117089184753,"invented":823,"missed":4150,"color":305,"correct":205},"candidate":{"wrong":5971,"union":6856,"transitions":128,"delta_error":0.8709159859976663,"invented":2196,"missed":3486,"color":289,"correct":885}},
+    {"game":"sy22-v1","source":"synthetic","baseline":{"wrong":734,"union":734,"transitions":128,"delta_error":1.0,"invented":3,"missed":731,"color":0,"correct":0},"candidate":{"wrong":731,"union":731,"transitions":128,"delta_error":1.0,"invented":0,"missed":731,"color":0,"correct":0}},
+    {"game":"sy23-v1","source":"synthetic","baseline":{"wrong":479,"union":479,"transitions":128,"delta_error":1.0,"invented":46,"missed":433,"color":0,"correct":0},"candidate":{"wrong":638,"union":650,"transitions":128,"delta_error":0.9815384615384616,"invented":217,"missed":421,"color":0,"correct":12}},
+    {"game":"sy24-v1","source":"synthetic","baseline":{"wrong":5278,"union":5727,"transitions":128,"delta_error":0.9215994412432338,"invented":3634,"missed":1517,"color":127,"correct":449},"candidate":{"wrong":6154,"union":6608,"transitions":128,"delta_error":0.9312953995157385,"invented":4515,"missed":1486,"color":153,"correct":454}},
+    {"game":"sy25-v1","source":"synthetic","baseline":{"wrong":261,"union":261,"transitions":128,"delta_error":1.0,"invented":0,"missed":261,"color":0,"correct":0},"candidate":{"wrong":552,"union":557,"transitions":128,"delta_error":0.9910233393177738,"invented":296,"missed":256,"color":0,"correct":5}},
+    {"game":"sy26-v1","source":"synthetic","baseline":{"wrong":155,"union":155,"transitions":128,"delta_error":1.0,"invented":0,"missed":155,"color":0,"correct":0},"candidate":{"wrong":170,"union":170,"transitions":128,"delta_error":1.0,"invented":15,"missed":155,"color":0,"correct":0}},
+    {"game":"sy27-v1","source":"synthetic","baseline":{"wrong":3426,"union":3699,"transitions":128,"delta_error":0.9261962692619627,"invented":2287,"missed":1006,"color":133,"correct":273},"candidate":{"wrong":3915,"union":4113,"transitions":128,"delta_error":0.9518599562363238,"invented":2701,"missed":1111,"color":103,"correct":198}},
+    {"game":"sy28-v1","source":"synthetic","baseline":{"wrong":4103,"union":4361,"transitions":128,"delta_error":0.940839257051135,"invented":3140,"missed":864,"color":99,"correct":258},"candidate":{"wrong":3305,"union":3558,"transitions":128,"delta_error":0.9288926363125352,"invented":2337,"missed":872,"color":96,"correct":253}},
+    {"game":"sy29-v1","source":"synthetic","baseline":{"wrong":2918,"union":3175,"transitions":128,"delta_error":0.9190551181102362,"invented":1473,"missed":1316,"color":129,"correct":257},"candidate":{"wrong":2540,"union":2744,"transitions":128,"delta_error":0.9256559766763849,"invented":1042,"missed":1389,"color":109,"correct":204}},
+    {"game":"sy30-v1","source":"synthetic","baseline":{"wrong":3990,"union":4008,"transitions":128,"delta_error":0.9955089820359282,"invented":2721,"missed":1252,"color":17,"correct":18},"candidate":{"wrong":2728,"union":2808,"transitions":128,"delta_error":0.9715099715099715,"invented":1521,"missed":1177,"color":30,"correct":80}},
+    {"game":"sy31-v1","source":"synthetic","baseline":{"wrong":759,"union":759,"transitions":128,"delta_error":1.0,"invented":105,"missed":654,"color":0,"correct":0},"candidate":{"wrong":664,"union":664,"transitions":128,"delta_error":1.0,"invented":10,"missed":653,"color":1,"correct":0}},
+    {"game":"sy32-v1","source":"synthetic","baseline":{"wrong":704,"union":704,"transitions":128,"delta_error":1.0,"invented":15,"missed":689,"color":0,"correct":0},"candidate":{"wrong":777,"union":777,"transitions":128,"delta_error":1.0,"invented":88,"missed":689,"color":0,"correct":0}},
+    {"game":"sy33-v1","source":"synthetic","baseline":{"wrong":97,"union":97,"transitions":128,"delta_error":1.0,"invented":0,"missed":97,"color":0,"correct":0},"candidate":{"wrong":134,"union":134,"transitions":128,"delta_error":1.0,"invented":37,"missed":97,"color":0,"correct":0}},
+    {"game":"sy34-v1","source":"synthetic","baseline":{"wrong":323,"union":323,"transitions":128,"delta_error":1.0,"invented":186,"missed":137,"color":0,"correct":0},"candidate":{"wrong":637,"union":637,"transitions":128,"delta_error":1.0,"invented":500,"missed":137,"color":0,"correct":0}},
+    {"game":"sy35-v1","source":"synthetic","baseline":{"wrong":1793,"union":1888,"transitions":128,"delta_error":0.9496822033898306,"invented":369,"missed":1418,"color":6,"correct":95},"candidate":{"wrong":1956,"union":2183,"transitions":128,"delta_error":0.8960146587265231,"invented":664,"missed":1259,"color":33,"correct":227}},
+    {"game":"sy36-v1","source":"synthetic","baseline":{"wrong":3417,"union":3560,"transitions":128,"delta_error":0.9598314606741573,"invented":1615,"missed":1724,"color":78,"correct":143},"candidate":{"wrong":4767,"union":5105,"transitions":128,"delta_error":0.933790401567091,"invented":3160,"missed":1548,"color":59,"correct":338}},
+    {"game":"sy37-v1","source":"synthetic","baseline":{"wrong":90,"union":90,"transitions":128,"delta_error":1.0,"invented":4,"missed":86,"color":0,"correct":0},"candidate":{"wrong":106,"union":106,"transitions":128,"delta_error":1.0,"invented":20,"missed":86,"color":0,"correct":0}},
+    {"game":"sy38-v1","source":"synthetic","baseline":{"wrong":573,"union":573,"transitions":128,"delta_error":1.0,"invented":0,"missed":573,"color":0,"correct":0},"candidate":{"wrong":1063,"union":1067,"transitions":128,"delta_error":0.9962511715089035,"invented":494,"missed":567,"color":2,"correct":4}},
+    {"game":"sy39-v1","source":"synthetic","baseline":{"wrong":505,"union":505,"transitions":128,"delta_error":1.0,"invented":0,"missed":505,"color":0,"correct":0},"candidate":{"wrong":505,"union":505,"transitions":128,"delta_error":1.0,"invented":0,"missed":505,"color":0,"correct":0}},
+    {"game":"sy40-v1","source":"synthetic","baseline":{"wrong":359,"union":359,"transitions":128,"delta_error":1.0,"invented":0,"missed":359,"color":0,"correct":0},"candidate":{"wrong":359,"union":359,"transitions":128,"delta_error":1.0,"invented":0,"missed":359,"color":0,"correct":0}},
+    {"game":"sy41-v1","source":"synthetic","baseline":{"wrong":59,"union":59,"transitions":128,"delta_error":1.0,"invented":2,"missed":57,"color":0,"correct":0},"candidate":{"wrong":57,"union":57,"transitions":128,"delta_error":1.0,"invented":0,"missed":57,"color":0,"correct":0}},
+    {"game":"sy42-v1","source":"synthetic","baseline":{"wrong":884,"union":886,"transitions":128,"delta_error":0.9977426636568849,"invented":549,"missed":335,"color":0,"correct":2},"candidate":{"wrong":949,"union":963,"transitions":128,"delta_error":0.9854620976116303,"invented":626,"missed":323,"color":0,"correct":14}},
+    {"game":"sy43-v1","source":"synthetic","baseline":{"wrong":258,"union":258,"transitions":128,"delta_error":1.0,"invented":65,"missed":193,"color":0,"correct":0},"candidate":{"wrong":238,"union":238,"transitions":128,"delta_error":1.0,"invented":45,"missed":193,"color":0,"correct":0}},
+    {"game":"sy44-v1","source":"synthetic","baseline":{"wrong":315,"union":315,"transitions":128,"delta_error":1.0,"invented":29,"missed":286,"color":0,"correct":0},"candidate":{"wrong":357,"union":357,"transitions":128,"delta_error":1.0,"invented":71,"missed":286,"color":0,"correct":0}},
+    {"game":"sy45-v1","source":"synthetic","baseline":{"wrong":157,"union":157,"transitions":128,"delta_error":1.0,"invented":0,"missed":157,"color":0,"correct":0},"candidate":{"wrong":162,"union":162,"transitions":128,"delta_error":1.0,"invented":5,"missed":157,"color":0,"correct":0}},
+    {"game":"sy46-v1","source":"synthetic","baseline":{"wrong":573,"union":573,"transitions":128,"delta_error":1.0,"invented":18,"missed":555,"color":0,"correct":0},"candidate":{"wrong":735,"union":735,"transitions":128,"delta_error":1.0,"invented":180,"missed":555,"color":0,"correct":0}},
+    {"game":"sy47-v1","source":"synthetic","baseline":{"wrong":189,"union":189,"transitions":128,"delta_error":1.0,"invented":88,"missed":101,"color":0,"correct":0},"candidate":{"wrong":101,"union":101,"transitions":128,"delta_error":1.0,"invented":0,"missed":101,"color":0,"correct":0}},
+    {"game":"sy48-v1","source":"synthetic","baseline":{"wrong":285,"union":285,"transitions":128,"delta_error":1.0,"invented":24,"missed":261,"color":0,"correct":0},"candidate":{"wrong":292,"union":292,"transitions":128,"delta_error":1.0,"invented":31,"missed":261,"color":0,"correct":0}},
+    {"game":"sy49-v1","source":"synthetic","baseline":{"wrong":110,"union":110,"transitions":128,"delta_error":1.0,"invented":37,"missed":73,"color":0,"correct":0},"candidate":{"wrong":145,"union":145,"transitions":128,"delta_error":1.0,"invented":72,"missed":73,"color":0,"correct":0}},
+    {"game":"sy50-v1","source":"synthetic","baseline":{"wrong":130,"union":130,"transitions":128,"delta_error":1.0,"invented":1,"missed":129,"color":0,"correct":0},"candidate":{"wrong":130,"union":130,"transitions":128,"delta_error":1.0,"invented":1,"missed":129,"color":0,"correct":0}},
+    {"game":"sy51-v1","source":"synthetic","baseline":{"wrong":117,"union":117,"transitions":128,"delta_error":1.0,"invented":12,"missed":105,"color":0,"correct":0},"candidate":{"wrong":113,"union":113,"transitions":128,"delta_error":1.0,"invented":8,"missed":105,"color":0,"correct":0}},
+    {"game":"sy52-v1","source":"synthetic","baseline":{"wrong":139,"union":139,"transitions":128,"delta_error":1.0,"invented":8,"missed":131,"color":0,"correct":0},"candidate":{"wrong":131,"union":131,"transitions":128,"delta_error":1.0,"invented":0,"missed":131,"color":0,"correct":0}},
+    {"game":"sy53-v1","source":"synthetic","baseline":{"wrong":263,"union":263,"transitions":128,"delta_error":1.0,"invented":116,"missed":147,"color":0,"correct":0},"candidate":{"wrong":158,"union":158,"transitions":128,"delta_error":1.0,"invented":11,"missed":147,"color":0,"correct":0}},
+    {"game":"sy54-v1","source":"synthetic","baseline":{"wrong":142,"union":142,"transitions":128,"delta_error":1.0,"invented":11,"missed":131,"color":0,"correct":0},"candidate":{"wrong":242,"union":242,"transitions":128,"delta_error":1.0,"invented":111,"missed":131,"color":0,"correct":0}},
+    {"game":"sy55-v1","source":"synthetic","baseline":{"wrong":343,"union":343,"transitions":128,"delta_error":1.0,"invented":0,"missed":343,"color":0,"correct":0},"candidate":{"wrong":342,"union":343,"transitions":128,"delta_error":0.9970845481049563,"invented":0,"missed":341,"color":1,"correct":1}},
+    {"game":"sy56-v1","source":"synthetic","baseline":{"wrong":222,"union":222,"transitions":128,"delta_error":1.0,"invented":0,"missed":222,"color":0,"correct":0},"candidate":{"wrong":222,"union":222,"transitions":128,"delta_error":1.0,"invented":0,"missed":222,"color":0,"correct":0}},
+    {"game":"sy57-v1","source":"synthetic","baseline":{"wrong":182,"union":182,"transitions":128,"delta_error":1.0,"invented":0,"missed":182,"color":0,"correct":0},"candidate":{"wrong":1312,"union":1318,"transitions":128,"delta_error":0.9954476479514416,"invented":1136,"missed":164,"color":12,"correct":6}},
+    {"game":"sy58-v1","source":"synthetic","baseline":{"wrong":4002,"union":4002,"transitions":128,"delta_error":1.0,"invented":1671,"missed":2321,"color":10,"correct":0},"candidate":{"wrong":3012,"union":3012,"transitions":128,"delta_error":1.0,"invented":681,"missed":2330,"color":1,"correct":0}},
+    {"game":"sy59-v1","source":"synthetic","baseline":{"wrong":543,"union":543,"transitions":128,"delta_error":1.0,"invented":0,"missed":543,"color":0,"correct":0},"candidate":{"wrong":569,"union":569,"transitions":128,"delta_error":1.0,"invented":26,"missed":543,"color":0,"correct":0}},
+    {"game":"sy60-v1","source":"synthetic","baseline":{"wrong":504,"union":504,"transitions":128,"delta_error":1.0,"invented":21,"missed":483,"color":0,"correct":0},"candidate":{"wrong":633,"union":633,"transitions":128,"delta_error":1.0,"invented":150,"missed":483,"color":0,"correct":0}},
+    {"game":"bp35-0a0ad940","source":"sdk","baseline":{"wrong":10378,"union":11698,"transitions":128,"delta_error":0.8871601983244999,"invented":510,"missed":9831,"color":37,"correct":1320},"candidate":{"wrong":10577,"union":11558,"transitions":128,"delta_error":0.9151237238276518,"invented":370,"missed":10163,"color":44,"correct":981}},
+    {"game":"cd82-fb555c5d","source":"sdk","baseline":{"wrong":17939,"union":20455,"transitions":128,"delta_error":0.8769982889269128,"invented":12418,"missed":5196,"color":325,"correct":2516},"candidate":{"wrong":14291,"union":15267,"transitions":128,"delta_error":0.9360712648195454,"invented":7230,"missed":6911,"color":150,"correct":976}},
+    {"game":"dc22-fdcac232","source":"sdk","baseline":{"wrong":880,"union":880,"transitions":128,"delta_error":1.0,"invented":240,"missed":638,"color":2,"correct":0},"candidate":{"wrong":1114,"union":1115,"transitions":128,"delta_error":0.9991031390134529,"invented":475,"missed":639,"color":0,"correct":1}},
+    {"game":"ft09-0d8bbf25","source":"sdk","baseline":{"wrong":342,"union":342,"transitions":128,"delta_error":1.0,"invented":0,"missed":342,"color":0,"correct":0},"candidate":{"wrong":352,"union":352,"transitions":128,"delta_error":1.0,"invented":10,"missed":342,"color":0,"correct":0}},
+    {"game":"g50t-5849a774","source":"sdk","baseline":{"wrong":4457,"union":4783,"transitions":128,"delta_error":0.9318419402048923,"invented":213,"missed":4209,"color":35,"correct":326},"candidate":{"wrong":5366,"union":5383,"transitions":128,"delta_error":0.9968419097157719,"invented":813,"missed":4404,"color":149,"correct":17}},
+    {"game":"ka59-38d34dbb","source":"sdk","baseline":{"wrong":1455,"union":1732,"transitions":128,"delta_error":0.8400692840646651,"invented":66,"missed":1376,"color":13,"correct":277},"candidate":{"wrong":4245,"union":4259,"transitions":128,"delta_error":0.9967128433904673,"invented":2593,"missed":1327,"color":325,"correct":14}},
+    {"game":"lp85-305b61c3","source":"sdk","baseline":{"wrong":879,"union":879,"transitions":128,"delta_error":1.0,"invented":0,"missed":879,"color":0,"correct":0},"candidate":{"wrong":879,"union":879,"transitions":128,"delta_error":1.0,"invented":0,"missed":879,"color":0,"correct":0}},
+    {"game":"ls20-9607627b","source":"sdk","baseline":{"wrong":4261,"union":5731,"transitions":128,"delta_error":0.7435002617344268,"invented":653,"missed":3607,"color":1,"correct":1470},"candidate":{"wrong":7278,"union":7515,"transitions":128,"delta_error":0.9684630738522955,"invented":2437,"missed":4633,"color":208,"correct":237}},
+    {"game":"m0r0-492f87ba","source":"sdk","baseline":{"wrong":5478,"union":5860,"transitions":128,"delta_error":0.9348122866894198,"invented":500,"missed":4978,"color":0,"correct":382},"candidate":{"wrong":30452,"union":30693,"transitions":128,"delta_error":0.9921480467859121,"invented":25333,"missed":5119,"color":0,"correct":241}},
+    {"game":"r11l-495a7899","source":"sdk","baseline":{"wrong":10324,"union":10792,"transitions":128,"delta_error":0.9566345441067458,"invented":159,"missed":10150,"color":15,"correct":468},"candidate":{"wrong":10598,"union":10738,"transitions":128,"delta_error":0.9869621903520208,"invented":105,"missed":10490,"color":3,"correct":140}},
+    {"game":"re86-8af5384d","source":"sdk","baseline":{"wrong":7392,"union":8769,"transitions":128,"delta_error":0.8429695518303113,"invented":3958,"missed":3387,"color":47,"correct":1377},"candidate":{"wrong":6938,"union":7952,"transitions":128,"delta_error":0.8724849094567404,"invented":3141,"missed":3754,"color":43,"correct":1014}},
+    {"game":"s5i5-18d95033","source":"sdk","baseline":{"wrong":214,"union":214,"transitions":128,"delta_error":1.0,"invented":0,"missed":214,"color":0,"correct":0},"candidate":{"wrong":214,"union":214,"transitions":128,"delta_error":1.0,"invented":0,"missed":214,"color":0,"correct":0}},
+    {"game":"sb26-7fbdac44","source":"sdk","baseline":{"wrong":205,"union":205,"transitions":128,"delta_error":1.0,"invented":1,"missed":204,"color":0,"correct":0},"candidate":{"wrong":204,"union":204,"transitions":128,"delta_error":1.0,"invented":0,"missed":204,"color":0,"correct":0}},
+    {"game":"sc25-635fd71a","source":"sdk","baseline":{"wrong":2423,"union":2663,"transitions":128,"delta_error":0.909876079609463,"invented":587,"missed":1485,"color":351,"correct":240},"candidate":{"wrong":3304,"union":3545,"transitions":128,"delta_error":0.9320169252468266,"invented":1469,"missed":1658,"color":177,"correct":241}},
+    {"game":"sk48-d8078629","source":"sdk","baseline":{"wrong":4141,"union":4448,"transitions":128,"delta_error":0.9309802158273381,"invented":555,"missed":3541,"color":45,"correct":307},"candidate":{"wrong":3904,"union":3953,"transitions":128,"delta_error":0.9876043511257273,"invented":60,"missed":3825,"color":19,"correct":49}},
+    {"game":"sp80-589a99af","source":"sdk","baseline":{"wrong":6824,"union":7341,"transitions":128,"delta_error":0.9295736275711756,"invented":156,"missed":6668,"color":0,"correct":517},"candidate":{"wrong":9061,"union":9061,"transitions":128,"delta_error":1.0,"invented":1876,"missed":7185,"color":0,"correct":0}},
+    {"game":"su15-1944f8ab","source":"sdk","baseline":{"wrong":265,"union":296,"transitions":128,"delta_error":0.8952702702702703,"invented":62,"missed":203,"color":0,"correct":31},"candidate":{"wrong":268,"union":278,"transitions":128,"delta_error":0.9640287769784173,"invented":44,"missed":224,"color":0,"correct":10}},
+    {"game":"tr87-cd924810","source":"sdk","baseline":{"wrong":2147,"union":2625,"transitions":128,"delta_error":0.8179047619047619,"invented":20,"missed":2127,"color":0,"correct":478},"candidate":{"wrong":3489,"union":3489,"transitions":128,"delta_error":1.0,"invented":884,"missed":2582,"color":23,"correct":0}},
+    {"game":"tu93-0768757b","source":"sdk","baseline":{"wrong":1323,"union":1824,"transitions":128,"delta_error":0.725328947368421,"invented":526,"missed":794,"color":3,"correct":501},"candidate":{"wrong":1777,"union":1781,"transitions":128,"delta_error":0.9977540707467715,"invented":483,"missed":1294,"color":0,"correct":4}},
+    {"game":"wa30-ee6fef47","source":"sdk","baseline":{"wrong":3587,"union":5863,"transitions":128,"delta_error":0.6118028313150264,"invented":2558,"missed":1009,"color":20,"correct":2276},"candidate":{"wrong":3192,"union":4673,"transitions":128,"delta_error":0.6830729723946073,"invented":1368,"missed":1731,"color":93,"correct":1481}}
+  ]
+}

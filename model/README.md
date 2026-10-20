@@ -77,6 +77,11 @@ worsening either source group's pooled error. This command never applies a
 candidate to the live run; inspect its evidence before using the explicit
 override. Keep the generated corpus and checkpoints outside Git.
 
+The [recorded 91-game comparison](predictor_lr_comparison_evidence.json) retained
+`3e-5`: after 384 matched predictor updates, separate-probe pooled delta error was
+92.21%, versus 95.60% at `1e-4`. This is evidence for that checkpoint and corpus,
+not a universal optimal rate; the live run resumed its original weights and rates.
+
 La configuración reutiliza los juegos, niveles, rutas y splits del plan anterior,
 añadiendo `sequence`. `objective` debe ser `world_model` (es su valor por defecto
 en este modo). `sequence_control` activa fases de representación y predictor con
