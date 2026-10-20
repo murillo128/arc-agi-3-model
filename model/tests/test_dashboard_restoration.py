@@ -26,6 +26,7 @@ class DashboardRestorationTests(unittest.TestCase):
                     with self.subTest(section=section):
                         self.assertIn(f'id="{section}"', html)
                 self.assertIn('optimization.html', html)
+                self.assertLess(html.index('src="chart-tools.js"'), html.index('src="sequences.js"'))
             finally:
                 server.shutdown(); server.server_close(); thread.join()
 
@@ -63,6 +64,7 @@ class DashboardRestorationTests(unittest.TestCase):
                     html = response.read().decode()
                 for section in ('planner-success', 'path-loss', 'efficiency', 'reward', 'subgoal-outcomes', 'trajectory-info'):
                     self.assertIn(f'id="{section}"', html)
+                self.assertLess(html.index('src="chart-tools.js"'), html.index('src="subgoals.js"'))
                 for path in ('/api/curriculum', '/api/history/curriculum'):
                     with self.subTest(path=path), self.assertRaises(HTTPError) as failure:
                         urlopen(Request(url+path, data=b'{"operation":"level"}', headers={'Content-Type':'application/json'}))

@@ -12,42 +12,60 @@ function element(tag, attrs, text='') {
   node.textContent = text; return node;
 }
 function chart(id, rows, series, ceiling=null, limits=[]) {
-  const svg = $(id), legend = $(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
-  const values = rows.flatMap(r => series.map(s => s.value(r))).filter(Number.isFinite);
+  const svg = $(id), legend = $(`${id}-legend`); svg.replaceChildren();
+  const data=series.map((s,index)=>{
+    const points=[]; let previousGroup, last=null;
+    for(const r of rows) {
+      if(s.skip?.(r))continue;
+      const group=s.group?.(r)??r.measurement_source??'fixed_evaluation';
+      if(previousGroup!==undefined&&group!==previousGroup)points.push([r.batch,null]);
+      previousGroup=group;
+      const value=s.value(r); points.push([r.batch,value,r]);
+      if(Number.isFinite(value))last={value,row:r};
+    }
+    return {s,points,last,color:s.color||colors[index%colors.length]};
+  });
+  let updateGuide=()=>{};
+  ChartTools.legend(legend,id,[...data.map(({s,last,color})=>({key:s.label,
+    text:`${s.label}: ${number(last?.value, s.digits??4)}`,color,disabled:!last,
+    title:last?`Última medición: batch ${last.row.batch} · acción ${number(last.row.actions,0)}`:'Sin mediciones'})),
+    ...limits.map(l=>({key:`limit:${l.label}`,text:`┄ ${l.label}: ${number(l.value,4)} %`,color:l.color,passive:true}))],()=>updateGuide());
+  const values=data.flatMap(d=>d.points.map(p=>p[1])).filter(Number.isFinite);
   if (!values.length) { svg.append(element('text', {x: 35, y: 65, fill: '#a9bcb7'}, 'Sin mediciones todavía')); return; }
   const max = Math.max(ceiling || 0, 1e-6, ...values, ...limits.map(l=>l.value)) * (ceiling ? 1 : 1.1);
   const start=rows[0].batch, end=Math.max(start+1, rows.at(-1).batch);
+  const x=v=>50+(v-start)*630/(end-start), y=v=>220-188*v/max;
   for (let i = 0; i <= 4; i++) {
-    const y = 220 - i * 47;
-    svg.append(element('line', {x1: 50, x2: 680, y1: y, y2: y, stroke: '#30443e'}));
-    svg.append(element('text', {x: 42, y: y + 4, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, number(max*i/4, max<.1?4:1)));
+    const py = 220 - i * 47;
+    svg.append(element('line', {x1: 50, x2: 680, y1: py, y2: py, stroke: '#30443e'}));
+    svg.append(element('text', {x: 42, y: py + 4, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, number(max*i/4, max<.1?4:1)));
   }
-  series.forEach((s,index) => {
-    const color=s.color||colors[index%colors.length], last=rows.findLast(r=>Number.isFinite(s.value(r)));
-    const label = document.createElement('span'); label.textContent = `${s.label}: ${number(last?s.value(last):null, s.digits??4)}`; label.style.color = color;
-    label.title=last?`Última medición: batch ${last.batch} · acción ${number(last.actions,0)}`:'Sin mediciones';legend.append(label);
-    let points = [], previousGroup;
-    const flush = () => { if (points.length) svg.append(element('polyline', {points: points.join(' '), fill: 'none', stroke: color, 'stroke-width': 2})); points = []; };
-    rows.forEach(r => {
-      if(s.skip?.(r))return;
-      const group=s.group?.(r)??r.measurement_source??'fixed_evaluation';if(previousGroup!==undefined&&group!==previousGroup)flush();previousGroup=group;
-      const value = s.value(r); if (!Number.isFinite(value)) { flush(); return; }
-      const x = 50 + (r.batch-start) * 630 / (end-start), y = 220 - 188 * value/max;
-      points.push(`${x},${y}`);
-      const dot=element('circle', {cx: x, cy: y, r: 2.5, fill: color});
-      dot.append(element('title',{},`${s.label}: ${number(value,4)} · batch ${r.batch} · acción ${number(r.actions,0)}`));svg.append(dot);
-    }); flush();
+  data.forEach(({s,points,color})=>{
+    let segment=[];
+    const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color,'stroke-width':2}));segment=[];};
+    for(const p of points) {
+      if(!ChartTools.valid(p)){flush();continue;}
+      segment.push(`${x(p[0])},${y(p[1])}`);
+      const dot=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2.5,fill:color});
+      dot.append(element('title',{},`${s.label}: ${number(p[1],4)} · batch ${p[0]} · acción ${number(p[2]?.actions,0)}`));svg.append(dot);
+    }
+    flush();svg.append(...ChartTools.svgEMA(points,x,y,color));
   });
   limits.forEach(({value,label,color})=>{
-    const y=220-188*value/max;
-    const line=element('line',{x1:50,x2:680,y1:y,y2:y,stroke:color,'stroke-width':1.5,'stroke-dasharray':'5 5'});
-    const caption=`${label}: ${number(value,4)} %`;
-    line.append(element('title',{},caption));svg.append(line);
-    const item=document.createElement('span');item.textContent=`┄ ${caption}`;item.style.color=color;legend.append(item);
+    const line=element('line',{x1:50,x2:680,y1:y(value),y2:y(value),stroke:color,'stroke-width':1.5,'stroke-dasharray':'5 5'});
+    line.append(element('title',{},`${label}: ${number(value,4)} %`));svg.append(line);
   });
   svg.append(element('text', {x: 50, y: 247, fill: '#a9bcb7', 'font-size': 11}, `Batch ${rows[0].batch}`));
   svg.append(element('text', {x: 680, y: 247, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, `Batch ${rows.at(-1).batch}`));
+  const guide=element('g',{class:'series-guide','pointer-events':'none'});svg.append(guide);
+  updateGuide=()=>{
+    const selected=data.find(d=>d.s.label===ChartTools.selected(id));guide.replaceChildren();
+    if(selected?.last)ChartTools.svgGuide(guide,{left:50,right:680,y:y(selected.last.value),lastX:x(selected.last.row.batch),
+      color:selected.color,text:number(selected.last.value,selected.s.digits??4)});
+  };
+  updateGuide();
 }
+
 function table(id, rows) {
   $(id).replaceChildren(...rows.map(values=>{const row=document.createElement('tr');
     values.forEach(value=>{const cell=document.createElement('td');cell.textContent=String(value);row.append(cell);});return row;}));
