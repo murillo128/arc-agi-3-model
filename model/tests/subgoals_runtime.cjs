@@ -65,7 +65,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Update average · up to 512 actions: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Individual update: 2');
   assert.equal(nodes.get('loss-legend').children[1].title,
-    'Latest measurement · action 1 · Thin line: EMA (α = 0.1). Select a legend label to pin the latest raw value.',
+    'Latest measurement · action 1 · Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest raw value.',
     'missing latest sample does not fabricate a zero');
   assert.equal(text('successes'),'Levels solved: 1 · recent window');
   assert.equal(text('gpu-status'),'GPU · 73 % utilization · 71 °C');
@@ -301,10 +301,10 @@ const text=id=>nodes.get(id).textContent;
     {actions:514,representation_loss:null,path_loss:null}];
   await vm.runInContext('poll()',context);
   for(const [id,value,rawCount] of [['representation-loss',3,5],['path-loss',4,4]]) {
-    const average=circles(id).filter(n=>n.opacity===1);
+    const average=circles(id).filter(n=>n.opacity===.5);
     assert.match(average.at(-1).children[0].textContent,new RegExp(`: ${value} · action 514$`));
-    assert.equal(circles(id).filter(n=>n.opacity<1).length,rawCount);
-    assert.ok(circles(id).some(n=>n.opacity<1&&n.children[0].textContent.includes(': 0 ·')));
+    assert.equal(circles(id).filter(n=>n.opacity<.5).length,rawCount);
+    assert.ok(circles(id).some(n=>n.opacity<.5&&n.children[0].textContent.includes(': 0 ·')));
     assert.match(nodes.get(id+'-legend').children[0].textContent,new RegExp(`: ${value}$`));
   }
   report.curves=[{actions:1026,representation_loss:null,path_loss:null}];
@@ -379,10 +379,10 @@ const text=id=>nodes.get(id).textContent;
   assert.deepEqual(nodes.get('predictor-components-legend').children.map(n=>n.textContent),
     ['Latent MSE: 0.25','Visual NLL: 2','Overlap error: 0.5','Rollout · total: 4']);
   const termPoints=circles('predictor-components');
-  assert.equal(termPoints.filter(n=>n.opacity<1).length,15,'3 terms at action 3; 4 at each other measured action');
-  assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='Visual NLL: 0 · action 513'));
-  assert.ok(termPoints.some(n=>n.opacity===1&&n.children[0].textContent==='Rollout · total: 4 · action 514'));
-  assert.ok(termPoints.some(n=>n.opacity<1&&n.children[0].textContent==='Rollout · total: 6 · action 32'));
+  assert.equal(termPoints.filter(n=>n.opacity<.5).length,15,'3 terms at action 3; 4 at each other measured action');
+  assert.ok(termPoints.some(n=>n.opacity<.5&&n.children[0].textContent==='Visual NLL: 0 · action 513'));
+  assert.ok(termPoints.some(n=>n.opacity===.5&&n.children[0].textContent==='Rollout · total: 4 · action 514'));
+  assert.ok(termPoints.some(n=>n.opacity<.5&&n.children[0].textContent==='Rollout · total: 6 · action 32'));
   // New predictor updates omit overlap; do not fabricate a zero contribution.
   report.curves=[{actions:1026,predictor_terms:{latent:.5,delta_nll:2,rollout:3}}];
   await vm.runInContext('poll()',context);
@@ -446,17 +446,17 @@ const text=id=>nodes.get(id).textContent;
     [513,[goal(4,2,-2),goal(6,4,-2)]],[514,[goal(2,2,null,false)]]]
     .map(([end_action,segments])=>({game:'a',level:1,end_action,segments,success:segments.every(s=>s.success)}));
   await vm.runInContext('poll()',context);
-  const efficiencyMean=circles('efficiency').filter(n=>n.opacity===1);
+  const efficiencyMean=circles('efficiency').filter(n=>n.opacity===.5);
   assert.ok(efficiencyMean.some(n=>n.children[0].textContent.endsWith(': 3.6 · action 513')));
   assert.ok(efficiencyMean.some(n=>n.children[0].textContent.endsWith(': 2 · action 513')));
   assert.equal(efficiencyMean.filter(n=>n.children[0].textContent.includes('action 513')).length,2,
     'one mean per action and metric includes all simultaneous goals');
-  assert.ok(circles('efficiency').some(n=>n.opacity<1&&n.children[0].textContent==='Real: 6 · action 513'));
+  assert.ok(circles('efficiency').some(n=>n.opacity<.5&&n.children[0].textContent==='Real: 6 · action 513'));
   assert.equal(nodes.get('efficiency-legend').children.length,2,'individual lines share their metric colors');
-  const rewardMean=circles('reward').filter(n=>n.opacity===1);
+  const rewardMean=circles('reward').filter(n=>n.opacity===.5);
   assert.match(rewardMean.at(-1).children[0].textContent,/: -28 · action 514$/);
   assert.ok(rewardMean.some(n=>n.children[0].textContent.endsWith(': -26.5 · action 32')),'future goals cannot change an earlier mean');
-  assert.ok(circles('reward').some(n=>n.opacity<1&&n.children[0].textContent==='Individual reward: -160 · action 33'));
+  assert.ok(circles('reward').some(n=>n.opacity<.5&&n.children[0].textContent==='Individual reward: -160 · action 33'));
   assert.match(nodes.get('reward-legend').children[0].textContent,/: -28$/);
   const outcomeMeans=circles('subgoal-outcomes').map(n=>n.children[0].textContent);
   assert.ok(outcomeMeans.some(s=>s.includes(': 66.6667 · action 33 · 2 successes · 1 failure · 3 completed subgoals')),
@@ -497,10 +497,10 @@ const text=id=>nodes.get(id).textContent;
     {actions:514,counts:{invented:null,missed:null,color:null}}];
   await vm.runInContext('poll()',context);
   for(const [name,value] of [['Invented','3'],['Missed','6'],['Wrong color','0.75'],['Correct','15']]) {
-    const point=circles('changes').find(n=>n.opacity===1&&n.children[0].textContent.startsWith(`${name}: ${value} · action 514`));
+    const point=circles('changes').find(n=>n.opacity===.5&&n.children[0].textContent.startsWith(`${name}: ${value} · action 514`));
     assert.ok(point,`${name} trend uses four measured actions in the exact window`);
   }
-  const rawInvented=circles('changes').filter(n=>n.opacity<1&&n.fill==='#77dabb').map(n=>n.children[0].textContent);
+  const rawInvented=circles('changes').filter(n=>n.opacity<.5&&n.fill==='#77dabb').map(n=>n.children[0].textContent);
   assert.ok(rawInvented.some(s=>s.startsWith('Invented: 4 · action 514')),'missing count does not dilute the last partial block');
   assert.ok(rawInvented.some(s=>s.startsWith('Invented: 0 · action 64')),'measured zero is kept');
   assert.equal(nodes.get('changes-legend').children.length,4);

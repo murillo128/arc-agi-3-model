@@ -231,7 +231,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(vm.runInContext('charts.spread.series[0].points[1].y', single.context), .8);
   vm.runInContext("charts.speed.set([{name:'Prueba',points:[{x:0,y:0},{x:1,y:10},{x:2,y:20}]}])",single.context);
   const speed=single.nodes.get('speed'),button=single.nodes.get('speed-legend').children[0];
-  assert(speed.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  assert(speed.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   button.listeners.click();
   assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='20'&&d[2]===8),'actual last value, not EMA');
   vm.runInContext("charts.speed.set([{name:'Prueba',points:[{x:0,y:20},{x:1,y:0}]}])",single.context);

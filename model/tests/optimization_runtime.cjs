@@ -105,7 +105,7 @@ test('temporal optimization curves expose EMA and persistent actual-value guides
   const {nodes,state,click}=await dashboard();
   click('tab-path');
   const canvas=nodes.get('reference-history'),button=nodes.get('reference-history-legend').children[0];
-  assert(canvas.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  assert(canvas.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   button.listeners.click();
   assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='1'&&d[2]===8));
   state.report.updated_at=5;state.report.points.at(-1).reference_loss=0;
@@ -117,7 +117,7 @@ test('temporal optimization curves expose EMA and persistent actual-value guides
   assert(!canvas.draws.some(d=>d[0]==='strokeRect'));
   click('tab-memory');
   const memory=nodes.get('memory-gradient'),memoryButton=nodes.get('memory-gradient-legend').children[0];
-  assert(memory.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  assert(memory.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   memoryButton.listeners.click();
   assert(memory.draws.some(d=>d[0]==='strokeRect'));
   state.report.updated_at=6;state.report.probe={status:'unavailable',reason:'No sample'};
