@@ -200,15 +200,22 @@
     // Coverage is a ratio of squared norms, so recover length with a square root.
     return projection.step_norm * Math.sqrt(1 - Math.max(0, Math.min(1, coverage)));
   }
-  function sizeScale(maximum, dims=2) {
+  function relativeStep(projection, dims=2) {
+    const coverage=movementCoverage(projection,dims);
+    if (!(projection?.step_norm>0) || !Number.isFinite(coverage)) return null;
+    // Compare lengths, not squared energies. Zero captured motion has an
+    // infinite ratio; the display caps its radius but retains this measurement.
+    return coverage===0 ? Infinity : Math.sqrt((1-coverage)/coverage);
+  }
+  const bubbleRadius = ratio => ratio==null ? 3 : 3+2.7*Math.min(10,ratio);
+  function sizeScale(hasSteps, dims=2) {
     const space=dims===3?'3D subspace':'2D plane';
-    text('path-size-label',`Movement outside the ${space}`);
-    $('path-size-scale').hidden=!(maximum>0);
-    text('path-size-half',maximum>0?sci(maximum/2):'—');text('path-size-max',maximum>0?sci(maximum):'—');
-    text('path-size-note',maximum>0
-      ? `Bubble area above the small position marker represents step length outside the ${space}. Scale follows this module’s visible history; the first point has no previous step.`
-      : maximum===0 ? `No measurable movement outside the ${space} in this window. Small markers show positions only.`
-      : 'Waiting for measured steps to size the bubbles.');
+    text('path-size-label',`Step length outside / inside the ${space}`);
+    $('path-size-scale').hidden=!hasSteps;
+    text('path-size-half','5×');text('path-size-max','≥10×');
+    text('path-size-note',hasSteps
+      ? `Bubble radius grows linearly with outside / projected step length: 3 px + 2.7 px per ×, capped at 10× (30 px). Fixed across modules, history and zoom. The inspector keeps the uncapped ratio. First, stationary or unavailable steps show position markers only.`
+      : 'No relative step measurements available. First, stationary or unavailable steps show position markers only.');
   }
   function lossColor(value, low, high) {
     if (!Number.isFinite(value)) return C.muted;
@@ -234,9 +241,8 @@
   function trajectory(s) {
     const plane=s.planes[module], projections=plane?.projections || [], points=s.points;
     const dims=displayedDimension(s), pointColor=lossScale(points);
-    const outside=projections.map((p,i)=>i?outsideStep(p,dims):null), known=outside.filter(Number.isFinite);
-    const maximum=known.length?Math.max(...known):null;
-    sizeScale(maximum,dims);
+    const ratios=projections.map((p,i)=>i?relativeStep(p,dims):null);
+    sizeScale(ratios.some(r=>r!==null),dims);
     text('camera-zoom',`${fmt(camera.zoom*100,0)} %`);
     $('zoom-out').disabled=camera.zoom<=.5;$('zoom-in').disabled=camera.zoom>=4;
     if(!projections.length) { empty('parameter-path','Calibrating the plane with four measured batches…');drawHits=[];return; }
@@ -258,11 +264,12 @@
       const end=project(...axis);segment(project(0,0,0),end,C.muted);
       g.fillStyle=C.text;g.textAlign='center';g.fillText(`PC${i+1}`,end[0],end[1]-8);
     });
-    // Bubble size remains screen-space area, independent of camera depth/zoom.
+    // Radius encodes a fixed outside/inside length ratio in screen pixels,
+    // independent of absolute update size, window extrema and camera depth/zoom.
     drawHits=centered.map((p,i)=>{const position=project(...p.map(v=>v/extent));return {
       position:position.slice(0,2),depth:position[2],
       visible:position[0]>=left&&position[0]<=right&&position[1]>=top&&position[1]<=bottom,
-      radius:maximum>0&&Number.isFinite(outside[i])?Math.sqrt(3**2+(14**2-3**2)*outside[i]/maximum):3,
+      radius:bubbleRadius(ratios[i]),
     };});
     g.lineWidth=2;
     drawHits.forEach((hit,i)=>{if(i)segment(drawHits[i-1].position,hit.position,C.muted);});
@@ -295,6 +302,9 @@
       : projection?.step_norm===0?'No measurable change between these sampled weights.':'No measurable displacement to calculate coverage.');
     text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',pointIndex>0?sci(projection?.step_norm):'—');
     text('outside-step-value',pointIndex>0?sci(outsideStep(projection,dims)):'—');
+    const ratio=pointIndex>0?relativeStep(projection,dims):null;
+    text('relative-step-value',ratio==null?'—':ratio===Infinity?'∞ · no projected step'
+      : `${fmt(ratio)} ×${ratio>10?' · size capped at 10×':''}`);
     trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
@@ -374,7 +384,7 @@
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=true;
     for(const id of ['pulse','path','memory'])$(id).hidden=true;
     for(const id of ['gradient-value','update-value','learning-rate','clip-value','alignment-value','matrix-state',
-      'reference-value','loss-change','coverage-value','turn-value','step-value','outside-step-value','probe-loss','probe-cleared',
+      'reference-value','loss-change','coverage-value','turn-value','step-value','outside-step-value','relative-step-value','probe-loss','probe-cleared',
       'probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
   }
   $('module').addEventListener('change',e=>{module=e.target.value;render();});
