@@ -28,7 +28,7 @@ function element(tag, attributes={}, text='') {
 }
 function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, responsive=false, digits=2, minimumRange=1, empty='Pendiente de datos de esta ejecución'}={}) {
   const svg=$(id), legend=$(`${id}-legend`); svg.replaceChildren();
-  if(!chartStates.has(id))chartStates.set(id,{hovered:null,focused:null});
+  if(!chartStates.has(id))chartStates.set(id,{hovered:null,focused:null,selected:null});
   const state=chartStates.get(id), lastPoints=series.map(s=>s.points.findLast(p=>finite(p[0])&&finite(p[1])));
   state.update=()=>{};
   const width=responsive?(svg.clientWidth||700):700, height=responsive?(svg.clientHeight||280):280;
@@ -67,18 +67,26 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
         node.addEventListener('pointerleave',()=>{state.hovered=null;state.update();});
         node.addEventListener('focus',()=>{state.focused=label.index;state.update();});
         node.addEventListener('blur',()=>{state.focused=null;state.update();});
-        node.addEventListener('click',()=>node.focus()); // Also expose the guide on touch screens.
+        node.addEventListener('click',()=>{
+          node.focus();
+          state.selected=state.selected===label.key?null:label.key;
+          state.hovered=state.focused=null;state.update();
+        });
       }
       return node;
     }));
   }
   labels.forEach((label,i)=>{
-    const node=legend.children[i];node.textContent=label.text;node.title=label.title||'';node.className=label.className;
+    const node=legend.children[i];node.textContent=label.text;node.title=[label.title,label.index!==undefined&&ChartTools.hint].filter(Boolean).join(' · ');node.className=label.className;
     if(label.index!==undefined)node.disabled=!lastPoints[label.index];
     node.setAttribute('data-highlighted','false');
   });
   if(!lastPoints[state.hovered])state.hovered=null;
   if(!lastPoints[state.focused])state.focused=null;
+  if(!labels.some(l=>l.key===state.selected&&lastPoints[l.index]))state.selected=null;
+  labels.forEach((label,i)=>{
+    if(label.index!==undefined)legend.children[i].setAttribute('aria-pressed',String(label.key===state.selected));
+  });
   const points=series.flatMap(s=>s.points).filter(p=>finite(p[0])&&finite(p[1]));
   if (!points.length&&!markers.length) {svg.append(element('text',{x:width/2,y:height/2,fill:'#94a7aa','text-anchor':'middle'},empty));return;}
   const times=series.flatMap(s=>s.points.map(p=>p[0])).concat(markers.flatMap(m=>[m.start,m.end])).filter(finite);
@@ -110,6 +118,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
       circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · acción ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
     }
     flush();
+    if(!s.pointsOnly)for(const node of ChartTools.svgEMA(s.points,x,y,color,opacity))append(node);
   });
   if(markers.length) {
     for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`Sin cambios reales ni predichos · acciones ${m.start}–${m.end}`));svg.append(mark);}
@@ -117,17 +126,17 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   }
   const guide=element('g',{'class':'series-guide','pointer-events':'none','aria-hidden':'true'});svg.append(guide);
   state.update=()=>{
-    const selected=state.hovered??state.focused, last=lastPoints[selected];
+    const selected=state.hovered??state.focused??labels.find(l=>l.key===state.selected)?.index, last=lastPoints[selected];
     layers.forEach((layer,i)=>layer.forEach(({node,opacity})=>node.setAttribute('opacity',
       !last?opacity:i===selected?1:opacity*.2)));
-    labels.forEach((label,i)=>legend.children[i].setAttribute('data-highlighted',String(!!last&&label.index===selected)));
+    labels.forEach((label,i)=>{
+      legend.children[i].setAttribute('data-highlighted',String(!!last&&label.index===selected));
+      if(label.index!==undefined)legend.children[i].setAttribute('aria-pressed',String(label.key===state.selected));
+    });
     guide.replaceChildren();
     if(!last)return;
     const s=series[selected], color=s.muted?'#94a7aa':colors[s.colorIndex??selected%4], position=y(last[1]);
-    guide.append(element('line',{x1:58,y1:position,x2:width-22,y2:position,stroke:color,'stroke-width':1.2,'stroke-dasharray':'3 4'}),
-      element('circle',{cx:x(last[0]),cy:position,r:4,fill:'#172122',stroke:color,'stroke-width':2}),
-      element('text',{x:width-22,y:Math.max(16,position-7),fill:color,stroke:'#172122','stroke-width':3,'paint-order':'stroke',
-        'font-size':11,'text-anchor':'end'},`${fmt(last[1],digits)}${suffix}`));
+    ChartTools.svgGuide(guide,{left:58,right:width-22,y:position,color,lastX:x(last[0]),text:`${fmt(last[1],digits)}${suffix}`});
   };
   state.update();
 }

@@ -7,7 +7,8 @@ const assets = path.join(__dirname, '../dashboard_web');
 const html = fs.readFileSync(path.join(assets, 'campaign.html'), 'utf8');
 const script = fs.readFileSync(path.join(assets, 'campaign.js'), 'utf8');
 function element() {
-  return {textContent: '', hidden: false, children: [], className: '',
+  return {textContent: '', hidden: false, children: [], className: '', style:{}, listeners:{},
+    addEventListener(key,handler){this.listeners[key]=handler;},
     append(...items) { this.children.push(...items); },
     replaceChildren(...items) { this.children = items; },
     setAttribute(key, value) { this[key] = value; }};
@@ -27,6 +28,7 @@ const text = id => nodes.get(id).textContent;
 const row = n => nodes.get('campaign-table').children[n].children;
 const bars = id => nodes.get(id).children.slice(1); // axis followed by measured variants
 (async () => {
+  vm.runInContext(fs.readFileSync(path.join(assets, 'chart-tools.js'), 'utf8'), context);
   vm.runInContext(script, context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('campaign-completed'), '1 / 6');
@@ -96,7 +98,19 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.match(text('probe-status'), /20 \/ 120/);
   assert.equal(nodes.get('learning-probe').hidden, false);
   assert.equal(nodes.get('probe-coverage').children[0].children[3].textContent, '1');
-  assert.equal(nodes.get('probe-chart-1').children.length, 3, 'two named series and one SVG');
+  assert.equal(nodes.get('probe-chart-1').children[0].children.length, 2, 'two named series in the interactive legend');
+  assert.equal(nodes.get('probe-chart-1').children[1].role, 'img');
+  const probeLegend=nodes.get('probe-chart-1').children[0], probeSvg=nodes.get('probe-chart-1').children[1];
+  const probeButton=probeLegend.children[0];
+  assert.equal(probeSvg.children.filter(n=>n.class==='series-ema').length,2);
+  probeButton.listeners.click();
+  const probeGuide=()=>probeSvg.children.find(n=>n.class==='series-guide');
+  assert.equal(probeGuide().children[3].textContent,'0 %','guide uses actual last fit error, not EMA');
+  await vm.runInContext('pollCampaign()',context);
+  assert.equal(probeLegend.children[0],probeButton);
+  assert.equal(probeButton['aria-pressed'],'true');
+  probeButton.listeners.click();
+  assert.equal(probeGuide().children.length,0);
   report.learning_probe.scope = 'streaming_real_training_probe';
   report.learning_probe.progress = {phase: 'behavior', policy: 'q', game: 'example', level: 1,
     current_episode: 2, total_episodes: 4, episode_actions: 17, episode_budget: 128};

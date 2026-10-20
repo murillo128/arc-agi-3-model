@@ -28,6 +28,7 @@ const context = vm.createContext({console, setTimeout() {}, fixture: report,
   fetch: async () => { if (offline) throw Error('offline'); return {ok: true, json: async () => ({sequences: report, history_available: true})}; }});
 const text = id => nodes.get(id).textContent;
 (async () => {
+  vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets, 'sequences.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('status'), 'Pausado');
@@ -164,4 +165,44 @@ const text = id => nodes.get(id).textContent;
   offline = true;
   await vm.runInContext('refresh()', context);
   assert.equal(text('status'), 'Sin conexión');
+  // Actual renderer: EMA 0 -> 10 -> 19, with the guide on the raw value 100.
+  context.chartRows=[{batch:1,v:0},{batch:2,v:100},{batch:3,v:100}];
+  const draw=()=>vm.runInContext("chart('quality',chartRows,[series('Prueba',r=>r.v)],100)",context);
+  draw();
+  const smooth=()=>nodes.get('quality').children.filter(n=>n.class==='series-ema');
+  assert.equal(smooth().length,1);
+  assert.equal(smooth()[0]['stroke-width'],.75);
+  assert.equal(smooth()[0].points,'50,220 365,201.2 680,184.28');
+  assert.equal(smooth()[0].stroke,nodes.get('quality-legend').children[0].style.color);
+  const selected=nodes.get('quality-legend').children[0];
+  const guide=()=>nodes.get('quality').children.find(n=>n.class==='series-guide');
+  selected.listeners.click();
+  assert.equal(selected['aria-pressed'],'true');
+  assert.equal(guide().children[0].y1,32);
+  assert.equal(guide().children[0]['stroke-dasharray'],'2 4');
+  assert.equal(guide().children[2].x,2);
+  assert.equal(guide().children[3].textContent,'100');
+  context.chartRows.push({batch:4,v:0});
+  draw();
+  assert.equal(nodes.get('quality-legend').children[0],selected,'polling retains the focused button');
+  assert.equal(selected['aria-pressed'],'true');
+  assert.equal(guide().children[0].y1,220);
+  assert.equal(guide().children[3].textContent,'0','zero is a real last value');
+  selected.listeners.click();
+  assert.equal(guide().children.length,0);
+  selected.listeners.click();
+  context.chartRows=[{batch:1,v:null}];
+  draw();
+  assert.equal(selected.disabled,true);
+  assert.equal(selected['aria-pressed'],'false');
+  // Separate measurement sources never blend; missing rows break, explicit skips do not.
+  context.chartRows=[{batch:1,v:0},{batch:2,v:100},{batch:3,v:100,measurement_source:'training'},
+    {batch:4,v:null,measurement_source:'training'},{batch:5,v:50,measurement_source:'training'}];
+  draw();
+  assert.equal(smooth().length,3);
+  assert.equal(smooth()[1].points,'365,32','new source begins at its actual value');
+  context.chartRows=[{batch:1,v:0},{batch:2,v:null,skip:true},{batch:3,v:100}];
+  vm.runInContext("chart('quality',chartRows,[series('Prueba',r=>r.v,{skip:r=>r.skip})],100)",context);
+  assert.equal(smooth().length,1);
+  assert.equal(smooth()[0].points,'50,220 680,201.2');
 })().catch(error => { console.error(error); process.exitCode = 1; });

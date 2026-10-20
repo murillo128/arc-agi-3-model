@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARC · Comparación de variantes</title>
   <link rel="stylesheet" href="dashboard.css">
-  <script src="campaign.js" defer></script>
+  <script src="chart-tools.js" defer></script><script src="campaign.js" defer></script>
 </head>
 <body>
 <nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html">Entrenamiento</a><a href="optimization.html">Optimización</a><a href="campaign.html" aria-current="page">Campañas</a></div><span class="nav-caption">WORLD MODEL</span></nav>
 <main>
+<p class="chart-help">Línea fina: EMA (α = 0,1). Pulsa una leyenda para marcar su último valor real; vuelve a pulsar para quitar la guía.</p>
   <header>
     <div><p class="eyebrow">ARC · EXPERIMENTOS</p><h1>Comparación de variantes</h1><p class="muted">Toda la campaña · resultados de cada variante y sus semillas.</p><a href="./">← Ver entrenamiento</a></div>
     <div class="connection"><span id="campaign-connection" role="status">Conectando…</span><small id="campaign-freshness"></small></div>

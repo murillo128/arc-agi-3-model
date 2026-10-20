@@ -23,6 +23,7 @@ let selectedTab = 'world';
 
 class Chart {
   constructor(id) {
+    this.id = id;
     this.canvas = $(id);
     this.legend = $(`${id}-legend`);
     this.tip = this.canvas.nextElementSibling;
@@ -36,15 +37,12 @@ class Chart {
     this.series = series;
     this.threshold = threshold;
     this.suffix = suffix;
-    this.legend.replaceChildren(...series.map((s, i) => {
-      const span = document.createElement('span'); span.className = `series-${i}`;
-      span.style.color = colors[i % colors.length];
-      span.textContent = s.name; return span;
-    }));
+    const items=series.map((s,i)=>({key:s.name,text:s.name,color:colors[i%colors.length],
+      disabled:!s.points.some(p=>finite(p.x)&&finite(p.y))}));
     if (finite(threshold)) {
-      const span = document.createElement('span'); span.className = 'series-3';
-      span.textContent = `Umbral: ${scalar(threshold)}${suffix}`; this.legend.append(span);
+      items.push({key:'threshold',text:`Umbral: ${scalar(threshold)}${suffix}`,color:colors[3],passive:true});
     }
+    ChartTools.legend(this.legend,this.id,items,()=>this.draw());
     this.tip.hidden = true;
     this.draw();
   }
@@ -94,7 +92,12 @@ class Chart {
         if (!finite(p.x) || !finite(p.y)) continue;
         ctx.beginPath(); ctx.arc(x(p.x), y(p.y), 2.5, 0, Math.PI * 2); ctx.fill();
       }
+      ChartTools.canvasEMA(ctx,s.points.map(p=>[p.x,p.y]),x,y,colors[i%colors.length]);
     });
+    const selected=this.series.findIndex(s=>s.name===ChartTools.selected(this.id));
+    const last=this.series[selected]?.points.findLast(p=>finite(p.x)&&finite(p.y));
+    if(last)ChartTools.canvasGuide(ctx,{left,right,y:y(last.y),lastX:x(last.x),color:colors[selected%colors.length],
+      text:scalar(last.y)+this.suffix});
   }
   hover(event) {
     if (!this.bounds || !this.series.some(s => s.points.length)) return;

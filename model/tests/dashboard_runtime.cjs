@@ -9,12 +9,14 @@ const html = fs.readFileSync(path.join(assets, 'index.html'), 'utf8');
 const script = fs.readFileSync(path.join(assets, 'dashboard.js'), 'utf8');
 function element(tag = 'div') {
   return {textContent: '', hidden: false, style: {}, className: '', value: '', options: [], children: [],
-    clientWidth: 640, clientHeight: 240, nextElementSibling: {hidden: true}, listeners: {},
+    clientWidth: 640, clientHeight: 240, nextElementSibling: {hidden: true}, listeners: {}, draws: [],
+    set width(value){this._width=value;this.draws=[];},get width(){return this._width;},
     setAttribute(name, value) { this[name] = value; },
     addEventListener(name, fn) { this.listeners[name] = fn; },
     append(...items) { this.children.push(...items); },
     replaceChildren(...items) { this.children = items; if (tag === 'select') { this.options = items; this.value = items[0]?.value || ''; } },
-    getContext() { return new Proxy({}, {get: (target, key) => target[key] || (() => {})}); }
+    getContext() { return new Proxy({}, {get: (target, key) => target[key] || ((...args)=>this.draws.push([key,...args])),
+      set:(target,key,value)=>{target[key]=value;this.draws.push(['set',key,value]);return true;}}); }
   };
 }
 async function dashboard(data) {
@@ -31,6 +33,7 @@ async function dashboard(data) {
     document: {getElementById: id => nodes.get(id) || null, createElement: element},
     ResizeObserver: class { observe() {} }, Option: function(text, value) { this.value = value; this.textContent = text; },
     fetch: async () => ({ok: true, json: async () => data}), AbortSignal, setTimeout: () => {}});
+  vm.runInContext(fs.readFileSync(path.join(assets, 'chart-tools.js'), 'utf8'), context);
   vm.runInContext(script, context);
   await new Promise(resolve => setImmediate(resolve)); // actual initial poll + render
   return {nodes, text, change, context};
@@ -220,5 +223,16 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(vm.runInContext('charts.spread.series[0].points.length', single.context), 2);
   assert.ok(Math.abs(vm.runInContext('charts.spread.series[0].points[0].y', single.context) - .5) < 1e-12);
   assert.equal(vm.runInContext('charts.spread.series[0].points[1].y', single.context), .8);
+  vm.runInContext("charts.speed.set([{name:'Prueba',points:[{x:0,y:0},{x:1,y:10},{x:2,y:20}]}])",single.context);
+  const speed=single.nodes.get('speed'),button=single.nodes.get('speed-legend').children[0];
+  assert(speed.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  button.listeners.click();
+  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='20'&&d[2]===8),'actual last value, not EMA');
+  vm.runInContext("charts.speed.set([{name:'Prueba',points:[{x:0,y:20},{x:1,y:0}]}])",single.context);
+  assert.equal(single.nodes.get('speed-legend').children[0],button);
+  assert.equal(button['aria-pressed'],'true');
+  assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='0'&&d[2]===8));
+  button.listeners.click();
+  assert(!speed.draws.some(d=>d[0]==='strokeRect'));
   console.log('Single execution selection: counters, charts, tables, tabs, source/seed isolation and pending evaluations passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

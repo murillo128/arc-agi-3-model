@@ -13,7 +13,8 @@ function element(tag='div') {
     append(...items){this.children.push(...items);}, replaceChildren(...items){this.children=items;if(tag==='select')this.options=items;},
     addEventListener(k,fn){this.listeners[k]=fn;},setAttribute(k,v){this[k]=v;}, focus(){},
     getBoundingClientRect(){return {width:700,height:260,left:0,top:0};},
-    getContext(){return new Proxy({}, {get:(target,key)=>target[key]||((...args)=>this.draws.push([key,...args]))});},
+    getContext(){return new Proxy({}, {get:(target,key)=>target[key]||((...args)=>this.draws.push([key,...args])),
+      set:(target,key,value)=>{target[key]=value;this.draws.push(['set',key,value]);return true;}});},
     querySelector(selector){return this[selector]??=(element(selector));}};
 }
 async function dashboard() {
@@ -34,6 +35,7 @@ async function dashboard() {
   const change=(id,value)=>{nodes.get(id).value=value;nodes.get(id).listeners.change({target:nodes.get(id)});};
   const input=(id,value)=>{nodes.get(id).value=value;nodes.get(id).listeners.input({target:nodes.get(id)});};
   const flush=()=>new Promise(resolve=>setImmediate(resolve));
+  vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'optimization.js'),'utf8'),context);await flush();
   return {nodes,state,text,click,change,input,flush};
 }
@@ -93,6 +95,31 @@ test('training batch loss is labeled separately from fixed reference loss',async
   assert.equal(text('reference-label'),'NLL visual antes de aprender');
   assert.match(text('reference-source'),/Datos nuevos de cada batch/);
   assert.match(text('reference-source'),/los pesos del punto son posteriores/);
+});
+
+test('temporal optimization curves expose EMA and persistent actual-value guides, including log-scale memory',async()=>{
+  const {nodes,state,click}=await dashboard();
+  click('tab-path');
+  const canvas=nodes.get('reference-history'),button=nodes.get('reference-history-legend').children[0];
+  assert(canvas.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  button.listeners.click();
+  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='1'&&d[2]===8));
+  state.report.updated_at=5;state.report.points.at(-1).reference_loss=0;
+  await state.polling();
+  assert.equal(nodes.get('reference-history-legend').children[0],button);
+  assert.equal(button['aria-pressed'],'true');
+  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='0'&&d[2]===8));
+  button.listeners.click();
+  assert(!canvas.draws.some(d=>d[0]==='strokeRect'));
+  click('tab-memory');
+  const memory=nodes.get('memory-gradient'),memoryButton=nodes.get('memory-gradient-legend').children[0];
+  assert(memory.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===.75));
+  memoryButton.listeners.click();
+  assert(memory.draws.some(d=>d[0]==='strokeRect'));
+  state.report.updated_at=6;state.report.probe={status:'unavailable',reason:'No sample'};
+  await state.polling();
+  assert.equal(nodes.get('memory-gradient-legend').children.length,0);
+  assert(!memory.draws.some(d=>d[0]==='strokeRect'));
 });
 
 test('malformed responses clear all live/pinned state and recover without caching the bad revision',async()=>{

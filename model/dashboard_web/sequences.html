@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ARC · Memoria entre niveles</title><link rel="stylesheet" href="dashboard.css"><script src="sequences.js" defer></script></head>
+<title>ARC · Memoria entre niveles</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequences.js" defer></script></head>
 <body class="subgoal-dashboard">
 <nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html" aria-current="page">Entrenamiento</a><a href="optimization.html">Optimización</a><a id="history-link" href="history.html" hidden>Histórico del planner</a></div><span class="nav-caption">WORLD MODEL</span></nav><main>
+<p class="chart-help">Línea fina: EMA (α = 0,1). Pulsa una leyenda para marcar su último valor real; vuelve a pulsar para quitar la guía.</p>
 <header><div class="run-heading"><p class="eyebrow">ARC · APRENDIZAJE POR SECUENCIAS</p><h1>Memoria entre niveles</h1>
 <p id="run-info" class="muted">Esperando datos…</p></div><div class="connection"><span id="status" role="status">Esperando</span><p id="gpu-status" class="gpu-status"></p></div></header>
 <p class="run-context" id="configuration"></p><p class="run-context" id="learning-rates"></p>

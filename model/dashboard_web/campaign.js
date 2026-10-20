@@ -184,6 +184,7 @@ function renderDiagnostics(diagnostic) {
     }
   }
 }
+const probeChartNodes = new Map();
 function renderLearningProbe(probe) {
   $('learning-probe').hidden = !probe?.available;
   const table = $('probe-coverage'); table.replaceChildren();
@@ -195,25 +196,33 @@ function renderLearningProbe(probe) {
   $('probe-behavior').hidden = !probe?.calibration?.records;
   for (const id of ['probe-best', 'probe-confirmation', 'probe-measurements', 'probe-policies']) $(id).replaceChildren();
   for (const horizon of [1, 2]) {
-    const host = $(`probe-chart-${horizon}`); host.replaceChildren();
-    if (!probe?.available) continue;
+    const id=`probe-chart-${horizon}`, host=$(id);
+    if(!probeChartNodes.has(horizon)){
+      const legend=document.createElement('div');legend.className='legend';
+      const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+      svg.setAttribute('viewBox','0 0 540 245');svg.setAttribute('role','img');
+      host.replaceChildren(legend,svg);probeChartNodes.set(horizon,{legend,svg});
+    }
+    const {legend,svg}=probeChartNodes.get(horizon);svg.replaceChildren();
+    if (!probe?.available) {ChartTools.legend(legend,id,[],()=>{});continue;}
     const series = (probe.results || []).flatMap((row, index) => ['fit', 'development'].map((split, branch) => ({
       label: `${title(row.variant)} · ${split === 'fit' ? 'Datos entrenados' : 'Partidas nuevas'}`,
       color: ['#77d8c4', '#f7bd76', '#b4a5ff', '#7cceff'][index * 2 + branch],
-      points: row.points.filter(p => finite(p[`${split}_${horizon}`])).map(p => [streaming ? p.actions : p.updates, p[`${split}_${horizon}`] * 100])
-    }))).filter(s => s.points.length);
-    if (!series.length) { host.textContent = 'Esperando la primera evaluación…'; continue; }
+      points: row.points.map(p => [streaming ? p.actions : p.updates, finite(p[`${split}_${horizon}`]) ? p[`${split}_${horizon}`] * 100 : null])
+    }))).filter(s => s.points.some(ChartTools.valid));
     const max = Math.max(1, ...series.flatMap(s => s.points.map(p => p[0])));
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 540 245'); svg.setAttribute('role', 'img');
     const unit = streaming ? 'acciones' : 'actualizaciones';
     svg.setAttribute('aria-label', `Error visual a ${horizon} pasos. Eje horizontal: ${unit}; vertical: 0 a 100 por ciento.`);
     const add = (tag, attrs, text) => {
       const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
       for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
       if (text !== undefined) node.textContent = text;
-      svg.append(node);
+      svg.append(node);return node;
     };
+    if (!series.length) {
+      add('text',{x:42,y:120,fill:'#9bb0ac'},'Esperando la primera evaluación…');
+      ChartTools.legend(legend,id,[],()=>{});continue;
+    }
     for (const percent of [0, 25, 50, 75, 100]) {
       const y = 215 - percent * 2;
       add('line', {x1: 42, y1: y, x2: 525, y2: y, stroke: '#34413f'});
@@ -221,15 +230,26 @@ function renderLearningProbe(probe) {
     }
     add('text', {x: 42, y: 240, fill: '#9bb0ac', 'font-size': 12}, '0');
     add('text', {x: 525, y: 240, fill: '#9bb0ac', 'font-size': 12, 'text-anchor': 'end'}, `${fmt(max)} ${unit}`);
-    for (const [index, s] of series.entries()) {
-      const coords = s.points.map(([x, y]) => [42 + x / max * 483, 215 - y * 2]);
-      add('polyline', {points: coords.map(p => p.join(',')).join(' '), fill: 'none', stroke: s.color, 'stroke-width': 2});
-      for (const [x, y] of coords) add('circle', {cx: x, cy: y, r: 3, fill: s.color});
-      const legend = document.createElement('p');
-      legend.textContent = `${s.label}: ${fmt(s.points.at(-1)[1], 2)} %`;
-      legend.className = `probe-legend-${index}`; host.append(legend);
+    const x=v=>42+v/max*483, y=v=>215-v*2;
+    for (const s of series) {
+      let segment=[];
+      const flush=()=>{if(segment.length)add('polyline',{points:segment.join(' '),fill:'none',stroke:s.color,'stroke-width':2});segment=[];};
+      for(const p of s.points){
+        if(!ChartTools.valid(p)){flush();continue;}
+        segment.push(`${x(p[0])},${y(p[1])}`);
+        add('circle',{cx:x(p[0]),cy:y(p[1]),r:3,fill:s.color});
+      }
+      flush();
+      svg.append(...ChartTools.svgEMA(s.points,x,y,s.color));
     }
-    host.append(svg);
+    const guide=add('g',{class:'series-guide','pointer-events':'none'});
+    const updateGuide=()=>{
+      guide.replaceChildren();
+      const selected=series.find(s=>s.label===ChartTools.selected(id)),last=selected?.points.findLast(ChartTools.valid);
+      if(last)ChartTools.svgGuide(guide,{left:42,right:525,y:y(last[1]),lastX:x(last[0]),color:selected.color,text:`${fmt(last[1],2)} %`});
+    };
+    ChartTools.legend(legend,id,series.map(s=>({key:s.label,text:`${s.label}: ${fmt(s.points.findLast(ChartTools.valid)[1],2)} %`,color:s.color})),updateGuide);
+    updateGuide();
   }
   if (!probe?.available) return;
   const p = probe.progress || {};

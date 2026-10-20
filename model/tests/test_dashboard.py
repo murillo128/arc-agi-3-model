@@ -57,7 +57,7 @@ class GpuMonitorTests(unittest.TestCase):
 class DashboardTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for dashboard JavaScript rendering contract')
     def test_full_javascript_poll_and_render(self):
-        for script in ('dashboard_runtime.cjs', 'campaign_runtime.cjs', 'subgoals_runtime.cjs'):
+        for script in ('chart_tools_runtime.cjs', 'dashboard_runtime.cjs', 'campaign_runtime.cjs', 'subgoals_runtime.cjs'):
             with self.subTest(script=script):
                 result = subprocess.run(['node', str(Path(__file__).with_name(script))],
                                         text=True, capture_output=True, timeout=20)
@@ -245,6 +245,7 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         base = f'http://127.0.0.1:{server.server_port}'
         for route, mime in (('/', 'text/html'), ('/dashboard.js', 'text/javascript'),
+                            ('/chart-tools.js', 'text/javascript'), ('/optimization.html', 'text/html'),
                             ('/campaign.html', 'text/html'), ('/campaign.js', 'text/javascript'),
                             ('/dashboard.css', 'text/css'), ('/api/state', 'application/json')):
             with urlopen(base + route) as response:
@@ -252,6 +253,10 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
                 body = response.read()
                 self.assertTrue(body)
+                if mime == 'text/html':
+                    scripts = body.decode()
+                    consumer = 'optimization' if route == '/optimization.html' else 'campaign' if route == '/campaign.html' else 'dashboard'
+                    self.assertLess(scripts.index('src="chart-tools.js"'), scripts.index(f'src="{consumer}.js"'))
                 if route == '/api/state':
                     data = json.loads(body)
                     self.assertEqual(data['progress']['actions'], 256)

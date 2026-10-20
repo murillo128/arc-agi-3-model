@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const assets = path.join(__dirname, '../dashboard_web');
 const html = fs.readFileSync(path.join(assets, 'subgoals.html'), 'utf8');
 function element() {
-  return {textContent:'', hidden:false, children:[], listeners:{},
+  return {textContent:'', hidden:false, children:[], listeners:{}, focus(){},
     append(...items) {for(const item of items){
       if(item.parentNode)item.parentNode.children=item.parentNode.children.filter(child=>child!==item);
       item.parentNode=this;this.children.push(item);
@@ -40,6 +40,7 @@ const context=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(
   }return {ok:true,json:async()=>({subgoals:report,gpu,curriculum_control:controls})};}});
 const text=id=>nodes.get(id).textContent;
 (async()=>{
+  vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(text('actions'),'32');
@@ -63,7 +64,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('speed-legend').children[0].textContent,'Acciones/s · últimos 60 s: 2 acciones/s');
   assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Media de actualizaciones · hasta 512 acciones: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Actualización individual: 2');
-  assert.match(nodes.get('loss-legend').children[1].title,/acción 1$/,'missing latest sample does not fabricate a zero');
+  assert.match(nodes.get('loss-legend').children[1].title,/acción 1 ·/,'missing latest sample does not fabricate a zero');
   assert.equal(text('gpu-status'),'GPU · 73 % de uso · 71 °C');
   assert.match(nodes.get('gpu-status').title,/Test GPU/);
   gpu={devices:[{index:0,name:'Test GPU',utilization_percent:0,temperature_c:null},
@@ -464,7 +465,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(outcomeDots.length,7);
   assert.equal(outcomeDots.filter(n=>n.fill==='#f4b979').length,1);
   assert.ok(outcomeDots.some(n=>n.children[0].textContent==='Fracaso: 0 · acción 33 · a / nivel 1 · Subobjetivo · 160 acciones · mínimo 0'));
-  const outcomeLines=nodes.get('subgoal-outcomes').children.filter(n=>typeof n.points==='string');
+  const outcomeLines=nodes.get('subgoal-outcomes').children.filter(n=>typeof n.points==='string'&&n.class!=='series-ema');
   assert.equal(outcomeLines.length,1,'binary outcomes are points, not connected routes');
   assert.equal(outcomeLines[0].stroke,'#a9a6ef');
   report.episodes=[{game:'a',level:1,end_action:1025,segments:[goal(5,2,-133,false)]}];
@@ -505,7 +506,7 @@ const text=id=>nodes.get(id).textContent;
     {actions:96,counts:{wrong:0,union:10,changed:10}},
     {actions:128,counts:null}];
   await vm.runInContext('poll()',context);
-  const rawLines=nodes.get('delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string');
+  const rawLines=nodes.get('delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string'&&n.class!=='series-ema');
   assert.equal(rawLines.length,2,'no line bridges the no-change gap');
   assert.ok(rawLines.every(n=>n.points.split(' ').length===1));
   assert.equal(nodes.get('delta').children.filter(n=>n.height===5).length,1,'no-change is marked separately from missing data');
@@ -567,7 +568,7 @@ const text=id=>nodes.get(id).textContent;
   delete report.config.freeze_representation_after_planner;
   delete report.progress.representation_frozen;
   delete report.progress.representation_learning_rates;
-  const qualityLines=nodes.get('fixed-delta').children.filter(n=>n.stroke==='#77dabb'&&typeof n.points==='string');
+  const qualityLines=nodes.get('fixed-delta').children.filter(n=>n.stroke==='#77dabb'&&typeof n.points==='string'&&n.class!=='series-ema');
   assert.deepEqual(qualityLines.map(n=>n.points.split(' ').length),[2,1]);
   assert.match(circles('fixed-delta').at(-1).children[0].textContent,/: 40 · acción 200/);
   // Live configured limits are thin dotted references; coincident limits merge.
@@ -588,7 +589,7 @@ const text=id=>nodes.get(id).textContent;
   assert.deepEqual(limits().map(n=>n.y1),[218.4,207.6]);
   assert.ok(limits().every(n=>n.y1===n.y2&&n['stroke-width']===1&&n['stroke-dasharray']==='2 4'));
   assert.match(text('quality-cadence'),/Calidad, deriva y activaciones cada 256 acciones/);
-  const driftLines=()=>nodes.get('fixed-delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string');
+  const driftLines=()=>nodes.get('fixed-delta').children.filter(n=>n.stroke==='#94a7aa'&&typeof n.points==='string'&&n.class!=='series-ema');
   assert.deepEqual(driftLines().map(n=>n.points.split(' ').length),[1,1],'missing drift measurements leave a gap');
   report.evaluations.pop();
   await vm.runInContext('poll()',context);
@@ -827,6 +828,7 @@ const text=id=>nodes.get(id).textContent;
     fetch:async(url,options)=>{historyRequests.push({url,method:options?.method});
       return {ok:true,json:async()=>({subgoals:{...report,historical:true,status:'historical'},
         curriculum_control:{target:{game:'sc01-v1',level:2},phase:true,level:true}})};}});
+  vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),history);
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),history);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(text('connection'),'Histórico · solo lectura');
@@ -837,5 +839,21 @@ const text=id=>nodes.get(id).textContent;
   assert.ok(historyRequests.every(r=>r.method!=='POST'));
   assert.ok(historyRequests.some(r=>r.url==='api/history/state'));
   assert.ok(historyRequests.every(r=>r.url!=='api/state'));
+  vm.runInContext("plot('speed',[{name:'Prueba',points:[[0,0],[1,10],[2,20]]}])",context);
+  const legendButton=nodes.get('speed-legend').children[0];
+  const lastGuide=()=>nodes.get('speed').children.find(n=>n.class==='series-guide');
+  assert.equal(nodes.get('speed').children.filter(n=>n.class==='series-ema').length,1);
+  legendButton.listeners.click();
+  legendButton.listeners.blur();legendButton.listeners.pointerleave();
+  assert.equal(lastGuide().children[3].textContent,'20','pinned guide survives blur and pointer leave');
+  vm.runInContext("plot('speed',[{name:'Prueba',points:[[0,0],[1,10],[2,20],[3,0]]}])",context);
+  assert.equal(nodes.get('speed-legend').children[0],legendButton);
+  assert.equal(lastGuide().children[3].textContent,'0');
+  legendButton.listeners.click();
+  assert.equal(lastGuide().children.length,0,'second click removes the guide');
+  legendButton.listeners.click();
+  vm.runInContext("plot('speed',[{name:'Prueba',points:[[0,null]]}])",context);
+  assert.equal(legendButton.disabled,true);
+  assert.equal(legendButton['aria-pressed'],'false');
   console.log('Subgoal dashboard contracts passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

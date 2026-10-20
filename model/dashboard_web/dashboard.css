@@ -390,3 +390,6 @@ body .metrics small { line-height: 1.6; }
 .app-nav > div { min-width: 0; overflow-x: auto; }
 .app-nav > div a { flex-shrink: 0; white-space: nowrap; }
 .prediction-preview .quality-heading { flex-wrap: wrap; }
+
+.chart-help { color: var(--muted, #9bb0ac); font-size: 11px; line-height: 1.6; margin: 0 0 16px; }
+.series-guide { pointer-events: none; }

@@ -74,7 +74,10 @@
   }
   function empty(id, message) { const {g, w, h} = canvas(id); g.fillStyle = C.muted; g.textAlign = 'center'; g.fillText(message, w/2, h/2); }
   function line(id, rows, key, {label = '', color: stroke = C.mint, selected = -1, log = false, ceiling = null} = {}) {
-    const values = rows.map(key).filter(Number.isFinite);
+    const points = rows.map((row,i)=>[i,key(row)]), last = points.findLast(ChartTools.valid);
+    const values = points.map(p=>p[1]).filter(Number.isFinite);
+    ChartTools.legend($(`${id}-legend`),id,[{key:label,text:`${label}: ${sci(last?.[1])}`,color:stroke,disabled:!last}],
+      ()=>line(id,rows,key,{label,color:stroke,selected,log,ceiling}));
     if (!values.length) { empty(id, 'Sin mediciones para este intervalo'); return; }
     const {g, w, h} = canvas(id), left = 60, right = w-20, top = 27, bottom = h-32;
     const transform = v => log ? Math.log10(Math.max(1e-12, v)) : v;
@@ -90,8 +93,10 @@
     g.strokeStyle=stroke; g.lineWidth=1.8; g.beginPath(); let started=false;
     rows.forEach((row, i) => { const value=key(row); if (!Number.isFinite(value)) { started=false; return; } if (!started) g.moveTo(x(i), y(value)); else g.lineTo(x(i), y(value)); started=true; }); g.stroke();
     rows.forEach((row,i) => { const value=key(row); if (!Number.isFinite(value)) return; g.beginPath(); g.arc(x(i),y(value),i===selected?4:2.4,0,2*Math.PI); g.fillStyle=stroke; g.fill(); });
+    ChartTools.canvasEMA(g,points,x,y,stroke);
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText(String(rows[0].batch ?? rows[0].id ?? rows[0].t),left,h-10);
     g.textAlign='right'; g.fillText(String(rows.at(-1).batch ?? rows.at(-1).id ?? rows.at(-1).t),right,h-10);
+    if(ChartTools.selected(id)===label&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:stroke,text:sci(last[1])});
   }
   function heatmap(id, grid) {
     if (!Array.isArray(grid) || !grid.length) { empty(id, 'Detalle no capturado en esta actualización'); return; }
@@ -204,7 +209,8 @@
     if(!p || p.status!=='ready'){
       text('probe-description',p?.reason || 'Solicita una sonda para medir la señal temporal de una pérdida.');
       for(const id of ['probe-loss','probe-cleared','probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
-      text('probe-comparison','');empty('memory-window','Sin sonda registrada');empty('memory-gradient','Sin sonda registrada');return;
+      text('probe-comparison','');empty('memory-window','Sin sonda registrada');empty('memory-gradient','Sin sonda registrada');
+      ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[],()=>{});return;
     }
     text('probe-description',`Sonda del batch ${p.batch} · sesión ${p.session+1} · ${p.game}. Derivada de la pérdida visual del paso ${p.stop-1} respecto a los estados de memoria anteriores.`);
     {const {g,w,h}=canvas('memory-window'),left=22,width=w-44,y=37,x=t=>left+t/p.session_steps*width;
@@ -223,7 +229,11 @@
     g.lineWidth=1.8;g.strokeStyle=C.mint;g.beginPath();let active=false;
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms)){active=false;return;}if(active)g.lineTo(x(row.t),y(row.rms));else g.moveTo(x(row.t),y(row.rms));active=true;});g.stroke();
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms))return;g.fillStyle=row.rms===0?C.amber:C.mint;g.beginPath();g.arc(x(row.t),y(row.rms),3,0,2*Math.PI);g.fill();});
+    const points=p.steps.map(row=>[row.t,row.rms]),last=points.findLast(ChartTools.valid);
+    ChartTools.canvasEMA(g,points,x,y,C.mint);
+    ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[{key:'rms',text:`RMS ∂L / ∂h: ${sci(last?.[1])}`,color:C.mint,disabled:!last}],()=>renderMemory(s));
     g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Corte · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Pérdida · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('RMS ∂L final / ∂h · escala log · ceros en ámbar sobre el suelo',left,14);
+    if(ChartTools.selected('memory-gradient')&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:C.mint,text:sci(last[1])});
     text('probe-loss',fmt(p.loss,4));text('probe-cleared',fmt(p.cleared_loss,4));
     text('probe-comparison',p.loss<p.cleared_loss?'En este paso, el historial reduce la pérdida.':p.loss>p.cleared_loss?'En este paso, borrar el historial reduce la pérdida.':'No hay diferencia de pérdida en esta sonda.');
     text('probe-game',`${p.game} / ${p.session+1}`);text('probe-batch',`${p.batch} / t = ${stop}`);text('probe-window',`${p.context_start}–${stop} · ${p.start-p.context_start} + ${p.stop-p.start} pasos`);text('probe-cost',`${fmt(p.seconds,3)} s`);
