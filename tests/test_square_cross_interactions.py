@@ -17,6 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ClickTests(unittest.TestCase):
+    def setUp(self):
+        # Literal mechanics fixtures use canonical colors; the public palette
+        # and every animation/teacher frame are covered by test_synthetic_palette.
+        self.enterContext(patch.object(si01, 'palette_for_seed',
+                                       return_value=np.arange(16, dtype=np.int8)))
+
     def game(self, level=1):
         generate = si01.generate_scene
         scenes = {
@@ -102,6 +108,10 @@ class ClickTests(unittest.TestCase):
 
 
 class InteractionTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.object(si01, 'palette_for_seed',
+                                       return_value=np.arange(16, dtype=np.int8)))
+
     def game(self, level, **changes):
         values = dict(target_size=5)
         if level in (3, 5):
@@ -339,6 +349,11 @@ class InteractionTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def setUp(self):
+        # Preserve historical scene/geometry fingerprints independently of recoloring.
+        self.enterContext(patch.object(si01, 'palette_for_seed',
+                                       return_value=np.arange(16, dtype=np.int8)))
+
     def test_click_seed_matrix_solid_separated_varied_and_reset(self):
         variations = {1: set(), 2: set()}
         edges = {1: set(), 2: set()}
@@ -508,7 +523,7 @@ class SDKTests(unittest.TestCase):
                 self.assertFalse(reset.full_reset)
                 self.assertEqual(reset.levels_completed, level)
                 self.assertEqual(reset.available_actions, expected_actions)
-                self.assertEqual(np.count_nonzero(reset.frame[-1] == 0), 180)
+                self.assertEqual(np.count_nonzero(reset.frame[-1] == envs[0]._game.palette[0]), 180)
                 np.testing.assert_array_equal(reset.frame[-1], level_frame)
             for action, data in reference_actions(scene, level + 1):
                 results = [env.step(GameAction.from_id(action), data=data) for env in envs]

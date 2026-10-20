@@ -62,8 +62,9 @@ curves on held-out seeds before assigning curriculum weights or claiming transfe
 Local RNG namespaces separate logical construction from appearance. A new seed
 resamples content where the context is procedural and resamples appearance;
 changing only `appearance_seed` preserves initial state, goals, transitions and
-solution set. Palettes permute ten semantic colors while neutral HUD/background
-colors remain fixed. Objects vary from 3 to 5 pixels, or a context-appropriate
+solution set. The canonical puzzle permutes ten semantic colors; the SDK renderer
+then permutes all 16 colors, including HUD and background, with one seed-stable
+mapping across levels and resets. Objects vary from 3 to 5 pixels, or a context-appropriate
 derived footprint; logical collisions and relations use cells, not pixel sizes.
 The SDK constructor uses the same seed for both namespaces. Independent visual
 intervention is available through the pure training API. RESET reproduces the

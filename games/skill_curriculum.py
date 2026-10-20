@@ -5,6 +5,7 @@ from copy import deepcopy
 
 from arcengine import ARCBaseGame, Camera, Level
 
+from games.palette import palette_for_seed
 from games.skill_core import LEVELS, make_puzzle
 
 
@@ -14,6 +15,7 @@ class SkillGame(ARCBaseGame):
 
     def __init__(self, seed: int = 0):
         self.instance_seed = seed
+        self.palette = palette_for_seed(seed)
         self._last_transition = None
         super().__init__(
             game_id=self.skill_id, seed=seed, available_actions=[6, 7],
@@ -42,7 +44,7 @@ class SkillGame(ARCBaseGame):
 
     def render_interface(self, frame):
         # Rendering must not advance rules, budgets, histories or animations.
-        return self._display_frame.copy()
+        return self.palette[self._display_frame]
 
     def get_subgoals(self):
         return self.puzzle.get_subgoals()

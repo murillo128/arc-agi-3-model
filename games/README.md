@@ -280,3 +280,11 @@ canvas and obtains exact control locations from the native renderer. See the
 [revision inventory and replay/visual evidence](../docs/synthetic-validation.md#non-linguistic-presentation-revision-issue-64)
 for coordinate migration and the limits of validation. Live refresh follows
 independent review and merge; an isolated test server is not deployment.
+
+## Training palette
+
+All synthetic games apply a full permutation of the 16 colors to the final
+frame, including animations, backgrounds, controls, markers and visual targets.
+The seed fixes the palette across the game and its levels without changing
+rules, positions or legal actions. Sequence collection also keeps this palette
+fixed across resets within a session.

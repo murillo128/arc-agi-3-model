@@ -46,7 +46,8 @@ class OfflineSDKTests(unittest.TestCase):
                         p = env._game.puzzle
                         self.assertEqual(p.level,level)
                         self.assertEqual(training_info(env)['level'],level)
-                        np.testing.assert_array_equal(env.observation_space.frame[-1],p.render())
+                        np.testing.assert_array_equal(env.observation_space.frame[-1],
+                                                      env._game.palette[p.render()])
                         for command in plan(p):
                             x,y,w,h = p.button_rects()[command]
                             result = env.step(GameAction.ACTION6,data={'x':x+w//2,'y':y+h//2})
@@ -140,19 +141,20 @@ class OfflineSDKTests(unittest.TestCase):
         for _ in range(2):
             for command in plan(env._game.puzzle): self.click(env,command)
         p=env._game.puzzle
+        palette=env._game.palette
         self.assertEqual(p.level,3)
         self.assertEqual(p.cells(p.state),((1,1),(1,2),(2,1)))
         before=env.observation_space.frame[-1]
-        self.assertEqual(int(before[54,44]),2)  # vertical reflection axis
-        self.assertEqual(int(before[56,42]),p.palette[1])
+        self.assertEqual(int(before[54,44]),palette[2])  # vertical reflection axis
+        self.assertEqual(int(before[56,42]),palette[p.palette[1]])
         rotated=env.step(GameAction.ACTION6,data={'x':36,'y':56})
         self.assertEqual(p.cells(p.state),((0,1),(1,1),(1,2)))
-        np.testing.assert_array_equal(rotated.frame[-1],p.render())
-        self.assertEqual(int(rotated.frame[-1][56,42]),2)  # horizontal axis
-        self.assertEqual(int(rotated.frame[-1][54,44]),p.palette[1])
+        np.testing.assert_array_equal(rotated.frame[-1],palette[p.render()])
+        self.assertEqual(int(rotated.frame[-1][56,42]),palette[2])  # horizontal axis
+        self.assertEqual(int(rotated.frame[-1][54,44]),palette[p.palette[1]])
         reflected=env.step(GameAction.ACTION6,data={'x':44,'y':56})
         self.assertEqual(p.cells(p.state),((0,1),(1,0),(1,1)))
-        np.testing.assert_array_equal(reflected.frame[-1],p.render())
+        np.testing.assert_array_equal(reflected.frame[-1],palette[p.render()])
         np.testing.assert_array_equal(reflected.frame[-1][53:60,41:48],
                                       rotated.frame[-1][53:60,41:48])
 
@@ -199,7 +201,8 @@ class OfflineSDKTests(unittest.TestCase):
                 for command in (0,2,4): self.click(env,command)
                 steps += 3
                 result = env.step(GameAction.ACTION5)
-                counts = [np.count_nonzero(f[18:22,2:54] == p.palette[0]) for f in result.frame[:3]]
+                counts = [np.count_nonzero(f[18:22,2:54] == env._game.palette[p.palette[0]])
+                          for f in result.frame[:3]]
                 self.assertEqual(counts,[4,8,12])  # separated 2×2 emitted units in symbols-v2
             else:
                 # Turn every branch on. Each source reaches the next lane in
@@ -209,7 +212,8 @@ class OfflineSDKTests(unittest.TestCase):
                 result = env.step(GameAction.ACTION5)
                 for stage, frame in enumerate(result.frame[:3],1):
                     for lane in range(1,4):
-                        self.assertEqual(int(frame[11+5*lane,55]),p.palette[0] if lane<=stage else 5)
+                        self.assertEqual(int(frame[11+5*lane,55]),
+                                         env._game.palette[p.palette[0] if lane<=stage else 5])
             self.assertEqual(p.steps,steps+1)
             self.assertGreaterEqual(len(result.frame),4)
 

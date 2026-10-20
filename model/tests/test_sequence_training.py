@@ -176,7 +176,8 @@ class SequenceTrainingTests(unittest.TestCase):
                 self.observation = obs(2)
                 return self.observation
         seen = []
-        def make(seed, level):
+        def make(seed, level, *, palette_seed):
+            self.assertEqual(palette_seed, 0)
             seen.append(level)
             return Env()
         factory = SimpleNamespace(game_id='synthetic', reserve_final_level=False, make=make)

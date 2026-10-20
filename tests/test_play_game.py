@@ -336,8 +336,9 @@ class ProtocolTests(unittest.TestCase):
         result = self.action('ACTION6', data=dict(zip(('x', 'y'), b))).get_json()
         self.assertEqual((result['levels_completed'], result['state'], result['available_actions']),
                          (2, 'NOT_FINISHED', [1, 2, 3, 4]))
-        self.assertEqual(sum(row.count(0) for row in result['frames'][0]), 188)
-        self.assertEqual(sum(row.count(0) for row in result['frame']), 180)
+        marker_color = int(self.session.env._game.palette[0])
+        self.assertEqual(sum(row.count(marker_color) for row in result['frames'][0]), 188)
+        self.assertEqual(sum(row.count(marker_color) for row in result['frame']), 180)
         self.assertEqual(result['frame'], self.session.env.observation_space.frame[-1].tolist())
 
     def test_real_both_games_through_public_actions(self):
@@ -377,7 +378,8 @@ class ProtocolTests(unittest.TestCase):
                                        if before['frame'][y][x] != after[y][x]}
                             x, y = data['x'], data['y']
                             self.assertEqual(changed, {(x-1, y-1), (x, y-1), (x-1, y), (x, y)})
-                            self.assertTrue(all(after[y][x] == 0 for x, y in changed))
+                            marker_color = int(self.session.env._game.palette[0])
+                            self.assertTrue(all(after[y][x] == marker_color for x, y in changed))
                     if game == 'si01-v1' and level in (3, 4):
                         # Unselected arrows spend budget. RESET restores the new
                         # local level, marker-free frame and advertised ACTION6.
