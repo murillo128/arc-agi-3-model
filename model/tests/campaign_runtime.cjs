@@ -144,7 +144,7 @@ const bars = id => nodes.get(id).children.slice(1); // axis followed by measured
   assert.equal(nodes.get('campaign-final-table').children.length, 2);
   offline = true;
   await vm.runInContext('pollCampaign()', context);
-  assert.match(text('campaign-connection'), /Disconnected/);
+  assert.equal(text('campaign-connection'), 'Disconnected · retrying');
   assert.equal(nodes.get('campaign-notice').hidden, false);
   offline = false; data.campaign.report = {available: false};
   await vm.runInContext('pollCampaign()', context);

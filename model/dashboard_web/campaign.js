@@ -302,7 +302,7 @@ async function pollCampaign() {
     if (!data || !data.source) throw new Error('Invalid dashboard response');
     renderCampaign(data);
   } catch (error) {
-    $('campaign-connection').textContent = 'Disconnected · reintentando';
+    $('campaign-connection').textContent = 'Disconnected · retrying';
     $('campaign-connection').className = 'warn';
     $('campaign-notice').hidden = false;
     $('campaign-notice').textContent = 'Visible results are not updating. Retrying automatically.';

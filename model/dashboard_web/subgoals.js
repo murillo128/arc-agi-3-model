@@ -39,7 +39,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     if(s.legend===false)return;
     const last=lastPoints[i];
     labels.push({key:`series:${s.name}`,index:i,text:`${s.name}: ${last?fmt(last[1],digits)+suffix:'—'}`,
-      title:last?`Último dato medido · action ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'No measurements',
+      title:last?`Latest measurement · action ${fmt(last[0])}${last[2]?' · '+last[2]:''}`:'No measurements',
       className:s.muted?'series-muted':`series-${s.colorIndex??i%4}`});
   });
   // Coincident limits share one line and label, rather than hiding each other.
@@ -193,7 +193,7 @@ function frameImage(frame){
 function actionLabel(action){
   if(!action)return 'Start';
   // Official input controls (https://docs.arcprize.org/actions), not inferred game effects.
-  const names={0:'Reset',1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'↶ Deshacer'};
+  const names={0:'Reset',1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'↶ Undo'};
   return `A${action.id} ${names[action.id]||''}${action.id===6?` (${action.data.x}, ${action.data.y})`:''}`.trim();
 }
 function sameAction(a,b){
@@ -240,8 +240,8 @@ function buildTrajectoryMatrix(){
     const cell=track(make('td','trajectory-cell'),t), frame=player.states[t];
     cell.setAttribute('data-time',t);
     if(frame){
-      const button=make('button','trajectory-state');button.type='button';button.setAttribute('aria-label',`Ver state real t = ${t} · ${actionLabel(frame.action)}`);
-      button.append(thumb(frame,`Status real t = ${t}`),make('span','action-badge',actionLabel(frame.action)));
+      const button=make('button','trajectory-state');button.type='button';button.setAttribute('aria-label',`View real state t = ${t} · ${actionLabel(frame.action)}`);
+      button.append(thumb(frame,`Real state t = ${t}`),make('span','action-badge',actionLabel(frame.action)));
       if(frame.source==='exploration')button.append(make('small','trajectory-source','Exploration'));
       button.addEventListener('click',()=>seekTrajectory(frame.frameIndex));track(button,t);cell.append(button);
     }else cell.append(make('span','trajectory-absent','Not observed'));
@@ -267,7 +267,7 @@ function buildTrajectoryMatrix(){
     }
     if(origin)row.append(spacer(origin));
     const originCell=track(make('td','trajectory-cell trajectory-origin'),origin), button=make('button','trajectory-origin-button','Source');
-    button.type='button';button.setAttribute('aria-label',`Ver origen t = ${origin}`);
+    button.type='button';button.setAttribute('aria-label',`View origin t = ${origin}`);
     button.addEventListener('click',()=>seekTrajectory(player.states[origin].frameIndex));originCell.append(button);row.append(originCell);
     let diverged=false;
     step.imagination.forEach((prediction,index)=>{
@@ -605,7 +605,7 @@ function render(report) {
     : 'Waiting for stable representation';
   const replay=p.predictor_replay;
   $('predictor-replay').textContent=replay
-    ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} episodes · ${fmt(replay.transitions)} transitions · lote ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
+    ? `Replay: ${fmt(replay.episodes)}/${fmt(replay.capacity)} episodes · ${fmt(replay.transitions)} transitions · batch ${fmt(replay.actual_batch_size)}/${fmt(replay.batch_size)}`
     : c.predictor_replay_episodes>0 ? `Replay: up to ${fmt(c.predictor_replay_episodes)} episodes · target batch ${fmt(c.predictor_batch_size)}`
     : 'No replay · one transition per update';
   predictionSample(report.prediction_sample);
@@ -714,7 +714,7 @@ function render(report) {
   const augmentationNote=pathReplay?.hindsight?' Also learns from goals actually reached within those episodes, without relabeling the original failures as wins.':'';
   const calibrationNote=pathReplay?.predicted_inputs?' Predictions are calibrated against the outcomes of the corresponding real actions.':'';
   const recovery=report.path_recovery;
-  const recoveryNote=recovery?` Prior recovery: ${fmt(recovery.training_episodes)} episodes y ${fmt(recovery.training_actions)} additional real actions; counted separately from these curves.`:'';
+  const recoveryNote=recovery?` Prior recovery: ${fmt(recovery.training_episodes)} episodes and ${fmt(recovery.training_actions)} additional real actions; counted separately from these curves.`:'';
   $('path-objective-loss').textContent=(successFirst
     ? 'Success/failure BCE + duration error only on successful trajectories. Interrupted attempts do not train these outputs.'
     : 'Error on the combined duration and failure cost.')+replayNote+augmentationNote+calibrationNote+recoveryNote+since;
@@ -723,7 +723,7 @@ function render(report) {
   plot('path-loss',[{name:'Update average · up to 512 actions',points:t.map(r=>[r.x,r.pathLoss])},
     {...series('Individual update','path_loss'),muted:true}]);
   const episodes=report.episodes||[], goals=episodes.flatMap(e=>e.segments.map(g=>({...g,x:e.end_action,game:e.game,level:e.level})));
-  $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`${fmt(episodes.filter(e=>e.success).length)} niveles resueltos · ventana reciente`;
+  $('episodes').textContent=fmt(episodes.length);$('successes').textContent=`Levels solved: ${fmt(episodes.filter(e=>e.success).length)} · recent window`;
   $('subgoals').textContent=`${fmt(goals.filter(g=>g.success).length)} / ${fmt(goals.length)}`;$('goal-label').textContent=p.goal||'';
   renderObservationContext();
   const efficiency=[['Real','actions'],['Minimum','minimum_actions']].map(([name,key],colorIndex)=>({name,colorIndex,points:goals.filter(g=>g.success).map(g=>[g.x,g[key]])}));
@@ -734,7 +734,7 @@ function render(report) {
   renderGoalOutcomes(goals);
   const rewards=goals.map(g=>[g.x,g.reward]);
   plot('reward',[{name:'Average per subgoal · up to 512 actions',points:movingAverage(rewards)},
-    {name:'Reward individual',points:rewards,muted:true}]);
+    {name:'Individual reward',points:rewards,muted:true}]);
   const evaluations=report.evaluations||[];$('evaluation-empty').hidden=!!evaluations.length;
   $('evaluation-rows').replaceChildren(...evaluations.map(r=>{const tr=document.createElement('tr');
     const policy=r.fixed_baseline?'Random · fixed baseline':r.policy==='quality_probe'?'Quality · saved sample':r.policy;

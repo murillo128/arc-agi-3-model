@@ -43,6 +43,10 @@ async function dashboard() {
 test('live, pin, selectors, controls and missing data',async()=>{
   const {nodes,state,text,click,change,input,flush}=await dashboard();
   assert.equal(text('gradient-value'),'0');assert.equal(text('matrix-state'),'Learning');assert.equal(text('update-value'),'0.2 %');
+  for(const id of ['gradient-map','update-map']) {
+    assert(nodes.get(id).draws.some(([op,label])=>op==='fillText' && label==='2 × 2 blocks'),
+      `${id} labels the measured block dimensions in English`);
+  }
   assert.match(text('event-label'),/Update 4/);
   state.offline=true;await state.polling();assert.equal(text('optimization-status'),'Disconnected');
   state.offline=false;state.responseStatus=304;await state.polling();assert.equal(text('optimization-status'),'Measuring training');state.responseStatus=200;

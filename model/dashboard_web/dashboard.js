@@ -40,7 +40,7 @@ class Chart {
     const items=series.map((s,i)=>({key:s.name,text:s.name,color:colors[i%colors.length],
       disabled:!s.points.some(p=>finite(p.x)&&finite(p.y))}));
     if (finite(threshold)) {
-      items.push({key:'threshold',text:`Umbral: ${scalar(threshold)}${suffix}`,color:colors[3],passive:true});
+      items.push({key:'threshold',text:`Threshold: ${scalar(threshold)}${suffix}`,color:colors[3],passive:true});
     }
     ChartTools.legend(this.legend,this.id,items,()=>this.draw());
     this.tip.hidden = true;
@@ -130,7 +130,7 @@ const splitName = row => splitNames[row.split] || row.split || 'Phase not record
 function policyName(row) {
   const policy = row.policy === 'random' ? 'Random' : row.policy === 'q' ? 'Q'
     : finite(row.horizon) ? `MPC · ${fmt(row.horizon)} steps` : row.policy || 'Agent';
-  return row.role === 'initial' ? `Inicial · ${policy}` : policy;
+  return row.role === 'initial' ? `Initial · ${policy}` : policy;
 }
 
 // One catalogue and one selected view: no renderer reads another run's state.
@@ -350,10 +350,10 @@ function render(data) {
   charts.speed.set([line('Run average', view?.kind === 'campaign'
     ? (raw.progress_points || []).filter(r => campaignKey(r) === campaignKey(p)) : worldPoints, r => r.actions_per_second)]);
   $('resources').textContent = [finite(p.gpu_peak_mb) ? `Trainer peak GPU memory: ${fmt(p.gpu_peak_mb)} MiB` : null,
-    finite(p.replay_episodes) ? `Memoria: ${fmt(p.replay_episodes)} episodes` : null,
+    finite(p.replay_episodes) ? `Replay memory: ${fmt(p.replay_episodes)} episodes` : null,
     finite(p.device_cache_mb) ? `GPU cache: ${fmt(p.device_cache_mb)} MiB` : null,
-    finite(p.trained_transitions_per_second) ? `Transitions entrenadas/s: ${fmt(p.trained_transitions_per_second, 2)}` : null,
-    finite(p.passes) ? `Validaciones consecutivas aprobadas: ${fmt(p.passes)}` : null,
+    finite(p.trained_transitions_per_second) ? `Trained transitions/s: ${fmt(p.trained_transitions_per_second, 2)}` : null,
+    finite(p.passes) ? `Consecutive validation passes: ${fmt(p.passes)}` : null,
     finite(config.learning_rate) ? `Learning rate: ${scalar(config.learning_rate)}` : null,
     finite(config.false_change_weight) ? `Invented-change penalty: ${scalar(config.false_change_weight)}` : null,
     raw.run?.representation_gate ? `Gate: ${raw.run.representation_gate.reason}` : null].filter(Boolean).join(' · ');
@@ -373,7 +373,7 @@ function render(data) {
       + (finite(pending.pair_count) ? ` · block ${fmt(pending.pair_index)}/${fmt(pending.pair_count)}` : '')
       + ` · Episode ${fmt(pending.current_episode)}/${fmt(pending.total_episodes)}`
       + ` · ${fmt(pending.episode_actions)}/${fmt(pending.episode_budget)} actions${pending.episode_complete ? ' · finished' : ''}`
-      + ` · ${fmt(pending.episodes)} episodes completadas · ${fmt(pending.wins)} wins`
+      + ` · ${fmt(pending.episodes)} completed episodes · ${fmt(pending.wins)} wins`
       + ` · ${fmt(pending.seconds)} s in this block (last record)` : '';
   const partial = evaluating && view.kind === 'campaign' && pending?.episodes > 0 && finite(pending.wins);
   const baseline = evaluations.findLast(r => r.policy === 'random' && r.split === (latest?.split || pending?.split)
@@ -450,7 +450,7 @@ async function poll() {
     if (!next.source || !next.progress || !Array.isArray(next.validations)) throw new Error('Invalid response');
     state = next; render(state);
   } catch (error) {
-    $('connection').textContent = 'Disconnected · reintentando'; $('connection').className = 'warn';
+    $('connection').textContent = 'Disconnected · retrying'; $('connection').className = 'warn';
     $('freshness').textContent = 'Could not refresh data';
     $('notice').hidden = false; $('notice').textContent = 'Cannot connect to the dashboard. Visible metrics are not updating; retrying automatically.';
   } finally { setTimeout(poll, 2000); }

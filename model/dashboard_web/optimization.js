@@ -106,7 +106,7 @@
     grid.forEach((row,i)=>row.forEach((v,j)=>{g.fillStyle=color(v,lo,hi); g.fillRect(left+j*cellW,top+i*cellH,Math.max(1,cellW-1),Math.max(1,cellH-1));}));
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText('1',left-20,top+10); g.fillText(String(grid.length),left-25,top+height);
     g.fillText(`RMS  ${sci(Math.min(...vals))} — ${sci(Math.max(...vals))}`,left,h-9);
-    g.textAlign='right'; g.fillText(`${grid.length} × ${grid[0].length} bloques`,w-25,h-9);
+    g.textAlign='right'; g.fillText(`${grid.length} × ${grid[0].length} blocks`,w-25,h-9);
   }
   function freeze() { if (!pinned && latest) pinned=latest; $('live').checked=false; }
   function chooseEvent(i) {

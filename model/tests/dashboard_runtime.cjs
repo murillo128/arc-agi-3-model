@@ -43,8 +43,9 @@ const source = {available: true, age_seconds: 2, updated_at: 300};
 const evaluation = (split, policy, level, wins, episodes, role = 'candidate') =>
   ({split, policy, level, wins, episodes, role, horizon: 2, win_rate: wins / episodes, decision_ms: 2});
 const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updated_at: 100},
-  run: {game: 'old-world', training: {freeze_representation: true}},
-  progress: {actions: 900, updates: 80, level: 1},
+  run: {game: 'old-world', training: {freeze_representation: true, min_latent_std: .125}},
+  progress: {actions: 900, updates: 80, level: 1, replay_episodes: 0,
+    trained_transitions_per_second: 1234.5, passes: 0},
   progress_points: [{actions: 900, loss: {latent_mse: .9}}],
   validations: [{actions: 900, level: 1, delta_error: .8, decoder_delta_error: .2}], events: [],
   behavior: {phase: 'behavior_finished', source: {...source, updated_at: 200},
@@ -121,7 +122,8 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   data.campaign.source.age_seconds = 1;
   await vm.runInContext('poll()', context);
   assert.equal(nodes.get('evaluation-progress').hidden, false);
-  assert.match(text('evaluation-progress'), /si01-v1.*block 6\/10.*Episode 17\/32.*24\/128.*194 s/);
+  assert.equal(text('evaluation-progress'),
+    'si01-v1 · Level 1 · block 6/10 · Episode 17/32 · 24/128 actions · 16 completed episodes · 7 wins · 194 s in this block (last record)');
   assert.match(text('connection'), /progress per action/);
   assert.match(text('behavior-status'), /every 2 s/);
   assert.equal(text('game'), 'si01-v1');
@@ -168,6 +170,9 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   const world = nodes.get('execution-select').options.find(o => o.textContent.includes('old-world'));
   ui.change('execution-select', world.value);
   assert.equal(text('actions'), '900');
+  assert.equal(text('resources'),
+    'Replay memory: 0 episodes · Trained transitions/s: 1,234.5 · Consecutive validation passes: 0');
+  assert.equal(nodes.get('spread-legend').children.at(-1).textContent, 'Threshold: 0.125');
   assert.equal(text('prediction'), '80 %');
   assert.equal(text('behavior-win'), '—');
   assert.doesNotMatch(text('notice'), /expected failure/, 'another run failure must not leak');
@@ -180,6 +185,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.match(text('behavior-wins'), /12\/32.*Final/);
   assert.equal(text('behavior-random'), '12.5 %', 'baseline uses same phase and level');
   assert.equal(nodes.get('behavior-table').children.length, 5, 'phases and levels remain explicitly labeled in table');
+  assert.equal(nodes.get('behavior-table').children[2].children[2].textContent, 'Initial · Q');
   assert.equal(vm.runInContext('charts.behaviorLoss.series[0].points[0].y', context), .2);
   // Pending evaluation cannot borrow a final/random/initial/per-level result.
   data.behavior.source.updated_at = 400; // this run is now emitting new records
@@ -234,5 +240,13 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert(speed.draws.some(d=>d[0]==='fillText'&&d[1]==='0'&&d[2]===8));
   button.listeners.click();
   assert(!speed.draws.some(d=>d[0]==='strokeRect'));
+  single.context.fetch = async () => { throw Error('offline'); };
+  await vm.runInContext('poll()', single.context);
+  assert.equal(single.text('connection'), 'Disconnected · retrying');
+  assert.equal(single.text('freshness'), 'Could not refresh data');
+  single.context.fetch = async () => ({ok: true, json: async () => onlyWorld});
+  await vm.runInContext('poll()', single.context);
+  assert.equal(single.text('connection'), 'Training stopped');
+  assert.equal(single.text('actions'), '900', 'reconnection preserves the selected run');
   console.log('Single execution selection: counters, charts, tables, tabs, source/seed isolation and pending evaluations passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -51,10 +51,10 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(text('predictor-replay'),'Replay: up to 16 episodes · target batch 4');
   report.progress.predictor_replay={capacity:16,episodes:0,transitions:0,batch_size:4,actual_batch_size:0};
   await vm.runInContext('poll()',context);
-  assert.equal(text('predictor-replay'),'Replay: 0/16 episodes · 0 transitions · lote 0/4');
+  assert.equal(text('predictor-replay'),'Replay: 0/16 episodes · 0 transitions · batch 0/4');
   report.progress.predictor_replay={capacity:16,episodes:3,transitions:27,batch_size:4,actual_batch_size:3};
   await vm.runInContext('poll()',context);
-  assert.equal(text('predictor-replay'),'Replay: 3/16 episodes · 27 transitions · lote 3/4');
+  assert.equal(text('predictor-replay'),'Replay: 3/16 episodes · 27 transitions · batch 3/4');
   delete report.progress.predictor_replay;
   delete report.config.predictor_replay_episodes;delete report.config.predictor_batch_size;
   await vm.runInContext('poll()',context);
@@ -64,7 +64,10 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(nodes.get('speed-legend').children[0].textContent,'Actions/s · last 60 s: 2 actions/s');
   assert.equal(nodes.get('path-loss-legend').children[0].textContent,'Update average · up to 512 actions: 0');
   assert.equal(nodes.get('loss-legend').children[1].textContent,'Individual update: 2');
-  assert.match(nodes.get('loss-legend').children[1].title,/action 1 ·/,'missing latest sample does not fabricate a zero');
+  assert.equal(nodes.get('loss-legend').children[1].title,
+    'Latest measurement · action 1 · Thin line: EMA (α = 0.1). Select a legend label to pin the latest raw value.',
+    'missing latest sample does not fabricate a zero');
+  assert.equal(text('successes'),'Levels solved: 1 · recent window');
   assert.equal(text('gpu-status'),'GPU · 73 % utilization · 71 °C');
   assert.match(nodes.get('gpu-status').title,/Test GPU/);
   gpu={devices:[{index:0,name:'Test GPU',utilization_percent:0,temperature_c:null},
@@ -407,7 +410,8 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('path-objective'),/2 percentage points/);
   assert.match(text('path-objective-loss'),/32 saved real attempts \(9 successes\)/);
   assert.match(text('path-objective-loss'),/without relabeling the original failures as wins/);
-  assert.match(text('path-objective-loss'),/25 additional real actions/);
+  assert.ok(text('path-objective-loss').includes(
+    'Prior recovery: 10 episodes and 25 additional real actions; counted separately from these curves.'));
   assert.match(text('path-objective'),/from 100% to 20% over 2,048 planner actions per level/);
   report.config.prediction_delta_loss='recall_focal_capped';
   report.config.path_search={horizon:6,noop_cooldown:8};
@@ -452,7 +456,7 @@ const text=id=>nodes.get(id).textContent;
   const rewardMean=circles('reward').filter(n=>n.opacity===1);
   assert.match(rewardMean.at(-1).children[0].textContent,/: -28 · action 514$/);
   assert.ok(rewardMean.some(n=>n.children[0].textContent.endsWith(': -26.5 · action 32')),'future goals cannot change an earlier mean');
-  assert.ok(circles('reward').some(n=>n.opacity<1&&n.children[0].textContent==='Reward individual: -160 · action 33'));
+  assert.ok(circles('reward').some(n=>n.opacity<1&&n.children[0].textContent==='Individual reward: -160 · action 33'));
   assert.match(nodes.get('reward-legend').children[0].textContent,/: -28$/);
   const outcomeMeans=circles('subgoal-outcomes').map(n=>n.children[0].textContent);
   assert.ok(outcomeMeans.some(s=>s.includes(': 66.6667 · action 33 · 2 successes · 1 failure · 3 completed subgoals')),
@@ -645,6 +649,7 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(circles('latent-diversity').length,0);
   assert.equal(nodes.get('latent-rank-legend').children[0].textContent,'Effective rank: —');
   assert.equal(nodes.get('evaluation-rows').children.length,0);
+  assert.equal(text('successes'),'Levels solved: 0 · recent window');
   assert.equal(nodes.get('advance-phase').disabled,true,'read-only dashboards cannot send controls');
   assert.equal(nodes.get('advance-level').disabled,true);
   report.curriculum.levels.forEach(row=>{row.game='sc01-v1';});
@@ -739,7 +744,7 @@ const text=id=>nodes.get(id).textContent;
       forecast_estimate:{success_probability:.90,successful_actions:6,remaining_budget:128},
       imagination:[predicted(4,6),predicted(3,7),predicted(2,8)]},
     {action:action(2),source:'planner',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([8,8],[1,1,2]),
-      imagination_status:'planned',imagination_source:'searched_alternative',imagination:[predicted(2,9),predicted(1,10),predicted(4,11)]},
+      imagination_status:'planned',imagination_source:'searched_alternative',imagination:[predicted(2,9),predicted(1,10),predicted(7,11)]},
     {action:action(1),source:'exploration',goal:'Segunda meta',goal_frame:packed([10,10],[1,1,2]),frames:packed([9,9],[1,1,2]),
       imagination_status:'exploration',imagination:[]}]};
   report.planner_trajectory={id:'matrix'};trajectoryReply={ok:true,json:async()=>({trajectory:modern})};
@@ -758,7 +763,11 @@ const text=id=>nodes.get(id).textContent;
   assert.equal(cell(1,2)['data-diverged'],'false');
   assert.equal(cell(1,3)['data-diverged'],'false');
   assert.equal(cell(1,4).children.at(-1).textContent,'No real outcome');
+  assert.equal(cell(1,4).children[0]['aria-label'],'Prediction of t = 4 from t = 1 · A7 ↶ Undo');
+  assert.equal(all.find(n=>n.className==='trajectory-origin-button')['aria-label'],'View origin t = 0');
   const realRow=all.find(n=>n.className==='trajectory-real');
+  assert.equal(realRow.children[2].children[0]['aria-label'],'View real state t = 1 · A4 →');
+  assert.equal(realRow.children[2].children[0].children[0]['aria-label'],'Real state t = 1');
   assert.equal(realRow.children.at(-1).children[0].textContent,'Not observed');
   assert.ok(all.some(n=>n.textContent==='Random exploration · no imagined route'));
   assert.deepEqual(realRow.children[2].children[0].children[0].context.pixels.map(p=>p.color),['#333333','#000000'],
