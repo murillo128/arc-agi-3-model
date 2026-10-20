@@ -40,15 +40,18 @@ selected piece moves. Squares are solid to one another throughout the full
 sweep, including after delivery. A delivered square stays drawn and locked,
 cannot be selected and clears selection. Both pairs must be delivered to win.
 
-Each selected square's marker is exactly four palette-0 pixels at centre offsets
+Each selected square's marker is exactly four canonical palette-0 pixels at centre offsets
 (-1,-1), (0,-1), (-1,0), (0,0), above the square and cross. It follows movement.
+The final renderer permutes all 16 palette entries using the game seed, including
+markers, background and HUD. The same mapping applies to visual teacher targets
+and stays fixed across level changes and resets.
 Clicks never move pieces or spend budget. Unselected or blocked directional
 commands still spend one move on navigation levels. The browser's CLICK capsule
 indicates availability; it is not a selection toggle. Selection clears on loss,
-reset and level change, and is represented only by the SDK frame's white pixels,
+reset and level change, and is represented only by the SDK frame's marker pixels,
 never by additional protocol data.
 
-The 64×64 frame, ARC palette, four-pixel HUD strip and shrinking white budget
+The 64×64 frame, ARC palette, four-pixel HUD strip and shrinking canonical-white budget
 bar follow [Square Cross's geometry and HUD rules](../square_cross/README.md).
 Navigation budget is `max(24, 5 * distance + 8)`; clicks are excluded from distance.
 Levels 3–4 use clear cardinal routes. Level 5 has disjoint straight corridors,

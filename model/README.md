@@ -9,6 +9,12 @@ Al comenzar otra sesión, incluso del mismo juego, la memoria empieza en cero.
 Los pesos se comparten entre todos los juegos; el predictor no recibe su nombre
 ni reglas internas. Las predicciones imaginadas nunca actualizan esta memoria real.
 
+Los juegos sintéticos permutan los 16 colores, incluidos fondo, HUD, pistas y
+objetivos, sin cambiar sus reglas ni fusionar colores. Durante una sesión de
+secuencia se conserva la misma permutación en todos los niveles y reinicios,
+aunque cambien las escenas; la siguiente sesión elige otra a partir de su semilla.
+Los juegos oficiales del SDK conservan sus colores originales.
+
 ```sh
 .venv/bin/python -u -m model.sequence_training \
   --training-config model/sequence_config.example.json \

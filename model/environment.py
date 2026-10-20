@@ -46,14 +46,29 @@ class Factory:
         self.arcade = open_arcade(mode, str(self.environments_dir))
         self.reserve_final_level = reserve_final_level
 
-    def make(self, seed, level=None):
+    def make(self, seed, level=None, *, palette_seed=None):
+        if palette_seed is not None:
+            from games.palette import palette_for_seed
+            root = Path(__file__).resolve().parents[1] / 'games'
+            if (self.reserve_final_level or self.environments_dir != root or
+                    self.game_id not in synthetic_levels()):
+                raise ValueError('Palette overrides only support bundled synthetic games')
+            palette = palette_for_seed(palette_seed)
         wrapper = self.arcade.make(self.game_id, seed=seed, save_recording=False)
         if wrapper is None:
             raise RuntimeError(f'SDK could not load {self.game_id}')
+        if palette_seed is not None:
+            from arc_agi.local_wrapper import LocalEnvironmentWrapper
+            if not isinstance(wrapper, LocalEnvironmentWrapper) or version('arcengine') != '0.9.3':
+                raise ValueError('Palette overrides require local arcengine==0.9.3')
+            wrapper._game.palette = palette
         if level is not None:
             if self.reserve_final_level:
                 raise ValueError('Public SDK training uses native levels only')
             self._isolate_synthetic_level(wrapper, level)
+        elif palette_seed is not None:
+            # Refresh the SDK's initial frame after changing appearance.
+            wrapper.reset()
         return Environment(wrapper)
 
     def teacher(self, environment):

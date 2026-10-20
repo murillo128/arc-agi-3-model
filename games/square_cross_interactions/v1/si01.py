@@ -5,6 +5,8 @@ from typing import NamedTuple
 
 from arcengine import ARCBaseGame, Camera, Level, Sprite
 
+from games.palette import palette_for_seed
+
 from games.pixel_grid import (BOUNDS, DIRECTIONS, Scene, draw_scene, fits,
                               render_hud, sweep_fits)
 from games.subgoals import SyntheticSubgoals
@@ -98,6 +100,7 @@ def touches_cross(center, size, target, target_size):
 class Si01(SyntheticSubgoals, ARCBaseGame):
     def __init__(self, seed=0):
         self.instance_seed = seed  # Base constructor calls on_set_level before setting _seed.
+        self.palette = palette_for_seed(seed)
         super().__init__(
             game_id="si01", seed=seed, available_actions=[6],
             levels=[Level(grid_size=(64, 64), data={"number": n}) for n in range(1, 6)],
@@ -137,7 +140,7 @@ class Si01(SyntheticSubgoals, ARCBaseGame):
             player = self.players[index]
             r = self.scene.player_size // 2
             frame[player.y + r - 1:player.y + r + 1, player.x + r - 1:player.x + r + 1] = 0
-        return render_hud(frame, self.scene, self.remaining)
+        return self.palette[render_hud(frame, self.scene, self.remaining)]
 
     def step(self):
         if self.action.id.value == 6 and self.number != 3:

@@ -53,7 +53,8 @@ class FoundationSDK(unittest.TestCase):
                         self.assertEqual(info['level'],min(level+1,6) if index==len(commands)-1 else level)
                         self.assertNotEqual(result.state,GameState.GAME_OVER)
                         self.assertFalse({'subgoals','deck','target','solution','training_info'} & vars(result).keys())
-                        np.testing.assert_array_equal(result.frame[-1],env._game.puzzle.render())
+                        np.testing.assert_array_equal(result.frame[-1],
+                                                      env._game.palette[env._game.puzzle.render()])
                     self.assertEqual(result.levels_completed,level)
                     self.assertTrue(all(g['achieved'] for g in transition['after']))
                     self.assertEqual(transition['outcome'],'level_complete')
@@ -121,7 +122,7 @@ class FoundationSDK(unittest.TestCase):
         result=self.command(env,other)
         self.assertEqual(p.steps,2)
         self.assertGreaterEqual(len(result.frame),9)
-        np.testing.assert_array_equal(result.frame[0],p.transient_frames[0])
+        np.testing.assert_array_equal(result.frame[0],env._game.palette[p.transient_frames[0]])
         self.assertFalse(np.array_equal(result.frame[0][4:61],result.frame[-1][4:61]))
         self.assertEqual(p.state,(0,-1,-1))
         env.step(GameAction.ACTION7)

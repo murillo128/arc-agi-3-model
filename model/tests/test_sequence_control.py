@@ -94,6 +94,11 @@ class SequenceControlTests(unittest.TestCase):
 
     def test_changed_pixels_gate_and_same_observations_for_encoder_drift(self):
         e = Engine(WorldModel(NetworkConfig.small()), TrainConfig())
+        # This test owns metric arithmetic, not encoder numerics. Exact features
+        # avoid roundoff differences between batched and single-image forwards.
+        e.encode = lambda observations: [
+            torch.full((1, e.model.config.latent), float(o.final[0, 0]))
+            for o in observations]
         rows = [session((1, 1))]
         actual = np.ones((1, 4, 4), np.uint8)
         actual[0, 0, 0] = 2

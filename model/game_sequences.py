@@ -69,7 +69,8 @@ def collect_session(factory, levels, seed, config):
     for index in range(config.session_steps):
         slot = (index // config.level_steps) % len(levels)
         if env is None or env.observation.terminal or (not native and index % config.level_steps == 0):
-            env = factory.make(seed + attempts * 1_000_000, None if native else levels[slot])
+            env = factory.make(seed + attempts * 1_000_000, None if native else levels[slot],
+                               **({} if native else {'palette_seed': seed}))
             attempts += 1
             boundary = bool(session.transitions)
         before = env.observation
