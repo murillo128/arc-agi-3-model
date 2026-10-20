@@ -149,7 +149,7 @@ class CurriculumControlTests(unittest.TestCase):
         self.assertEqual(error.exception.code, 409)
         wrong = CurriculumControl('test-curriculum.service', self.report.with_name('other.json'))
         self.assertFalse(wrong.snapshot(self.data)['phase'])
-        with self.assertRaisesRegex(ValueError, 'otra campaña'):
+        with self.assertRaisesRegex(ValueError, 'different campaign'):
             wrong.request('phase', self.data)
         # The configured service may not signal an unrelated current process.
         self.systemctl.return_value.stdout = str(os.getpid())
