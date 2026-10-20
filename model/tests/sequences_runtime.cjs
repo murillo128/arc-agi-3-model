@@ -93,6 +93,53 @@ const text = id => nodes.get(id).textContent;
   assert.equal(nodes.get('phase-rows').children[0].children[5].textContent,'Recogiendo evidencia');
   assert.match(text('preview-info'),/antes de entrenar el batch/);
   assert.match(text('drift-description'),/antes y después de actualizar/);
+  // The phase metric has a different denominator from global reconstruction.
+  const guides=id=>nodes.get(id).children.filter(n=>n['stroke-dasharray']);
+  const labels=id=>nodes.get(id).children.map(n=>n.textContent);
+  const diagnostic=report.history[0].diagnostics;
+  Object.assign(diagnostic,{reconstruction_error:.00675,reconstruction_delta_error:.73,latent_drift:.02});
+  report.phase_control.rows[0].thresholds.prediction_open=.99;
+  await vm.runInContext('refresh()',context);
+  assert(labels('fixed-quality-legend').includes('Reconstrucción global %: 0,675'));
+  assert(labels('fixed-quality-legend').includes('Reconstrucción sobre cambios %: 73'));
+  let [limit]=guides('fixed-quality');
+  assert.equal(guides('fixed-quality').length,1);
+  assert.equal(limit.y1,limit.y2);
+  assert(Math.abs(limit.y1-201.2)<1e-9,'10% on the 0–100 quality axis');
+  assert.equal(limit.children[0].textContent,'Límite de reconstrucción sobre cambios: 10 %');
+  const driftGuide=guides('latent-drift')[0];
+  assert.equal(driftGuide.children[0].textContent,'Límite de deriva: 15 %');
+  assert(driftGuide.y1>=32&&driftGuide.y1<220,'threshold remains within the plot when measured drift is only 2%');
+  assert.equal(driftGuide.y1,driftGuide.y2);
+  // Configuration changes, duplicate limits, and differing game/level limits.
+  const control=report.phase_control, row=control.rows[0];
+  row.thresholds.representation_open=.12;
+  row.thresholds.latent_drift=.2;
+  control.rows.push({...row,level:3});
+  await vm.runInContext('refresh()',context);
+  assert.equal(guides('fixed-quality').length,1,'identical limits share one line');
+  assert.equal(guides('latent-drift').length,1);
+  assert.equal(guides('latent-drift')[0].children[0].textContent,'Límite de deriva: 20 %');
+  assert(Math.abs(guides('fixed-quality')[0].y1-197.44)<1e-9,'12%, not a hard-coded 10%');
+  control.rows.push({...row,game:'other',level:1,thresholds:{...row.thresholds,representation_open:.08}});
+  await vm.runInContext('refresh()',context);
+  assert.deepEqual(guides('fixed-quality').map(n=>n.children[0].textContent),[
+    'Límite de reconstrucción sobre cambios · other / 1: 8 %',
+    'Límite de reconstrucción sobre cambios · <game> / 2, <game> / 3: 12 %']);
+  // Absence must not manufacture either zero error or a default phase gate.
+  delete diagnostic.reconstruction_delta_error;
+  delete report.phase_control;
+  await vm.runInContext('refresh()',context);
+  assert(labels('fixed-quality-legend').includes('Reconstrucción sobre cambios %: —'));
+  assert.equal(guides('fixed-quality').length,0);
+  assert.equal(guides('latent-drift').length,0);
+  diagnostic.reconstruction_delta_error=0;
+  report.phase_control={...control,rows:[{...row,thresholds:{...row.thresholds,representation_open:null,latent_drift:2}}]};
+  await vm.runInContext('refresh()',context);
+  assert(labels('fixed-quality-legend').includes('Reconstrucción sobre cambios %: 0'));
+  assert.equal(guides('fixed-quality').length,0);
+  assert.equal(guides('latent-drift').length,0);
+  report.phase_control=control;
   report.phase_control.phase='predictor';
   report.learning_rates.encoder=report.learning_rates.decoder=3e-7;
   await vm.runInContext('refresh()',context);

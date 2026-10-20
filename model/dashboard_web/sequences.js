@@ -11,11 +11,11 @@ function element(tag, attrs, text='') {
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
   node.textContent = text; return node;
 }
-function chart(id, rows, series, ceiling=null) {
+function chart(id, rows, series, ceiling=null, limits=[]) {
   const svg = $(id), legend = $(`${id}-legend`); svg.replaceChildren(); legend.replaceChildren();
   const values = rows.flatMap(r => series.map(s => s.value(r))).filter(Number.isFinite);
   if (!values.length) { svg.append(element('text', {x: 35, y: 65, fill: '#a9bcb7'}, 'Sin mediciones todavía')); return; }
-  const max = Math.max(ceiling || 0, 1e-6, ...values) * (ceiling ? 1 : 1.1);
+  const max = Math.max(ceiling || 0, 1e-6, ...values, ...limits.map(l=>l.value)) * (ceiling ? 1 : 1.1);
   const start=rows[0].batch, end=Math.max(start+1, rows.at(-1).batch);
   for (let i = 0; i <= 4; i++) {
     const y = 220 - i * 47;
@@ -38,6 +38,13 @@ function chart(id, rows, series, ceiling=null) {
       dot.append(element('title',{},`${s.label}: ${number(value,4)} · batch ${r.batch} · acción ${number(r.actions,0)}`));svg.append(dot);
     }); flush();
   });
+  limits.forEach(({value,label,color})=>{
+    const y=220-188*value/max;
+    const line=element('line',{x1:50,x2:680,y1:y,y2:y,stroke:color,'stroke-width':1.5,'stroke-dasharray':'5 5'});
+    const caption=`${label}: ${number(value,4)} %`;
+    line.append(element('title',{},caption));svg.append(line);
+    const item=document.createElement('span');item.textContent=`┄ ${caption}`;item.style.color=color;legend.append(item);
+  });
   svg.append(element('text', {x: 50, y: 247, fill: '#a9bcb7', 'font-size': 11}, `Batch ${rows[0].batch}`));
   svg.append(element('text', {x: 680, y: 247, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, `Batch ${rows.at(-1).batch}`));
 }
@@ -46,6 +53,17 @@ function table(id, rows) {
     values.forEach(value=>{const cell=document.createElement('td');cell.textContent=String(value);row.append(cell);});return row;}));
 }
 function series(label, value, extra={}) { return {label,value,...extra}; }
+function phaseThresholds(data, key, label, color) {
+  const groups=new Map();
+  for(const row of data.phase_control?.rows||[]){
+    const value=row.thresholds?.[key];
+    if(!Number.isFinite(value)||value<0||value>1)continue;
+    if(!groups.has(value))groups.set(value,[]);
+    groups.get(value).push(`${row.game} / ${row.level}`);
+  }
+  return [...groups].sort(([a],[b])=>a-b).map(([value,scope])=>({value:pct(value),color,
+    label:groups.size>1?`${label} · ${scope.join(', ')}`:label}));
+}
 const timingLabels = {collection_seconds:'Juego',representation_seconds:'Representación',encode_seconds:'Codificación',
   predictor_seconds:'Predictor y memoria',evaluation_seconds:'Medición',drift_seconds:'Deriva encoder',save_seconds:'Guardado'};
 function render(data) {
@@ -87,14 +105,17 @@ function render(data) {
   })));
   const measured=rows.filter(r=>r.diagnostics), diagnostic=measured.at(-1)?.diagnostics;
   chart('fixed-quality',rows,[series('Predicción 1 paso %',r=>pct(r.quality?.all?.delta_error)),
-    series('Reconstrucción %',r=>pct(r.diagnostics?.reconstruction_error),{skip:r=>!r.diagnostics}),
-    series('Predicción 3 pasos %',r=>pct(r.diagnostics?.rollout_error),{skip:r=>!r.diagnostics})],100);
+    series('Reconstrucción global %',r=>pct(r.diagnostics?.reconstruction_error),{skip:r=>!r.diagnostics}),
+    series('Predicción 3 pasos %',r=>pct(r.diagnostics?.rollout_error),{skip:r=>!r.diagnostics}),
+    series('Reconstrucción sobre cambios %',r=>pct(r.diagnostics?.reconstruction_delta_error),{color:colors[4]})],
+    100,phaseThresholds(data,'representation_open','Límite de reconstrucción sobre cambios',colors[4]));
   $('diagnostic-scope').textContent=training
     ?`Datos del batch normal antes de actualizar pesos · diagnóstico estratificado por juego/nivel${diagnostic?` · batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transiciones · ${diagnostic.rollouts} rutas de tres pasos`:''}. La deriva compara las mismas imágenes antes y después de actualizar el encoder.`
     :diagnostic
     ?`Evaluación fija en cada batch. Diagnósticos adicionales cada ${diagnostic.every} batches · última medición: batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transiciones y ${diagnostic.latent?.sample_count??0} estados reales. Rollout: ${diagnostic.rollouts} rutas de tres pasos. Deriva: referencia del proceso en batch ${diagnostic.drift_reference_batch}.`
     :'Evaluación fija en cada batch. Los diagnósticos adicionales aparecerán tras una nueva medición; no se rellenan datos anteriores con ceros.';
-  chart('latent-drift',measured,[series('Deriva %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})]);
+  chart('latent-drift',measured,[series('Deriva %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})],
+    null,phaseThresholds(data,'latent_drift','Límite de deriva',colors[0]));
   chart('latent-diversity',measured,[series('Entre observaciones',r=>r.diagnostics.latent?.std_mean),series('Dentro de cada episodio',r=>r.diagnostics.latent?.within_episode_std)]);
   chart('latent-rank',measured,[series('Rango efectivo',r=>r.diagnostics.latent?.effective_rank),series('Máximo observable',r=>r.diagnostics.latent?.max_rank)]);
   chart('latent-inactive',measured,[series('Casi constantes %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
