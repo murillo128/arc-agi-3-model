@@ -8,6 +8,7 @@ import argparse
 import copy
 from dataclasses import asdict, replace
 import json
+import math
 from pathlib import Path
 import random
 import signal
@@ -97,6 +98,19 @@ def representation_for(engine, plan):
     if 'sequence_control' not in plan.payload:
         learner.activate_predictor()
     return learner
+
+
+def predictor_learning_rate(learner, value=None):
+    """Override only the predictor rate, retaining Adam state and the run identity."""
+    if value is not None:
+        if not math.isfinite(value) or not 0 < value < 1:
+            raise ValueError('Predictor learning rate must be finite and between 0 and 1')
+        for group in learner.optimizer.param_groups:
+            group['lr'] = value
+    # Ordinary resume restores the optimizer's effective rate, including an earlier
+    # explicit override. Keep checkpoint training metadata consistent with it.
+    learner.engine.config = replace(learner.engine.config,
+        learning_rate=learner.optimizer.param_groups[0]['lr'])
 
 
 def fit_batch(learner, sessions, representation=None, *, telemetry=None,
@@ -238,6 +252,9 @@ def write_report(path, report):
 
 
 def run(args):
+    rate = getattr(args, 'predictor_learning_rate', None)
+    if rate is not None and (not math.isfinite(rate) or not 0 < rate < 1):
+        raise ValueError('Predictor learning rate must be finite and between 0 and 1')
     plan = load_plan(args.training_config)
     if 'sequence' not in plan.payload:
         raise ValueError('Add sequence settings to the training configuration')
@@ -274,6 +291,7 @@ def run(args):
                     games_after=list(dict.fromkeys(s['game'] for s in plan.stages)),
                     added_stages=list(plan.stages[len(saved['plan']['stages']):])))
             del saved
+        predictor_learning_rate(learner, rate)
         if control:
             control.apply(representation)
         telemetry = None
@@ -416,6 +434,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--predictor-learning-rate', type=float,
+                        help='Explicitly override only the predictor LR, preserving optimizer state on resume')
     parser.add_argument('--extend-curriculum', action='store_true',
                         help='Explicitly append training games/levels on resume, preserving weights and optimizers')
     parser.add_argument('--adopt-training-phases', action='store_true',

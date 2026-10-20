@@ -47,6 +47,41 @@ Los límites por sesión, nivel, historial y diagnóstico permanecen activos.
   --output model/runs/secuencias --device cuda --resume --unlimited
 ```
 
+To retune only the predictor in an existing run, add
+`--predictor-learning-rate 1e-4` to the resume command. The override is applied
+after restoring Adam's state: it changes no weights, moments, counters,
+encoder/decoder rates, phase gates or telemetry identity. The saved optimizer
+retains the effective rate on subsequent resumes without the flag; the
+checkpoint's training metadata and dashboard report show that effective rate.
+The original plan remains the resume compatibility contract. Its settings are
+not silently edited, and the override does not permit other plan changes.
+
+For a paired experiment, stop and back up the live run first, then use:
+
+```sh
+.venv/bin/python -m model.compare_predictor_lr \
+  --training-config model/sequence_mixed.example.json \
+  --checkpoint /path/to/immutable-backup.pt \
+  --output model/runs/predictor-lr-comparison --device cuda
+```
+
+Both trials restore the same complete checkpoint and optimizer state, consume
+one shared real corpus covering every configured training game, and preserve
+ordinary representation updates and their learning rates. The default probe is
+a separate 128-step session per game, with disjoint seeds and no optimization;
+these probes do not control the live curriculum. The report distinguishes
+pixel-pooled and equal-game delta error, synthetic/SDK groups, and full-frame NLL.
+Its paired game bootstrap describes variation over this corpus, not repeat-run
+uncertainty. A candidate must improve both overall error summaries without
+worsening either source group's pooled error. This command never applies a
+candidate to the live run; inspect its evidence before using the explicit
+override. Keep the generated corpus and checkpoints outside Git.
+
+The [recorded 91-game comparison](predictor_lr_comparison_evidence.json) retained
+`3e-5`: after 384 matched predictor updates, separate-probe pooled delta error was
+92.21%, versus 95.60% at `1e-4`. This is evidence for that checkpoint and corpus,
+not a universal optimal rate; the live run resumed its original weights and rates.
+
 La configuración reutiliza los juegos, niveles, rutas y splits del plan anterior,
 añadiendo `sequence`. `objective` debe ser `world_model` (es su valor por defecto
 en este modo). `sequence_control` activa fases de representación y predictor con
