@@ -117,21 +117,22 @@ test('trajectory radii distinguish relative residual motion on a fixed scale',as
   const radius=()=>nodes.get('parameter-path').draws.filter(d=>d[0]==='arc').at(-1)[3]-4;
   input('point-scrubber',1);const mostlyOutside=radius();
   input('point-scrubber',2);const almostEntirelyOutside=radius();
-  assert(almostEntirelyOutside>mostlyOutside*2.5,'15.5% and 1.1% coverage must be visibly distinct');
-  assert(mostlyOutside>9.29&&mostlyOutside<9.32,'15.5% captured: about 9.30px');
-  assert(almostEntirelyOutside>28.59&&almostEntirelyOutside<28.62,'1.1% captured: about 28.60px');
+  assert(almostEntirelyOutside>mostlyOutside*1.5,'15.5% and 1.1% coverage remain visibly distinct on the log scale');
+  assert(mostlyOutside>7.70&&mostlyOutside<7.72,'15.5% captured: about 7.707px');
+  assert(almostEntirelyOutside>12.17&&almostEntirelyOutside<12.20,'1.1% captured: about 12.183px');
   assert.match(text('relative-step-value'),/^9\.482 ×$/);
   assert.equal(text('outside-step-value'),'0.0476','keep absolute residual length in the inspector');
   click('zoom-in');assert.equal(radius(),almostEntirelyOutside,'zoom does not rescale the encoding');
   input('point-scrubber',3);
-  assert(Math.abs(radius()-5.7)<1e-12,'50% coverage means outside/inside = 1');
+  assert(Math.abs(radius()-5.708878)<1e-6,'50% coverage means outside/inside = 1');
   assert.equal(text('relative-step-value'),'1 ×');
   click('view-2d');
-  assert(Math.abs(radius()-16.5)<1e-12,'1/26 captured means outside/inside = 5 in 2D');
+  assert(Math.abs(radius()-10.002348)<1e-6,'1/26 captured means outside/inside = 5 in 2D');
   assert.equal(text('relative-step-value'),'5 ×');
   assert.match(text('path-size-label'),/outside \/ inside.*2D/);
-  assert.equal(text('path-size-half'),'5×');assert.equal(text('path-size-max'),'≥10×');
-  assert.match(text('path-size-note'),/radius.*10×.*30 px/i);
+  assert.equal(text('path-size-ten'),'10×');assert.equal(text('path-size-hundred'),'100×');
+  assert.equal(text('path-size-max'),'≥1,000×');
+  assert.match(text('path-size-note'),/radius.*logarithmic.*1,000×.*30 px/i);
   click('view-3d');
   projections.forEach(p=>{p.step_norm*=100;});
   projections[3].coverage_3d=.999;projections[3].step_norm=10000;
@@ -155,14 +156,24 @@ test('relative bubble boundaries retain honest missing, zero, infinite and cappe
     {coverage:null,step_norm:1,radius:3,label:'—'},
     {coverage:1,step_norm:1,radius:3,label:'0 ×'},
     {coverage:0,step_norm:1,radius:30,label:'∞ · no projected step'},
-    {coverage:1/401,step_norm:1,radius:30,label:'20 × · size capped at 10×'},
+    {coverage:1/101,step_norm:1,radius:12.371178,label:'10 ×',legend:'ten'},
+    {coverage:1/401,step_norm:1,radius:14.898252,label:'20 ×'},
+    {coverage:1/10001,step_norm:1,radius:21.036283,label:'100 ×',legend:'hundred'},
+    {coverage:1/1000001,step_norm:1,radius:30,label:'1,000 ×',legend:'max'},
+    {coverage:1/4000001,step_norm:1,radius:30,label:'2,000 × · size capped at 1,000×'},
   ];
   for(const c of cases){
     Object.assign(projections[1],{coverage:c.coverage,step_norm:c.step_norm});
     state.report.updated_at++;await state.polling();
     nodes.get('live').checked=true;nodes.get('live').listeners.change();
     input('point-scrubber',1);
-    assert.equal(radius(),c.radius);assert.equal(text('relative-step-value'),c.label);
+    assert(Math.abs(radius()-c.radius)<1e-6,`${c.label}: radius ${radius()} should be ${c.radius}`);
+    assert.equal(text('relative-step-value'),c.label);
+    if(c.legend){
+      const dot=nodes.get(`path-size-${c.legend}-dot`);
+      assert(Math.abs(parseFloat(dot.style.width)-2*radius())<1e-12,'legend diameter matches rendered radius');
+      assert.equal(dot.style.width,dot.style.height);
+    }
     assert(nodes.get('parameter-path').draws.filter(d=>d[0]==='arc').every(d=>Number.isFinite(d[3])));
   }
   state.invalidJSON=true;await state.polling();

@@ -207,14 +207,19 @@
     // infinite ratio; the display caps its radius but retains this measurement.
     return coverage===0 ? Infinity : Math.sqrt((1-coverage)/coverage);
   }
-  const bubbleRadius = ratio => ratio==null ? 3 : 3+2.7*Math.min(10,ratio);
+  const bubbleRatioLimit = 1000;
+  const bubbleRadius = ratio => ratio==null ? 3 : 3+27*Math.log1p(Math.min(bubbleRatioLimit,ratio))/Math.log1p(bubbleRatioLimit);
   function sizeScale(hasSteps, dims=2) {
     const space=dims===3?'3D subspace':'2D plane';
     text('path-size-label',`Step length outside / inside the ${space}`);
     $('path-size-scale').hidden=!hasSteps;
-    text('path-size-half','5×');text('path-size-max','≥10×');
+    for(const [id,ratio,label] of [['zero',0,'0×'],['ten',10,'10×'],['hundred',100,'100×'],['max',bubbleRatioLimit,'≥1,000×']]){
+      text(`path-size-${id}`,label);
+      const dot=$(`path-size-${id}-dot`);
+      dot.style.width=dot.style.height=`${2*bubbleRadius(ratio)}px`;
+    }
     text('path-size-note',hasSteps
-      ? `Bubble radius grows linearly with outside / projected step length: 3 px + 2.7 px per ×, capped at 10× (30 px). Fixed across modules, history and zoom. The inspector keeps the uncapped ratio. First, stationary or unavailable steps show position markers only.`
+      ? 'Bubble radius uses a fixed logarithmic scale for outside / projected step length. Larger bubbles mean more motion is hidden by the projection. Size caps at 1,000× (30 px); the inspector keeps the full ratio. The scale is independent of history and zoom. First, stationary or unavailable steps show position markers only.'
       : 'No relative step measurements available. First, stationary or unavailable steps show position markers only.');
   }
   function lossColor(value, low, high) {
@@ -264,7 +269,7 @@
       const end=project(...axis);segment(project(0,0,0),end,C.muted);
       g.fillStyle=C.text;g.textAlign='center';g.fillText(`PC${i+1}`,end[0],end[1]-8);
     });
-    // Radius encodes a fixed outside/inside length ratio in screen pixels,
+    // Radius encodes a fixed log scale of the outside/inside length ratio,
     // independent of absolute update size, window extrema and camera depth/zoom.
     drawHits=centered.map((p,i)=>{const position=project(...p.map(v=>v/extent));return {
       position:position.slice(0,2),depth:position[2],
@@ -304,7 +309,7 @@
     text('outside-step-value',pointIndex>0?sci(outsideStep(projection,dims)):'—');
     const ratio=pointIndex>0?relativeStep(projection,dims):null;
     text('relative-step-value',ratio==null?'—':ratio===Infinity?'∞ · no projected step'
-      : `${fmt(ratio)} ×${ratio>10?' · size capped at 10×':''}`);
+      : `${fmt(ratio)} ×${ratio>bubbleRatioLimit?' · size capped at 1,000×':''}`);
     trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
