@@ -26,6 +26,7 @@ from .networks import WorldModel
 from .online_learning import OnlineRepresentation
 from .training_config import digest, load_plan, run_owner
 from .sequence_control import SequenceControlConfig, SequencePhaseControl, TrainingBatchDiagnostics
+from .sequence_exploration import SequenceExplorationConfig, ChangeExplorer, interaction_counts, sum_counts
 
 
 def synchronize(engine):
@@ -62,7 +63,7 @@ def close_factories(factories):
         factory.arcade.close_scorecard()
 
 
-def collect_batch(factories, config, batch_index, seed, *, evaluation=False):
+def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exploration=None, explorer=None):
     games = schedule_games(list(factories), batch_index, config, seed=seed)
     sessions = []
     for i, game in enumerate(games):
@@ -70,7 +71,8 @@ def collect_batch(factories, config, batch_index, seed, *, evaluation=False):
         # Reserve a full batch's seed slots even when a shuffled round ends short.
         session_seed = 4_000_000 + 2 * (seed * 10_000 + batch_index * config.batch_games + i) + int(evaluation)
         factory, levels = factories[game]
-        sessions.append(collect_session(factory, levels, session_seed, config))
+        options = {} if evaluation or exploration is None else dict(exploration=exploration, explorer=explorer)
+        sessions.append(collect_session(factory, levels, session_seed, config, **options))
     if any(not any(s.supervised for s in row.transitions) for row in sessions):
         raise ValueError('A session has no eligible real transitions; check level access and budgets')
     return sessions
@@ -178,14 +180,15 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
         examples_per_second=sum(x['examples'] for x in updates)/max(1e-9, predictor_seconds))
 
 
-def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=()):
+def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(), explorer=None, exploration_adoptions=()):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
         sequence=asdict(learner.config), predictor_optimizer=learner.optimizer.state_dict(),
         representation_optimizer=representation.optimizer.state_dict(),
         progress=dict(batches=batches, actions=actions, updates=learner.updates),
-        curriculum_extensions=list(extensions),
+        curriculum_extensions=list(extensions), exploration_adoptions=list(exploration_adoptions),
+        **(dict(exploration=explorer.snapshot()) if explorer is not None else {}),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
         **(dict(sequence_control=control.snapshot(), representation_state=dict(
@@ -209,16 +212,25 @@ def extended_plan_matches(previous, current):
     return expected == previous
 
 
-def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False):
-    if adopt and extend:
-        raise ValueError('Curriculum extension cannot be combined with phase adoption')
+def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False,
+                adopt_exploration=False, explorer=None):
+    if sum((adopt, extend, adopt_exploration)) > 1:
+        raise ValueError('Explicit adoptions/extensions cannot be combined')
     expected = copy.deepcopy(plan.payload)
     if adopt:
         if control is None or 'sequence_control' in saved or 'sequence_control' in saved['plan']:
             raise ValueError('Phase adoption requires a legacy sequence checkpoint and a controlled plan')
         expected.pop('sequence_control')
         expected['settings']['encoder_learning_rate_after_predictor'] = saved['plan']['settings']['encoder_learning_rate_after_predictor']
-    changed = saved['plan'] != expected
+    previous_plan = saved['plan']
+    if adopt_exploration:
+        # Initial adoption only: never silently reinitialize an existing head.
+        if saved.get('exploration') is not None or explorer is None:
+            raise ValueError('Exploration adoption requires a new learned head')
+        previous_plan = copy.deepcopy(previous_plan)
+        previous_plan.pop('sequence_exploration', None)
+        expected.pop('sequence_exploration', None)
+    changed = previous_plan != expected
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
             (changed and not (extend and extended_plan_matches(saved['plan'], expected))) or
             saved['sequence'] != asdict(learner.config)):
@@ -227,6 +239,10 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
         if 'sequence_control' not in saved:
             raise ValueError('Missing checkpoint phase state; use explicit adoption for legacy runs')
         control.restore(saved['sequence_control'], extend=extend and changed)
+    if explorer is not None and not adopt_exploration:
+        if 'exploration' not in saved:
+            raise ValueError('Missing change-head state; use --adopt-exploration for initial adoption')
+        explorer.restore(saved['exploration'])
     learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
     learner.updates = saved['progress']['updates']
@@ -259,11 +275,18 @@ def run(args):
     if 'sequence' not in plan.payload:
         raise ValueError('Add sequence settings to the training configuration')
     config = SequenceConfig(**plan.payload['sequence'])
+    exploration = SequenceExplorationConfig(**plan.payload.get('sequence_exploration', {}))
     output = args.output.resolve()
     if args.resume and args.source:
         raise ValueError('Choose --source for a fresh run or --resume, not both')
     adopt = getattr(args, 'adopt_training_phases', False)
     extend = getattr(args, 'extend_curriculum', False)
+    adopt_exploration = getattr(args, 'adopt_exploration', False)
+    exploration_source = getattr(args, 'exploration_source', None)
+    if adopt_exploration and (not args.resume or adopt or extend or exploration.policy != 'learned'):
+        raise ValueError('--adopt-exploration requires a learned policy and --resume without other adoptions')
+    if exploration_source and (exploration.policy != 'learned' or (args.resume and not adopt_exploration)):
+        raise ValueError('Auxiliary bootstrap is only allowed for a fresh head')
     if adopt and not args.resume:
         raise ValueError('--adopt-training-phases requires --resume')
     if extend and (not args.resume or adopt):
@@ -278,12 +301,21 @@ def run(args):
         learner, representation = SequenceLearner(engine, config), representation_for(engine, plan)
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
-        batches, actions, extensions = 0, 0, []
+        explorer = ChangeExplorer(exploration) if exploration.policy == 'learned' else None
+        if exploration_source:
+            bootstrap = checkpoint.load(exploration_source)
+            if bootstrap.get('kind') != 'sequence_change_head':
+                raise ValueError('Expected an auxiliary change-head checkpoint')
+            explorer.restore(bootstrap['exploration'])
+        batches, actions, extensions, exploration_adoptions = 0, 0, [], []
         if args.resume:
             saved = checkpoint.load(source)
             batches, actions = restore_run(saved, plan, learner, representation, control,
-                                           adopt=adopt, extend=extend)
+                                           adopt=adopt, extend=extend, adopt_exploration=adopt_exploration, explorer=explorer)
             extensions = list(saved.get('curriculum_extensions', []))
+            exploration_adoptions = list(saved.get('exploration_adoptions', []))
+            if adopt_exploration:
+                exploration_adoptions.append(dict(batch=batches, actions=actions, config=asdict(exploration)))
             if extend and saved['plan'] != plan.payload:
                 extensions.append(dict(batch=batches, actions=actions,
                     previous_plan=digest(saved['plan']), plan=plan.identity,
@@ -298,7 +330,8 @@ def run(args):
         if getattr(args, 'optimization', False):
             from .optimization_telemetry import OptimizationTelemetry
             telemetry = OptimizationTelemetry(engine.model, output, every=args.optimization_every,
-                restored_batch=batches, identity=json.dumps(plan.payload, sort_keys=True))
+                restored_batch=batches, identity=json.dumps(
+                    {k:v for k,v in plan.payload.items() if k != 'sequence_exploration'}, sort_keys=True))
         stop = False
         def interrupt(signum, frame):
             nonlocal stop
@@ -310,6 +343,8 @@ def run(args):
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
         report['curriculum_extensions'] = extensions
+        report['exploration_config'] = asdict(exploration)
+        report['exploration_adoptions'] = exploration_adoptions
         report['budget'] = action_budget
         report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
         if control:
@@ -346,7 +381,8 @@ def run(args):
                 begin = time.perf_counter()
                 if telemetry:
                     telemetry.start_batch(batches + 1)
-                sessions = collect_batch(factories, config, batches, plan.settings['seed'])
+                sessions = collect_batch(factories, config, batches, plan.settings['seed'],
+                                         exploration=exploration, explorer=explorer)
                 collection_seconds = time.perf_counter() - begin
                 if control:
                     phase = control.phase
@@ -386,12 +422,19 @@ def run(args):
                         measured['diagnostics_seconds'] = diagnostics.seconds
                     synchronize(engine)
                     measured['evaluation_seconds'] = time.perf_counter() - evaluation_start
+                head_start = time.perf_counter()
+                head_metrics = explorer.fit(sessions) if explorer is not None else {}
+                measured['exploration_seconds'] = time.perf_counter() - head_start if explorer is not None else 0.
+                interaction_rows = [interaction_counts(session) for session in sessions]
+                measured['exploration'] = dict(policy=exploration.policy, identity=digest(asdict(exploration)),
+                    **sum_counts(interaction_rows), head=head_metrics,
+                    games=[dict(game=session.game, **counts) for session, counts in zip(sessions, interaction_rows)])
                 real_actions = sum(s.environment_actions for s in sessions)
                 batches += 1
                 actions += real_actions
                 save_start = time.perf_counter()
                 save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
-                         extensions=extensions)
+                         extensions=extensions, explorer=explorer, exploration_adoptions=exploration_adoptions)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -440,6 +483,9 @@ def main():
                         help='Explicitly append training games/levels on resume, preserving weights and optimizers')
     parser.add_argument('--adopt-training-phases', action='store_true',
                         help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
+    parser.add_argument('--adopt-exploration', action='store_true',
+                        help='Adopt the first learned exploration head without resetting the world model')
+    parser.add_argument('--exploration-source', type=Path, help='Auxiliary bootstrap checkpoint for a new head only')
     parser.add_argument('--unlimited', action='store_true',
                         help='Ignore the total action budget; run until interrupted or --max-batches is reached')
     parser.add_argument('--optimization', action='store_true', help='Record bounded optimizer diagnostics')

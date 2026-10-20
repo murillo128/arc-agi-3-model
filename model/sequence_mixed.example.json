@@ -9,6 +9,10 @@
     "encoder_learning_rate_after_predictor": 3e-07,
     "prediction_delta_loss": "recall_focal_capped"
   },
+  "sequence_exploration": {
+    "policy": "learned",
+    "uniform_probability": 0.25
+  },
   "sequence": {
     "batch_games": 8,
     "session_steps": 512,

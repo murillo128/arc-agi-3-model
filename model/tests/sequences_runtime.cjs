@@ -32,6 +32,24 @@ const text = id => nodes.get(id).textContent;
   vm.runInContext(fs.readFileSync(path.join(assets, 'sequences.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('status'), 'Paused');
+  assert.equal(text('exploration-policy'), 'Uniform exploration');
+  assert.equal(text('exploration-head-info'), 'No learned-head measurements yet');
+  assert.equal(nodes.get('interaction-change-legend').children[0].textContent,'Changed actions %: —');
+  report.exploration_config={policy:'learned',uniform_probability:.25};
+  report.exploration_adoptions=[{batch:0}];
+  report.history[0].exploration={policy:'learned',identity:'new',eligible_transitions:100,changed_actions:40,
+    eligible_clicks:20,changed_clicks:12,head:{loss:.2,total_updates:16,examples_seen:100},games:[
+      {game:'click-game',eligible_transitions:100,changed_actions:40,eligible_clicks:20,changed_clicks:12,wins:1},
+      {game:'no-click',eligible_transitions:10,changed_actions:0,eligible_clicks:0,changed_clicks:0,wins:0}]};
+  await vm.runInContext('refresh()',context);
+  assert.equal(text('exploration-policy'),'Learned change prior · 25% uniform clicks · active from batch 1');
+  assert.equal(nodes.get('interaction-change-legend').children[1].textContent,'Changed clicks %: 60');
+  assert.equal(nodes.get('exploration-games').children[0].children[3].textContent,'60 %');
+  assert.equal(nodes.get('exploration-games').children[1].children[3].textContent,'—');
+  assert.match(text('exploration-head-info'),/16 auxiliary updates/);
+  delete report.exploration_config; delete report.exploration_adoptions; delete report.history[0].exploration;
+  await vm.runInContext('refresh()',context);
+
   assert.equal(text('run-info'), '1 game', 'configuration summarizes game count without IDs');
   assert.equal(text('curriculum-games'), '<game>', 'game IDs remain literal text in Curriculum');
   assert.equal(text('freshness'), 'Updated 2 s ago');

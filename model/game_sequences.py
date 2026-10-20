@@ -14,10 +14,11 @@ import torch
 from torch.utils.checkpoint import checkpoint
 
 from .config import SequenceConfig
-from .data import Action, Observation, random_action
+from .data import Action, Observation
 from .environment import training_boundary
 from .learning import optimizer, visual_delta_loss
 from .online_learning import trainable
+from .sequence_exploration import SequenceExplorationConfig, ExplorationSession
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,8 @@ class GameSession:
     end_reason: str = 'budget'
 
 
-def collect_session(factory, levels, seed, config):
-    """Random public actions. Synthetic isolation is a training-only capability.
+def collect_session(factory, levels, seed, config, *, exploration=None, explorer=None):
+    """Public actions. Synthetic isolation is a training-only capability.
 
     Native SDK sessions start at level one and progress naturally; transitions
     entering excluded levels never enter the session, including their targets.
@@ -64,6 +65,8 @@ def collect_session(factory, levels, seed, config):
         raise ValueError('Native sequence levels must be the contiguous allowed prefix from 1')
     session = GameSession(factory.game_id, seed)
     rng = random.Random(seed)
+    exploration = exploration or SequenceExplorationConfig()
+    collector = ExplorationSession(exploration, seed, explorer)
     env, attempts = None, 0
     boundary = False
     for index in range(config.session_steps):
@@ -72,6 +75,7 @@ def collect_session(factory, levels, seed, config):
             env = factory.make(seed + attempts * 1_000_000, None if native else levels[slot],
                                **({} if native else {'palette_seed': seed}))
             attempts += 1
+            collector.reset()
             boundary = bool(session.transitions)
         before = env.observation
         if native and (training_boundary(factory, before) or before.levels_completed + 1 not in levels):
@@ -81,7 +85,7 @@ def collect_session(factory, levels, seed, config):
             before = env.step(Action(0)).level_initial()
             session.environment_actions += 1
             boundary = bool(session.transitions)
-        action = random_action(before, rng)
+        action = collector.action(before, rng)
         after = env.step(action)
         session.environment_actions += 1
         if native and (training_boundary(factory, after) or
@@ -90,8 +94,10 @@ def collect_session(factory, levels, seed, config):
             break
         session.transitions.append(Transition(before, action, after, boundary,
             before.levels_completed + 1 if native else levels[slot]))
+        collector.observe(before, action, after)
         boundary = after.starts_new_level(before)
         if boundary:
+            collector.reset()
             # Only the final new-board frame may enter the next level's encoder.
             env.observation = after.level_initial()
     return session

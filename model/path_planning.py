@@ -121,8 +121,9 @@ comparison which could admit a route far below the actual best probability.
 
 
 class PathPlanner:
-    def __init__(self, engine, evaluator, config=PathConfig(), compile_model=False):
+    def __init__(self, engine, evaluator, config=PathConfig(), compile_model=False, *, change_prior=None):
         self.engine, self.evaluator, self.config = engine, evaluator, config
+        self.change_prior = change_prior
         self.readout = torch.compile(evaluator.forward, fullgraph=True, dynamic=True) if compile_model else evaluator
         self.reset()
 
@@ -176,7 +177,8 @@ class PathPlanner:
             raise ValueError('Path planning requires a positive action budget')
         self.engine.model.eval()
         self.evaluator.eval()
-        choices = candidates(observation, rng, self.config.clicks)
+        choices = (self.change_prior.candidates(observation, rng, self.config.clicks)
+                   if self.change_prior is not None else candidates(observation, rng, self.config.clicks))
         root_allowed = None
         if self.config.noop_cooldown:
             key = observation.final[self.goal['pixel_mask']].tobytes()
