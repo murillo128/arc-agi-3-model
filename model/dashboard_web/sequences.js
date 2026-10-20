@@ -97,11 +97,11 @@ function render(data) {
   $('drift-description').textContent=training?'Relative encoder change on the same batch images, before and after updating representation. Each batch provides new images; object movement is kept separate from encoder drift.':'Relative latent change from the first measurement in this process. Resuming establishes a new reference; lines are separated between references.';
   $('phase-card').hidden=!control;
   if(control){
-    $('phase-description').textContent=`Window of ${control.window_batches} batches. All games and levels must meet reconstruction and drift thresholds with enough evidence. Reconstruction uses the union of real and reconstructed changes, including rare observed changes. Predictor admission is retained; later metrics remain visible.`;
+    $('phase-description').textContent=`Window of ${control.window_batches} batches. All synthetic levels and the first level of every SDK game require reconstruction and drift evidence. Higher SDK levels become required once observed in training; unreached levels are not passes. Predictor admission is retained until the curriculum is extended.`;
     table('phase-rows',control.rows.map(r=>[`${r.game} / ${r.level}`,`${r.samples} / ${r.changed} · minimum ${r.thresholds.minimum_samples} / ${r.thresholds.minimum_changed}`,
       `${number(pct(r.reconstruction_error))} % / ${number(pct(r.thresholds.representation_open))} %`,
       `${number(pct(r.latent_drift))} % / ${number(pct(r.thresholds.latent_drift))} %`,`${r.passes} / ${r.thresholds.patience}`,
-      !r.enough?'Collecting evidence':r.passing?'Passing':'Outside threshold']));
+      r.required===false?'Not reached yet':!r.enough?'Collecting evidence':r.passing?'Passing':'Outside threshold']));
   }
   $('status').textContent = ({running: 'Training', paused: 'Paused', budget_complete: 'Budget reached', error: 'Error', waiting: 'Waiting'})[data.status] || data.status;
   const gameCount=(data.games||[]).length;

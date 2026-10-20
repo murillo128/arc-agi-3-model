@@ -27,7 +27,7 @@ Los juegos oficiales del SDK conservan sus colores originales.
 `--source` importa pesos sin modificar el archivo original ni sus optimizadores.
 Sin él, `init_config` inicializa pesos nuevos. `--max-batches 2` acota una prueba;
 `--resume` sustituye a `--source` para restaurar pesos y momentos del optimizador
-desde el directorio de salida. Se exige el mismo plan al reanudar. SIGINT/SIGTERM
+desde el directorio de salida. Por defecto se exige el mismo plan al reanudar. SIGINT/SIGTERM
 terminan el batch actual y guardan atómicamente; no se serializan entornos vivos.
 Una interrupción brusca puede repetir el batch aún no guardado. Se conserva un
 checkpoint por batch completo; el presupuesto de acciones puede sobrepasarse
@@ -54,6 +54,44 @@ umbrales sobre los batches normales de entrenamiento. Guarda cada batch completo
 no activa el planner ni modifica la rotación configurada de niveles. Los planes
 anteriores sin `sequence_control` mantienen su comportamiento y evaluación fija.
 
+### Mixed synthetic and public SDK training
+
+[`sequence_mixed.example.json`](sequence_mixed.example.json) combines all 71
+synthetics with the 20 public SDK development games. The pinned public split in
+[`splits.public-development.json`](../configs/splits.public-development.json)
+uses seed 42: `ar25`, `cn04`, `lf52`, `tn36`, and `vc33` stay held out completely.
+The level caps come from the SDK's public `win_levels`, excluding each training
+game's final level. Provision these public games in `environment_files` with the
+pinned SDK before running the offline configuration. No game implementations
+or downloaded frames are distributed with the configuration.
+
+Sessions start at the SDK's native first level and reach later allowed levels
+through real actions. A configured upper level is permission to collect it,
+not evidence that it has been reached. Entering a reserved level stops collection
+before its target enters training. Batches still contain up to eight independent
+512-action sessions; 24 batches cover two shuffled rounds of the expanded catalog.
+
+To append games to an existing run without resetting learned weights, optimizer
+moments, RNG or counters:
+
+```sh
+.venv/bin/python -u -m model.sequence_training \
+  --training-config model/sequence_mixed.example.json \
+  --output model/runs/secuencias --device cuda --resume --extend-curriculum --unlimited
+```
+
+First stop the existing trainer gracefully so it finishes and saves its batch.
+`--extend-curriculum` only permits appending stages after the unchanged existing
+stages, adding the first SDK configuration, and increasing the evidence window
+to cover the larger catalog. Other settings, thresholds, existing SDK splits,
+stage edits/removals/reordering, and phase adoption remain incompatible.
+New stages begin without qualification evidence. Existing evidence is retained;
+an already admitted predictor returns to representation qualification for the
+expanded curriculum. The extension boundary is recorded in the checkpoint and
+report, while historical batches remain identifiable as the earlier catalog.
+Once the extended checkpoint is saved, ordinary `--resume` works again; leaving
+`--extend-curriculum` on with the identical plan is also safe.
+
 ### Fases sobre los datos de entrenamiento
 
 El ejemplo incluye `sequence_control: {"window_batches": 4, "diagnostic_samples": 128,
@@ -78,8 +116,12 @@ las actualizaciones de representación; no compara escenas distintas.
 Se reutilizan los umbrales por etapa `representation_open` (0,10), `latent_drift`
 (0,15), `minimum_samples` (8), `minimum_changed` (4) y `patience` (3). Cada par
 necesita nuevas muestras para sumar un batch apto. La falta de evidencia, de
-cambios o de escala latente válida no cuenta como aprobado. Todos los pares
-deben cumplir porque comparten encoder/decoder. La admisión activa el predictor
+cambios o de escala latente válida no cuenta como aprobado. Deben cumplir todos
+los niveles sintéticos y el primer nivel de cada juego SDK. Los niveles SDK
+superiores se exigen desde su primera muestra supervisada real; los aún no
+alcanzados se marcan como tales y no se consideran aprobados. Este requisito
+persiste aunque las muestras salgan de la ventana o se reanude el proceso.
+La admisión activa el predictor
 en el **siguiente** batch y se conserva; una regresión posterior permanece visible.
 `prediction_open` y `success` no activan un planner en este modo.
 

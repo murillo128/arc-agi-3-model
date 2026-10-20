@@ -40,6 +40,7 @@ class SequencePhaseControl:
         self.stages = {pair_key(s['game'], s['level']): s for s in stages}
         self.window = deque(maxlen=config.window_batches)
         self.streaks = dict.fromkeys(self.stages, 0)
+        self.observed_native_levels = set()
         self.phase, self.admitted_batch = 'representation', None
 
     def apply(self, representation):
@@ -73,6 +74,8 @@ class SequencePhaseControl:
             passing = (enough and reconstruction is not None and drift is not None and
                        reconstruction <= gates['representation_open'] and drift <= gates['latent_drift'])
             rows.append(dict(game=stage['game'], level=stage['level'], key=key,
+                required=(stage.get('source') != 'sdk' or stage['level'] == 1 or
+                          key in self.observed_native_levels),
                 samples=int(counts['samples']), changed=int(counts['changed']),
                 reconstruction_error=reconstruction, latent_drift=drift,
                 prediction_error=ratio(counts['prediction_wrong'], counts['prediction_union']),
@@ -86,6 +89,8 @@ class SequencePhaseControl:
             raise ValueError('Unexpected game/level in phase evidence')
         if any(not math.isfinite(v) or v < 0 for row in pairs.values() for v in row.values()):
             raise ValueError('Nonfinite or negative phase evidence')
+        self.observed_native_levels.update(key for key, row in pairs.items()
+            if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0)
         self.window.append(dict(batch=batch, pairs=pairs))
         for row in self.rows():
             key = row['key']
@@ -94,21 +99,33 @@ class SequencePhaseControl:
             elif pairs.get(key, {}).get('samples', 0):
                 self.streaks[key] += 1
         if self.phase == 'representation' and all(
-                self.streaks[k] >= s['thresholds']['patience'] for k, s in self.stages.items()):
+                row['passes'] >= row['thresholds']['patience'] for row in self.rows() if row['required']):
             self.phase, self.admitted_batch = 'predictor', batch
 
     def snapshot(self):
         return dict(version=1, config=asdict(self.config), phase=self.phase,
-                    admitted_batch=self.admitted_batch, window=list(self.window), streaks=dict(self.streaks))
+                    admitted_batch=self.admitted_batch, window=list(self.window), streaks=dict(self.streaks),
+                    observed_native_levels=sorted(self.observed_native_levels))
 
-    def restore(self, saved):
-        if (saved.get('version') != 1 or saved['config'] != asdict(self.config) or
+    def restore(self, saved, *, extend=False):
+        previous = set(saved['streaks'])
+        expanded = extend and previous < self.stages.keys()
+        config = asdict(self.config)
+        if expanded and config['window_batches'] >= saved['config']['window_batches']:
+            config['window_batches'] = saved['config']['window_batches']
+        if (saved.get('version') != 1 or saved['config'] != config or
                 saved['phase'] not in ('representation', 'predictor') or
-                set(saved['streaks']) != set(self.stages)):
+                (previous != set(self.stages) and not expanded)):
             raise ValueError('Incompatible sequence phase state')
         self.phase, self.admitted_batch = saved['phase'], saved['admitted_batch']
+        if expanded:
+            self.phase, self.admitted_batch = 'representation', None
+        self.window.clear()
         self.window.extend(saved['window'])
-        self.streaks = dict(saved['streaks'])
+        self.streaks = dict.fromkeys(self.stages, 0) | saved['streaks']
+        self.observed_native_levels = set(saved.get('observed_native_levels', (
+            key for entry in self.window for key, row in entry['pairs'].items()
+            if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0)))
 
     def report(self):
         return dict(phase=self.phase, admitted_batch=self.admitted_batch,

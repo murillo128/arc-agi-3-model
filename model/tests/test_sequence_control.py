@@ -73,6 +73,38 @@ class SequenceControlTests(unittest.TestCase):
             self.assertEqual(c.phase, 'representation')
             self.assertEqual(c.rows()[1]['passes'], 0)
 
+    def test_native_unreached_levels_wait_but_first_levels_and_synthetics_are_required(self):
+        catalog = [dict(s, source='sdk') for s in stages()]
+        catalog += [dict(stages()[0], game='synthetic', source='synthetic')]
+        c = SequencePhaseControl(catalog, {}, SequenceControlConfig(window_batches=2))
+        c.observe(1, {'game/1': counts()})
+        c.observe(2, {'game/1': counts()})
+        self.assertEqual(c.phase, 'representation', 'synthetic evidence remains mandatory')
+        for batch in (3, 4):
+            c.observe(batch, {'game/1': counts(), 'synthetic/1': counts()})
+        self.assertEqual(c.phase, 'predictor')
+        rows = {r['key']: r for r in c.rows()}
+        self.assertTrue(rows['game/1']['required'])
+        self.assertFalse(rows['game/2']['required'])
+        self.assertFalse(rows['game/2']['passing'], 'unreached is not a pass')
+        self.assertEqual(rows['game/2']['passes'], 0)
+
+    def test_observed_native_level_remains_required_after_expiry_and_resume(self):
+        catalog = [dict(s, source='sdk') for s in stages()]
+        c = SequencePhaseControl(catalog, {}, SequenceControlConfig(window_batches=2))
+        c.observe(1, {'game/1': counts(), 'game/2': counts(reconstruction_wrong=20)})
+        for batch in (2, 3, 4):
+            c.observe(batch, {'game/1': counts()})
+        self.assertEqual(c.phase, 'representation')
+        other = SequencePhaseControl(catalog, {}, c.config)
+        other.restore(c.snapshot())
+        self.assertTrue(other.rows()[1]['required'])
+        self.assertEqual(other.rows()[1]['samples'], 0)
+        other.observe(5, {'game/1': counts(), 'game/2': counts()})
+        self.assertEqual(other.phase, 'representation', 'native levels still need patience')
+        other.observe(6, {'game/1': counts(), 'game/2': counts()})
+        self.assertEqual(other.phase, 'predictor')
+
     def test_exact_phase_rates_and_moments_survive_transition_and_restore(self):
         e = Engine(WorldModel(NetworkConfig.small()), TrainConfig())
         rep = OnlineRepresentation(e, 3e-5, encoder_learning_rate_after_predictor=3e-7)

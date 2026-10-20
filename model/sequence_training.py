@@ -23,7 +23,7 @@ from .game_sequences import (SequenceLearner, EncodedSessions, collect_session,
 from .learning import Engine
 from .networks import WorldModel
 from .online_learning import OnlineRepresentation
-from .training_config import load_plan, run_owner
+from .training_config import digest, load_plan, run_owner
 from .sequence_control import SequenceControlConfig, SequencePhaseControl, TrainingBatchDiagnostics
 
 
@@ -164,33 +164,55 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
         examples_per_second=sum(x['examples'] for x in updates)/max(1e-9, predictor_seconds))
 
 
-def save_run(path, plan, learner, representation, batches, actions, control=None):
+def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=()):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
         sequence=asdict(learner.config), predictor_optimizer=learner.optimizer.state_dict(),
         representation_optimizer=representation.optimizer.state_dict(),
         progress=dict(batches=batches, actions=actions, updates=learner.updates),
+        curriculum_extensions=list(extensions),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
         **(dict(sequence_control=control.snapshot(), representation_state=dict(
             sigreg_enabled=representation.sigreg_enabled, updates=representation.updates)) if control else {})))
 
 
-def restore_run(saved, plan, learner, representation, control=None, *, adopt=False):
+def extended_plan_matches(previous, current):
+    """Only an appended curriculum and the first SDK setup may differ."""
+    count = len(previous['stages'])
+    if len(current['stages']) <= count or current['stages'][:count] != previous['stages']:
+        return False
+    expected = copy.deepcopy(current)
+    expected['stages'] = previous['stages']
+    if not previous['sdk']:
+        expected['sdk'] = {}
+    if 'sequence_control' in previous and 'sequence_control' in current:
+        old_window = previous['sequence_control']['window_batches']
+        if current['sequence_control']['window_batches'] < old_window:
+            return False
+        expected['sequence_control']['window_batches'] = old_window
+    return expected == previous
+
+
+def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False):
+    if adopt and extend:
+        raise ValueError('Curriculum extension cannot be combined with phase adoption')
     expected = copy.deepcopy(plan.payload)
     if adopt:
         if control is None or 'sequence_control' in saved or 'sequence_control' in saved['plan']:
             raise ValueError('Phase adoption requires a legacy sequence checkpoint and a controlled plan')
         expected.pop('sequence_control')
         expected['settings']['encoder_learning_rate_after_predictor'] = saved['plan']['settings']['encoder_learning_rate_after_predictor']
+    changed = saved['plan'] != expected
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
-            saved['plan'] != expected or saved['sequence'] != asdict(learner.config)):
+            (changed and not (extend and extended_plan_matches(saved['plan'], expected))) or
+            saved['sequence'] != asdict(learner.config)):
         raise ValueError('Resume requires the same sequence configuration and training plan')
     if control is not None and not adopt:
         if 'sequence_control' not in saved:
             raise ValueError('Missing checkpoint phase state; use explicit adoption for legacy runs')
-        control.restore(saved['sequence_control'])
+        control.restore(saved['sequence_control'], extend=extend and changed)
     learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
     learner.updates = saved['progress']['updates']
@@ -224,8 +246,11 @@ def run(args):
     if args.resume and args.source:
         raise ValueError('Choose --source for a fresh run or --resume, not both')
     adopt = getattr(args, 'adopt_training_phases', False)
+    extend = getattr(args, 'extend_curriculum', False)
     if adopt and not args.resume:
         raise ValueError('--adopt-training-phases requires --resume')
+    if extend and (not args.resume or adopt):
+        raise ValueError('--extend-curriculum requires --resume without --adopt-training-phases')
     if args.max_batches is not None and args.max_batches < 1:
         raise ValueError('--max-batches must be positive')
     action_budget = None if getattr(args, 'unlimited', False) else plan.settings['actions']
@@ -236,8 +261,19 @@ def run(args):
         learner, representation = SequenceLearner(engine, config), representation_for(engine, plan)
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
-        batches, actions = (restore_run(checkpoint.load(source), plan, learner, representation, control, adopt=adopt)
-                            if args.resume else (0, 0))
+        batches, actions, extensions = 0, 0, []
+        if args.resume:
+            saved = checkpoint.load(source)
+            batches, actions = restore_run(saved, plan, learner, representation, control,
+                                           adopt=adopt, extend=extend)
+            extensions = list(saved.get('curriculum_extensions', []))
+            if extend and saved['plan'] != plan.payload:
+                extensions.append(dict(batch=batches, actions=actions,
+                    previous_plan=digest(saved['plan']), plan=plan.identity,
+                    games_before=list(dict.fromkeys(s['game'] for s in saved['plan']['stages'])),
+                    games_after=list(dict.fromkeys(s['game'] for s in plan.stages)),
+                    added_stages=list(plan.stages[len(saved['plan']['stages']):])))
+            del saved
         if control:
             control.apply(representation)
         telemetry = None
@@ -255,6 +291,7 @@ def run(args):
         report = dict(kind='game_sequences', status='running', config=asdict(config), history=[],
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
+        report['curriculum_extensions'] = extensions
         report['budget'] = action_budget
         report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
         if control:
@@ -335,7 +372,8 @@ def run(args):
                 batches += 1
                 actions += real_actions
                 save_start = time.perf_counter()
-                save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control)
+                save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
+                         extensions=extensions)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -378,6 +416,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--extend-curriculum', action='store_true',
+                        help='Explicitly append training games/levels on resume, preserving weights and optimizers')
     parser.add_argument('--adopt-training-phases', action='store_true',
                         help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
     parser.add_argument('--unlimited', action='store_true',
