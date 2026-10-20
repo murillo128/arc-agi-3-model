@@ -170,8 +170,26 @@
     }else empty('update-histogram','Distribution not captured');
     line('matrix-history',s.events,e=>Number.isFinite(e.matrices?.[selection]?.relative_update)?e.matrices[selection].relative_update*100:null,{label:'Weight change (%) · norm on a fixed sample',selected:eventIndex});
   }
+  function outsideStep(projection) {
+    if (!Number.isFinite(projection?.step_norm) || projection.step_norm < 0) return null;
+    if (projection.step_norm === 0) return 0;
+    if (!Number.isFinite(projection.coverage)) return null;
+    // Coverage is a ratio of squared norms, so recover length with a square root.
+    return projection.step_norm * Math.sqrt(1 - Math.max(0, Math.min(1, projection.coverage)));
+  }
+  function sizeScale(maximum) {
+    $('path-size-scale').hidden=!(maximum>0);
+    text('path-size-half',maximum>0?sci(maximum/2):'—');text('path-size-max',maximum>0?sci(maximum):'—');
+    text('path-size-note',maximum>0
+      ? 'Bubble area above the small position marker represents outside-plane step length. Scale follows this module’s visible history; the first point has no previous step.'
+      : maximum===0 ? 'No measurable movement outside the plane in this window. Small markers show positions only.'
+      : 'Waiting for measured steps to size the bubbles.');
+  }
   function trajectory(s) {
     const plane=s.planes[module], projections=plane?.projections || [], points=s.points;
+    const outside=projections.map((p,i)=>i?outsideStep(p):null), known=outside.filter(Number.isFinite);
+    const maximum=known.length?Math.max(...known):null;
+    sizeScale(maximum);
     if(!projections.length) { empty('parameter-path','Calibrating the plane with four measured batches…');drawHits=[];return; }
     const {g,w,h}=canvas('parameter-path');
     const xs=projections.map(p=>p.x),ys=projections.map(p=>p.y),zs=points.map(p=>p.reference_loss).filter(Number.isFinite);
@@ -184,22 +202,34 @@
     for(let i=0;i<=4;i++){const k=-1+i*.5;segment(project(-1,k,0),project(1,k,0));segment(project(k,-1,0),project(k,1,0));}
     if(dimension===3){segment(project(-1,-1,0),project(-1,-1,1),C.muted);g.fillStyle=C.muted;g.fillText('Visual NLL',10,30);g.fillText(s.reference_source==='training_pre_update'?'before learning':'reference',10,46);}
     g.fillStyle=C.muted;g.textAlign='center';g.fillText('PC1 · fixed sample',w/2,h-6);g.textAlign='right';g.fillText('PC2',w-12,h-25);
-    drawHits=projections.map((p,i)=>project(normal(p.x,xmin,xmax),normal(p.y,ymin,ymax),(points[i]?.reference_loss-zmin)/Math.max(1e-9,zmax-zmin)));
+    // Keep the same screen-space area in 2D and 3D; camera depth is not update size.
+    drawHits=projections.map((p,i)=>({
+      position:project(normal(p.x,xmin,xmax),normal(p.y,ymin,ymax),(points[i]?.reference_loss-zmin)/Math.max(1e-9,zmax-zmin)),
+      radius:maximum>0&&Number.isFinite(outside[i])?Math.sqrt(3**2+(14**2-3**2)*outside[i]/maximum):3,
+    }));
     g.lineWidth=2;
-    drawHits.forEach((p,i)=>{if(i)segment(drawHits[i-1],p,i<pointIndex?C.lilac:C.mint);});
-    drawHits.forEach((p,i)=>{g.fillStyle=i===pointIndex?C.text:i<pointIndex?C.lilac:C.mint;g.beginPath();g.arc(...p,i===pointIndex?5:3,0,2*Math.PI);g.fill();
-      if(i===pointIndex){g.strokeStyle=C.mint;g.beginPath();g.arc(...p,9,0,2*Math.PI);g.stroke();g.textAlign='left';g.fillStyle=C.text;g.fillText(`Batch ${points[i].batch}`,Math.min(w-100,p[0]+15),Math.max(18,p[1]-15));}
-    });
+    drawHits.forEach((hit,i)=>{if(i)segment(drawHits[i-1].position,hit.position,i<pointIndex?C.lilac:C.mint);});
+    function bubble(hit,i) {
+      const p=hit.position, radius=hit.radius, color=i<pointIndex?C.lilac:C.mint;
+      if(radius>3){g.fillStyle=`${color}24`;g.strokeStyle=`${color}70`;g.lineWidth=1;g.beginPath();g.arc(...p,radius,0,2*Math.PI);g.fill();g.stroke();}
+      g.fillStyle=i===pointIndex?C.text:color;g.beginPath();g.arc(...p,3,0,2*Math.PI);g.fill();
+      if(i===pointIndex){g.lineWidth=2;g.strokeStyle=C.mint;g.beginPath();g.arc(...p,radius+4,0,2*Math.PI);g.stroke();g.textAlign='left';g.fillStyle=C.text;g.fillText(`Batch ${points[i].batch}`,Math.min(w-100,p[0]+radius+8),Math.max(18,p[1]-radius-8));}
+    }
+    drawHits.forEach((hit,i)=>{if(i!==pointIndex)bubble(hit,i);});
+    if(drawHits[pointIndex])bubble(drawHits[pointIndex],pointIndex);
   }
   function renderPath(s) {
     const plane=s.planes[module], p=s.points[pointIndex], projection=plane?.projections?.[pointIndex],previous=s.points[pointIndex-1];
-    text('basis-note',plane?.basis_id?`Fixed plane ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches. Coverage is calculated on the sample.`:'Waiting for four batches to establish the PCA plane.');
+    text('basis-note',plane?.basis_id?`Fixed plane ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches · module-wide fixed sample.`:'Waiting for four batches to establish the PCA plane.');
     text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',fmt(p?.reference_loss,4));
     const change=Number.isFinite(p?.reference_loss)&&Number.isFinite(previous?.reference_loss)?p.reference_loss-previous.reference_loss:null;
     text('loss-change',Number.isFinite(change)?`${change>0?'+':''}${fmt(change,4)}`:'—');
     $('coverage').value=projection?.coverage ?? 0; text('coverage-value',Number.isFinite(projection?.coverage)?`${fmt(projection.coverage*100,1)} %`:'—');
-    text('outside-plane',Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % of movement lies outside the plane. Stratified sample, not the full model.`:'No measurable displacement to calculate coverage.');
-    text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',sci(projection?.step_norm));
+    text('outside-plane',projection&&pointIndex===0?'First retained batch: no previous step in this window.'
+      : Number.isFinite(projection?.coverage)?`${fmt((1-projection.coverage)*100,1)} % of squared step length lies outside the plane. Measured on sampled coefficients.`
+      : projection?.step_norm===0?'No measurable change between these sampled weights.':'No measurable displacement to calculate coverage.');
+    text('turn-value',Number.isFinite(projection?.angle)?`${fmt(projection.angle,1)}°`:'—');text('step-value',pointIndex>0?sci(projection?.step_norm):'—');
+    text('outside-step-value',pointIndex>0?sci(outsideStep(projection)):'—');
     trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
@@ -264,14 +294,14 @@
   }
   function stopPlayback(){clearInterval(playing);playing=null;text('playback','Play');}
   function clearData(status,message) {
-    latest=null;pinned=null;revision=null;requestId=null;eventIndex=-1;pointIndex=-1;drawHits=[];drag=null;stopPlayback();
+    latest=null;pinned=null;revision=null;requestId=null;eventIndex=-1;pointIndex=-1;drawHits=[];drag=null;stopPlayback();sizeScale(null);
     $('live').checked=true;text('optimization-status',status);text('optimization-summary',message);
     $('optimization-notice').hidden=false;text('optimization-notice',message);text('event-label','No captures');
     text('request-status','');text('sample-note','No measurements');$('matrix').replaceChildren();
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=true;
     for(const id of ['pulse','path','memory'])$(id).hidden=true;
     for(const id of ['gradient-value','update-value','learning-rate','clip-value','alignment-value','matrix-state',
-      'reference-value','loss-change','coverage-value','turn-value','step-value','probe-loss','probe-cleared',
+      'reference-value','loss-change','coverage-value','turn-value','step-value','outside-step-value','probe-loss','probe-cleared',
       'probe-game','probe-batch','probe-window','probe-cost'])text(id,'—');
   }
   $('module').addEventListener('change',e=>{module=e.target.value;render();});
@@ -291,7 +321,7 @@
   let drag=null;
   $('parameter-path').addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw};e.target.setPointerCapture(e.pointerId);});
   $('parameter-path').addEventListener('pointermove',e=>{if(!drag||dimension!==3||!data())return;yaw=drag.yaw+(e.clientX-drag.x)/180;trajectory(data());});
-  $('parameter-path').addEventListener('pointerup',e=>{if(drag&&Math.abs(e.clientX-drag.x)<5){const box=e.target.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;let closest=-1,distance=24;drawHits.forEach((p,i)=>{const d=Math.hypot(p[0]-x,p[1]-y);if(d<distance){distance=d;closest=i;}});if(closest>=0)choosePoint(closest);}drag=null;});
+  $('parameter-path').addEventListener('pointerup',e=>{if(drag&&Math.abs(e.clientX-drag.x)<5){const box=e.target.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;let closest=-1,distance=Infinity;drawHits.forEach((hit,i)=>{const d=Math.hypot(hit.position[0]-x,hit.position[1]-y);if(d<=Math.max(10,hit.radius+4)&&d<distance){distance=d;closest=i;}});if(closest>=0)choosePoint(closest);}drag=null;});
   $('parameter-path').addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();choosePoint(pointIndex+(e.key==='ArrowRight'?1:-1));}});
   window.addEventListener('resize',render);
   async function refresh(){
