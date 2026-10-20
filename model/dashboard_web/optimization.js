@@ -321,7 +321,7 @@
   let drag=null;
   $('parameter-path').addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw};e.target.setPointerCapture(e.pointerId);});
   $('parameter-path').addEventListener('pointermove',e=>{if(!drag||dimension!==3||!data())return;yaw=drag.yaw+(e.clientX-drag.x)/180;trajectory(data());});
-  $('parameter-path').addEventListener('pointerup',e=>{if(drag&&Math.abs(e.clientX-drag.x)<5){const box=e.target.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;let closest=-1,distance=Infinity;drawHits.forEach((hit,i)=>{const d=Math.hypot(hit.position[0]-x,hit.position[1]-y);if(d<=Math.max(10,hit.radius+4)&&d<distance){distance=d;closest=i;}});if(closest>=0)choosePoint(closest);}drag=null;});
+  $('parameter-path').addEventListener('pointerup',e=>{if(drag&&Math.abs(e.clientX-drag.x)<5){const box=e.target.getBoundingClientRect(),x=e.clientX-box.left,y=e.clientY-box.top;let closest=-1,distance=Infinity;drawHits.forEach((hit,i)=>{const d=Math.hypot(hit.position[0]-x,hit.position[1]-y);if(d<=Math.max(24,hit.radius+4)&&d<distance){distance=d;closest=i;}});if(closest>=0)choosePoint(closest);}drag=null;});
   $('parameter-path').addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();choosePoint(pointIndex+(e.key==='ArrowRight'?1:-1));}});
   window.addEventListener('resize',render);
   async function refresh(){
