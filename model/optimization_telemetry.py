@@ -63,6 +63,11 @@ class OptimizationTelemetry:
                     if name in saved:
                         planes[name] = ParameterPlane(saved[name], saved.get(name+'_basis'),
                             saved.get(name+'_origin'), state.get('planes', {}).get(name, {}).get('basis_id', 0))
+                        # Legacy captures remain readable, but a resumed collector
+                        # upgrades their basis using only retained weight samples.
+                        plane = planes[name]
+                        if plane.basis is not None and plane.basis.shape[0] == 2:
+                            plane.calibrate()
             self.events, self.points = state.get('events', [])[-64:], state.get('points', [])[-96:]
             self.planes = planes
             self.tick = state.get('tick', 0)
