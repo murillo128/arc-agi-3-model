@@ -589,7 +589,7 @@ class CampaignMonitor(LogMonitor):
             self.progress.pop('evaluation', None)
             self.run['status'] = 'paused'
         elif event == 'campaign_error':
-            self.reason = str(row.get('error', row.get('message', row.get('reason', 'Error sin detalle'))))[:500]
+            self.reason = str(row.get('error', row.get('message', row.get('reason', 'Error without details'))))[:500]
         key = (point.get('variant'), point.get('seed'))
         if key[0] is not None and key[1] is not None:
             summary = self.executions.setdefault(key, {})
@@ -681,11 +681,11 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                 try:
                     length = int(self.headers.get('Content-Length', '0'))
                     if not 0 < length <= 1024 or self.headers.get('Content-Type') != 'application/json':
-                        raise ValueError('Solicitud JSON no válida.')
+                        raise ValueError('Invalid JSON request.')
                     data = json.loads(self.rfile.read(length))
                     self.send_json(202, optimization.request(data))
                 except (ValueError, TypeError):
-                    self.send_json(400, {'error': 'Solicitud de diagnóstico no válida.'})
+                    self.send_json(400, {'error': 'Invalid diagnostic request.'})
                 except (OSError, RuntimeError) as error:
                     self.send_json(409, {'error': str(error)})
                 return
@@ -698,18 +698,18 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             try:
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= 256 or self.headers.get('Content-Type') != 'application/json':
-                    raise ValueError('Envía una operación JSON válida.')
+                    raise ValueError('Send a valid JSON operation.')
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict) or set(body) != {'operation'} or body['operation'] not in ('phase', 'level'):
-                    raise ValueError('Operación de currículo no válida.')
+                    raise ValueError('Invalid curriculum operation.')
             except (ValueError, TypeError):
-                self.send_json(400, {'error': 'Operación de currículo no válida.'})
+                self.send_json(400, {'error': 'Invalid curriculum operation.'})
                 return
             try:
                 state = control.request(body['operation'], subgoal_snapshot(subgoal_report))
                 self.send_json(202, state)
             except (OSError, ValueError, IndexError, StopIteration, subprocess.SubprocessError):
-                self.send_json(409, {'error': 'No se pudo solicitar el avance. Comprueba el estado del entrenador.'})
+                self.send_json(409, {'error': 'Could not request advancement. Check trainer status.'})
 
         def send_json(self, status, payload, etag=None):
             data = json.dumps(payload, allow_nan=False).encode()

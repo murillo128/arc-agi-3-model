@@ -1,7 +1,7 @@
 'use strict';
 // Shared presentation only: never changes recorded measurements or phase gates.
 globalThis.ChartTools = (() => {
-  const alpha = .1, hint = 'Línea fina: EMA (α = 0,1). Pulsa la leyenda para fijar el último valor real.';
+  const alpha = .1, hint = 'Thin line: EMA (α = 0.1). Select a legend label to pin the latest raw value.';
   const states = new Map();
   const valid = p => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]);
   function ema(points) {
@@ -23,7 +23,7 @@ globalThis.ChartTools = (() => {
       if (segment.length) {
         const node = svgNode('polyline', {points: segment.join(' '), fill: 'none', stroke: color,
           'stroke-width': .75, opacity, class: 'series-ema', 'pointer-events': 'none'});
-        node.append(svgNode('title', {}, 'EMA (α = 0,1)')); nodes.push(node);
+        node.append(svgNode('title', {}, 'EMA (α = 0.1)')); nodes.push(node);
       }
       segment = [];
     };

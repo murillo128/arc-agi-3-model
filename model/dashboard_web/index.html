@@ -1,81 +1,83 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ARC · Entrenamiento</title>
+  <title>ARC · Training</title>
   <link rel="stylesheet" href="dashboard.css">
   <script src="chart-tools.js" defer></script><script src="dashboard.js" defer></script>
 </head>
 <body>
-<nav class="app-nav" aria-label="Navegación principal"><a class="app-brand" href="index.html">ARC<span>LAB</span></a><div><a href="index.html" aria-current="page">Entrenamiento</a><a href="optimization.html">Optimización</a></div><span class="nav-caption">WORLD MODEL</span></nav>
+
+<div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a>
+    <div><p class="eyebrow">ARC · WORLD MODEL</p><h1>Training</h1></div>
+    <div class="connection"><span id="connection" role="status">Connecting…</span><small id="freshness"></small></div>
+  </header><nav class="dashboard-tabs" aria-label="Dashboard navigation"><div class="local-tabs" role="tablist" aria-label="Selected run metrics">
+    <button type="button" id="tab-world" role="tab" aria-selected="true" aria-controls="panel-world">Predictor and representation</button>
+    <button type="button" id="tab-behavior" role="tab" aria-selected="false" aria-controls="panel-behavior" tabindex="-1">Planner and actor</button>
+    <button type="button" id="tab-evaluations" role="tab" aria-selected="false" aria-controls="panel-evaluations" tabindex="-1">Evaluations</button>
+  </div><a href="optimization.html">Optimization</a><a href="campaign.html">Campaigns</a></nav></div>
 <main>
-<p class="chart-help">Línea fina: EMA (α = 0,1). Pulsa una leyenda para marcar su último valor real; vuelve a pulsar para quitar la guía.</p>
-  <header>
-    <div><p class="eyebrow">ARC · WORLD MODEL</p><h1>Entrenamiento</h1><p id="run-info" class="muted">Esperando datos…</p><a href="campaign.html">Comparación de variantes →</a></div>
-    <div class="connection"><span id="connection" role="status">Conectando…</span><small id="freshness"></small></div>
-  </header>
-  <p id="experiment-notice" class="notice" hidden><span id="experiment-summary"></span> <a href="campaign.html">Ver diagnóstico y curvas →</a></p>
+<div class="run-details page-context"><p id="run-info" class="muted">Waiting for data…</p></div>
+<p class="chart-help">Thin line: EMA (α = 0.1). Click a legend to mark its latest actual value; click again to remove the guide.</p>
+
+  <p id="experiment-notice" class="notice" hidden><span id="experiment-summary"></span> <a href="campaign.html">View diagnostics and charts →</a></p>
   <div class="toolbar execution-toolbar">
-    <label>Entrenamiento · toda la página
-      <select id="execution-select"><option value="current">En curso · seguimiento automático</option></select>
+    <label>Training run · entire page
+      <select id="execution-select"><option value="current">Current · follow automatically</option></select>
     </label>
     <p id="selection-note" class="muted"></p>
   </div>
   <p id="notice" class="notice" hidden></p>
   <p id="evaluation-progress" class="muted" role="status" hidden></p>
-  <section class="metrics summary-metrics" aria-label="Ejecución seleccionada">
-    <article><h2>Acciones de aprendizaje</h2><strong id="actions">—</strong><small id="actions-note"></small></article>
-    <article><h2>Actualizaciones</h2><strong id="updates">—</strong><small id="updates-note"></small></article>
-    <article><h2>Velocidad</h2><strong id="tps">—</strong><small id="speed-note">acciones/s · aprendizaje</small></article>
-    <article><h2>Juego y nivel</h2><strong id="level">—</strong><small id="game"></small></article>
+  <section class="metrics summary-metrics" aria-label="Selected run">
+    <article><h2>Training actions</h2><strong id="actions">—</strong><small id="actions-note"></small></article>
+    <article><h2>Updates</h2><strong id="updates">—</strong><small id="updates-note"></small></article>
+    <article><h2>Speed</h2><strong id="tps">—</strong><small id="speed-note">actions/s · training</small></article>
+    <article><h2>Game and level</h2><strong id="level">—</strong><small id="game"></small></article>
   </section>
-  <div class="tabs" role="tablist" aria-label="Métricas del entrenamiento seleccionado">
-    <button type="button" id="tab-world" role="tab" aria-selected="true" aria-controls="panel-world">Predictor y representación</button>
-    <button type="button" id="tab-behavior" role="tab" aria-selected="false" aria-controls="panel-behavior" tabindex="-1">Planner y actor</button>
-    <button type="button" id="tab-evaluations" role="tab" aria-selected="false" aria-controls="panel-evaluations" tabindex="-1">Evaluaciones</button>
-  </div>
+
   <section id="panel-world" role="tabpanel" aria-labelledby="tab-world">
     <p id="world-status" class="muted"></p>
     <div class="metrics world-metrics">
-      <article><h2>Error del predictor</h2><strong id="prediction">—</strong><small id="prediction-note">Delta visual · última evaluación</small></article>
-      <article><h2>Error del decoder</h2><strong id="reconstruction">—</strong><small>Reconstrucción desde el latente real · misma evaluación</small></article>
-      <article><h2>Representación</h2><strong id="representation">—</strong><small id="representation-note"></small></article>
+      <article><h2>Predictor error</h2><strong id="prediction">—</strong><small id="prediction-note">Visual delta · latest evaluation</small></article>
+      <article><h2>Decoder error</h2><strong id="reconstruction">—</strong><small>Reconstruction from the real latent · same evaluation</small></article>
+      <article><h2>Representation</h2><strong id="representation">—</strong><small id="representation-note"></small></article>
     </div>
     <div class="charts">
-      <article class="chart-card"><h3>Error del delta visual <span>% · evaluación</span></h3><p>Predicción frente a reconstrucción del resultado real. Las series identifican nivel y fase cuando difieren.</p><div id="delta-legend" class="legend"></div><div class="plot"><canvas id="delta" role="img" aria-label="Error visual del predictor y decoder"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Pérdidas visuales <span>entrenamiento</span></h3><p>Predicción y reconstrucciones. Son pérdidas de aprendizaje, no porcentajes de error.</p><div id="loss-legend" class="legend"></div><div class="plot"><canvas id="loss" role="img" aria-label="Pérdidas visuales"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Aprendizaje latente <span>MSE · entrenamiento</span></h3><p>Error del predictor a uno y dos pasos, cuando esa pérdida está registrada.</p><div id="latent-legend" class="legend"></div><div class="plot"><canvas id="latent" role="img" aria-label="Pérdidas latentes"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Predicción encadenada <span>MSE · evaluación</span></h3><p>Uno, dos y cuatro pasos. Identidad conserva el estado inicial; sirve como referencia.</p><div id="rollouts-legend" class="legend"></div><div class="plot"><canvas id="rollouts" role="img" aria-label="Evaluación de rollouts latentes"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Desglose del delta <span>píxeles · evaluación</span></h3><p>Suma de todos los juegos y niveles de cada evaluación. Cambios inventados, omitidos, con color incorrecto y acertados; sin datos si no se registraron.</p><div id="changes-legend" class="legend"></div><div class="plot"><canvas id="changes" role="img" aria-label="Tipos de error del delta"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Diversidad del latente <span>desviación típica media</span></h3><p>Media de las desviaciones por nivel, ponderada por transiciones evaluadas. No es la desviación global de los latentes ni acredita por sí sola buena predicción.</p><div id="spread-legend" class="legend"></div><div class="plot"><canvas id="spread" role="img" aria-label="Diversidad del latente"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Objetivo total <span>entrenamiento</span></h3><p>Suma ponderada de las pérdidas de la ejecución seleccionada.</p><div id="total-legend" class="legend"></div><div class="plot"><canvas id="total" role="img" aria-label="Pérdida total"></canvas><output class="tooltip" hidden></output></div></article>
-      <article class="chart-card"><h3>Velocidad <span>acciones/s</span></h3><p>Media registrada por el proceso; incluye sus pausas de evaluación y guardado.</p><div id="speed-legend" class="legend"></div><div class="plot"><canvas id="speed" role="img" aria-label="Velocidad del entrenamiento"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Visual delta error <span>% · evaluation</span></h3><p>Prediction versus reconstruction of the real outcome. Series identify different levels and phases separately.</p><div id="delta-legend" class="legend"></div><div class="plot"><canvas id="delta" role="img" aria-label="Predictor and decoder visual error"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Visual losses <span>training</span></h3><p>Prediction and reconstruction losses. These are training losses, not error percentages.</p><div id="loss-legend" class="legend"></div><div class="plot"><canvas id="loss" role="img" aria-label="Visual losses"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Latent learning <span>MSE · training</span></h3><p>Predictor error at one and two steps, when that loss is recorded.</p><div id="latent-legend" class="legend"></div><div class="plot"><canvas id="latent" role="img" aria-label="Latent losses"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Chained prediction <span>MSE · evaluation</span></h3><p>One, two and four steps. Identity preserves the initial state as a baseline.</p><div id="rollouts-legend" class="legend"></div><div class="plot"><canvas id="rollouts" role="img" aria-label="Latent rollout evaluation"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Delta breakdown <span>pixels · evaluation</span></h3><p>Totals across all games and levels in each evaluation. Invented, missed, wrong-color and correct changes; absent if not recorded.</p><div id="changes-legend" class="legend"></div><div class="plot"><canvas id="changes" role="img" aria-label="Delta error types"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Latent diversity <span>mean standard deviation</span></h3><p>Average per-level standard deviations, weighted by evaluated transitions. This is not global latent deviation and does not alone establish good prediction.</p><div id="spread-legend" class="legend"></div><div class="plot"><canvas id="spread" role="img" aria-label="Latent diversity"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Total objective <span>training</span></h3><p>Weighted sum of losses in the selected run.</p><div id="total-legend" class="legend"></div><div class="plot"><canvas id="total" role="img" aria-label="Total loss"></canvas><output class="tooltip" hidden></output></div></article>
+      <article class="chart-card"><h3>Speed <span>actions/s</span></h3><p>Average recorded by the process, including evaluation and saving pauses.</p><div id="speed-legend" class="legend"></div><div class="plot"><canvas id="speed" role="img" aria-label="Training speed"></canvas><output class="tooltip" hidden></output></div></article>
     </div>
     <p id="resources" class="muted"></p>
   </section>
   <section id="panel-behavior" role="tabpanel" aria-labelledby="tab-behavior" hidden>
     <p id="behavior-status" class="muted"></p>
     <div class="metrics summary-metrics">
-      <article><h2>Éxito del agente</h2><strong id="behavior-win">—</strong><small id="behavior-wins"></small></article>
-      <article id="behavior-baseline-card"><h2>Referencia al azar</h2><strong id="behavior-random">—</strong><small id="behavior-random-note">Misma fase y nivel</small></article>
-      <article id="behavior-ms-card"><h2>Coste de decidir</h2><strong id="behavior-ms">—</strong><small>ms / acción · evaluación</small></article>
-      <article id="behavior-tps-card"><h2>Velocidad de evaluación</h2><strong id="behavior-tps">—</strong><small>acciones/s · separadas del aprendizaje</small></article>
+      <article><h2>Agent success</h2><strong id="behavior-win">—</strong><small id="behavior-wins"></small></article>
+      <article id="behavior-baseline-card"><h2>Random baseline</h2><strong id="behavior-random">—</strong><small id="behavior-random-note">Same phase and level</small></article>
+      <article id="behavior-ms-card"><h2>Decision cost</h2><strong id="behavior-ms">—</strong><small>ms / action · evaluation</small></article>
+      <article id="behavior-tps-card"><h2>Evaluation speed</h2><strong id="behavior-tps">—</strong><small>actions/s · separate from training</small></article>
     </div>
     <div class="charts">
-      <article id="behavior-wins-card" class="chart-card"><h3>Éxito en el juego <span>% · evaluación</span></h3><p>Series separadas por política, fase y nivel. La pestaña Evaluaciones contiene todos los resultados.</p><div id="wins-legend" class="legend"></div><div class="plot"><canvas id="wins" role="img" aria-label="Éxito del agente"></canvas><output class="tooltip" hidden></output></div></article>
-      <article id="behavior-loss-card" class="chart-card"><h3>Progreso y valor <span>pérdidas</span></h3><p>Eventos, valor del estado V y valor de la acción Q. No son porcentajes de error ni una imagen objetivo.</p><div id="behaviorLoss-legend" class="legend"></div><div class="plot"><canvas id="behaviorLoss" role="img" aria-label="Pérdidas de progreso y valor"></canvas><output class="tooltip" hidden></output></div></article>
-      <article id="behavior-actor-card" class="chart-card"><h3>Actor y crítico <span>pérdidas</span></h3><p>Imitación del planner, política y crítico, sólo cuando se entrenan en esta ejecución.</p><div id="actor-legend" class="legend"></div><div class="plot"><canvas id="actor" role="img" aria-label="Pérdidas de actor y crítico"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-wins-card" class="chart-card"><h3>Game success <span>% · evaluation</span></h3><p>Separate series by policy, phase and level. Evaluations contains all results.</p><div id="wins-legend" class="legend"></div><div class="plot"><canvas id="wins" role="img" aria-label="Agent success"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-loss-card" class="chart-card"><h3>Progress and value <span>losses</span></h3><p>Events, state value V and action value Q. These are not error percentages or a target image.</p><div id="behaviorLoss-legend" class="legend"></div><div class="plot"><canvas id="behaviorLoss" role="img" aria-label="Progress and value losses"></canvas><output class="tooltip" hidden></output></div></article>
+      <article id="behavior-actor-card" class="chart-card"><h3>Actor and critic <span>losses</span></h3><p>Planner imitation, policy and critic, only when trained in this run.</p><div id="actor-legend" class="legend"></div><div class="plot"><canvas id="actor" role="img" aria-label="Actor and critic losses"></canvas><output class="tooltip" hidden></output></div></article>
     </div>
   </section>
   <section id="panel-evaluations" role="tabpanel" aria-labelledby="tab-evaluations" hidden>
-    <p class="muted">Sólo resultados de la ejecución seleccionada. Las acciones de evaluación no se suman a las de aprendizaje. Las fases se muestran por separado.</p>
-    <h2>Predictor y decoder</h2>
-    <div class="table-scroll"><table><thead><tr><th>Fase</th><th>Juego / nivel</th><th>Acción de aprendizaje</th><th>Error predictor</th><th>Error decoder</th><th>MSE latente</th><th>Transiciones</th></tr></thead><tbody id="world-table"></tbody></table></div>
-    <h2>Planner y actor</h2>
-    <div class="table-scroll"><table><thead><tr><th>Fase</th><th>Juego / nivel</th><th>Política</th><th>Victorias</th><th>Éxito · intervalo 95%</th><th>Acciones de evaluación</th><th>Acciones / victoria</th><th>ms / decisión</th></tr></thead><tbody id="behavior-table"></tbody></table></div>
+    <p class="muted">Only results from the selected run. Evaluation actions are not added to training actions. Phases are shown separately.</p>
+    <h2>Predictor and decoder</h2>
+    <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Game / level</th><th>Training action</th><th>Predictor error</th><th>Decoder error</th><th>Latent MSE</th><th>Transitions</th></tr></thead><tbody id="world-table"></tbody></table></div>
+    <h2>Planner and actor</h2>
+    <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Game / level</th><th>Policy</th><th>Wins</th><th>Success · 95% interval</th><th>Evaluation actions</th><th>Actions / win</th><th>ms / decision</th></tr></thead><tbody id="behavior-table"></tbody></table></div>
   </section>
-  <footer id="retention">Sólo datos de los logs disponibles; el panel no crea un historial adicional.</footer>
+  <footer id="retention">Only data from available logs; the dashboard does not create additional history.</footer>
 </main>
 </body>
 </html>

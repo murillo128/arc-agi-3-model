@@ -27,7 +27,7 @@ async function dashboard() {
   const context=vm.createContext({console,window:{devicePixelRatio:1,addEventListener(){}},
     document:{getElementById:id=>nodes.get(id),createElement:element,createDocumentFragment:()=>element('fragment')},
     setTimeout(fn){state.polling=fn;},setInterval(fn){state.interval=fn;return 1;},clearInterval(){state.interval=null;},
-    fetch:async(url,options)=>{if(options?.method==='POST'){state.posts.push(options);return {ok:true,json:async()=>({id:'request-1',message:'Pendiente'})};}
+    fetch:async(url,options)=>{if(options?.method==='POST'){state.posts.push(options);return {ok:true,json:async()=>({id:'request-1',message:'Pending'})};}
       state.gets.push(options);if(state.offline)throw Error('offline');return {ok:true,status:state.responseStatus,headers:{get:()=>state.etag},
         json:async()=>{if(state.invalidJSON)throw SyntaxError('invalid JSON');return structuredClone(state.report);}};}});
   const text=id=>nodes.get(id).textContent;
@@ -42,25 +42,25 @@ async function dashboard() {
 
 test('live, pin, selectors, controls and missing data',async()=>{
   const {nodes,state,text,click,change,input,flush}=await dashboard();
-  assert.equal(text('gradient-value'),'0');assert.equal(text('matrix-state'),'Aprende');assert.equal(text('update-value'),'0,2 %');
-  assert.match(text('event-label'),/Actualización 4/);
-  state.offline=true;await state.polling();assert.equal(text('optimization-status'),'Sin conexión');
-  state.offline=false;state.responseStatus=304;await state.polling();assert.equal(text('optimization-status'),'Midiendo entrenamiento');state.responseStatus=200;
-  input('event-scrubber',0);assert.equal(text('matrix-state'),'Congelada en este paso');assert.equal(text('gradient-value'),'—');
+  assert.equal(text('gradient-value'),'0');assert.equal(text('matrix-state'),'Learning');assert.equal(text('update-value'),'0.2 %');
+  assert.match(text('event-label'),/Update 4/);
+  state.offline=true;await state.polling();assert.equal(text('optimization-status'),'Disconnected');
+  state.offline=false;state.responseStatus=304;await state.polling();assert.equal(text('optimization-status'),'Measuring training');state.responseStatus=200;
+  input('event-scrubber',0);assert.equal(text('matrix-state'),'Frozen at this step');assert.equal(text('gradient-value'),'—');
   state.report.updated_at=2;state.report.tick=5;state.report.events.push({...state.report.events[1],id:5});await state.polling();
-  assert.match(text('event-label'),/Actualización 1/,'pinned snapshot does not drift as live history advances');
-  nodes.get('live').checked=true;nodes.get('live').listeners.change();assert.match(text('event-label'),/Actualización 5/);
+  assert.match(text('event-label'),/Update 1/,'pinned snapshot does not drift as live history advances');
+  nodes.get('live').checked=true;nodes.get('live').listeners.change();assert.match(text('event-label'),/Update 5/);
   click('tab-path');assert.equal(nodes.get('pulse').hidden,true);assert.equal(text('reference-value'),'1');assert.equal(text('coverage-value'),'25 %');
   input('point-scrubber',0);assert.equal(text('reference-value'),'4');assert.equal(text('coverage-value'),'—');
   click('view-2d');assert.equal(nodes.get('view-2d')['aria-pressed'],'true');
-  click('tab-memory');assert.equal(text('probe-game'),'<game> / 1');assert.match(text('probe-window'),/480–511 · 16 \+ 16/);assert.match(text('probe-comparison'),/reduce la pérdida/);
+  click('tab-memory');assert.equal(text('probe-game'),'<game> / 1');assert.match(text('probe-window'),/480–511 · 16 \+ 16/);assert.match(text('probe-comparison'),/reduces the loss/);
   nodes.get('probe-session').value='2';click('capture-probe');await flush();assert.deepEqual(JSON.parse(state.posts[0].body),{operation:'probe',session:2});assert.equal(state.posts[0].headers['X-Optimization-Token'],'test-token');
   click('tab-pulse');change('module','encoder');assert.equal(text('matrix-title'),'<unsafe>');assert.equal(text('gradient-value'),'—');
   click('capture-matrix');await flush();assert.deepEqual(JSON.parse(state.posts[1].body),{operation:'matrix',matrix:'encoder.<unsafe>'});
   click('tab-memory');assert.equal(text('probe-loss'),'2');
   state.report.updated_at=3;state.report.probe={status:'unavailable',reason:'No supervised transition'};await state.polling();
   assert.equal(text('probe-loss'),'—');assert.equal(text('probe-comparison'),'');
-  state.report={status:'waiting',message:'No hay registro'};await state.polling();assert.equal(nodes.get('pulse').hidden,true);assert.equal(nodes.get('capture-probe').disabled,true);assert.equal(text('event-label'),'Sin capturas');
+  state.report={status:'waiting',message:'No hay registro'};await state.polling();assert.equal(nodes.get('pulse').hidden,true);assert.equal(nodes.get('capture-probe').disabled,true);assert.equal(text('event-label'),'No captures');
   click('tab-path');assert.equal(nodes.get('path').hidden,true,'missing run must not reveal stale metrics on tab selection');
 });
 
@@ -68,33 +68,33 @@ test('a retained trajectory point never borrows an evicted optimizer capture',as
   const {nodes,state,text,click,change,input}=await dashboard();
   click('tab-path');input('point-scrubber',1); // batch 2 has a point, but no retained optimizer event.
   assert.equal(text('point-title'),'Batch 2');
-  assert.match(text('event-label'),/Batch 2.*captura no disponible/);
+  assert.match(text('event-label'),/Batch 2.*capture unavailable/);
   click('tab-pulse');
-  assert.equal(text('matrix-state'),'Captura no disponible');
+  assert.equal(text('matrix-state'),'Capture unavailable');
   for(const id of ['gradient-value','update-value','learning-rate','clip-value','alignment-value'])assert.equal(text(id),'—');
   for(const id of ['gradient-map','update-map','update-histogram']){
-    assert(nodes.get(id).draws.some(([op,label])=>op==='fillText' && /no capturad[oa]/.test(label)),`${id} must explicitly lack detail`);
+    assert(nodes.get(id).draws.some(([op,label])=>op==='fillText' && /not captured/.test(label)),`${id} must explicitly lack detail`);
     assert(!nodes.get(id).draws.some(([op])=>op==='fillRect'),`${id} must not show another event's measurements`);
   }
-  change('module','encoder');assert.equal(text('matrix-state'),'Captura no disponible');
+  change('module','encoder');assert.equal(text('matrix-state'),'Capture unavailable');
   change('module','dynamics');state.report.updated_at=2;await state.polling();
-  assert.match(text('event-label'),/Batch 2.*captura no disponible/,'pin survives a live refresh');
+  assert.match(text('event-label'),/Batch 2.*capture unavailable/,'pin survives a live refresh');
   click('tab-path');input('point-scrubber',3);click('tab-pulse');
-  assert.match(text('event-label'),/Actualización 4.*batch 4/);assert.equal(text('gradient-value'),'0');
+  assert.match(text('event-label'),/Update 4.*batch 4/);assert.equal(text('gradient-value'),'0');
   click('tab-path');input('point-scrubber',1);nodes.get('live').checked=true;nodes.get('live').listeners.change();
-  click('tab-pulse');assert.equal(text('matrix-state'),'Aprende');
+  click('tab-pulse');assert.equal(text('matrix-state'),'Learning');
 });
 
 test('training batch loss is labeled separately from fixed reference loss',async()=>{
   const {state,text,click}=await dashboard();
   click('tab-path');
-  assert.equal(text('reference-label'),'NLL visual de referencia');
+  assert.equal(text('reference-label'),'Reference visual NLL');
   state.report.updated_at=99;
   state.report.reference_source='training_pre_update';
   await state.polling();
-  assert.equal(text('reference-label'),'NLL visual antes de aprender');
-  assert.match(text('reference-source'),/Datos nuevos de cada batch/);
-  assert.match(text('reference-source'),/los pesos del punto son posteriores/);
+  assert.equal(text('reference-label'),'Visual NLL before learning');
+  assert.match(text('reference-source'),/New data from each batch/);
+  assert.match(text('reference-source'),/weights at each point are from after the update/);
 });
 
 test('temporal optimization curves expose EMA and persistent actual-value guides, including log-scale memory',async()=>{
@@ -141,7 +141,7 @@ test('malformed responses clear all live/pinned state and recover without cachin
     assert.equal(text('gradient-value'),'0');
     if(corrupt)corrupt(state.report);else state.invalidJSON=true;
     state.etag='"bad"';await state.polling();
-    assert.equal(text('optimization-status'),'Datos no válidos');assert.equal(text('event-label'),'Sin capturas');
+    assert.equal(text('optimization-status'),'Invalid data');assert.equal(text('event-label'),'No captures');
     assert.equal(text('gradient-value'),'—');assert.equal(state.interval,null,'discard invalidated playback');
     assert.equal(nodes.get('capture-probe').disabled,true);
     for(const id of ['pulse','path','memory']){click(`tab-${id}`);assert.equal(nodes.get(id).hidden,true);}
@@ -149,7 +149,7 @@ test('malformed responses clear all live/pinned state and recover without cachin
     state.report=structuredClone(valid);state.invalidJSON=false;state.etag='"good"';await state.polling();
     assert.equal(state.gets.at(-1).headers['If-None-Match'],undefined,'invalid data must not retain an ETag');
     change('module','dynamics');click('tab-pulse');
-    assert.equal(text('optimization-status'),'Midiendo entrenamiento');assert.equal(text('gradient-value'),'0');
+    assert.equal(text('optimization-status'),'Measuring training');assert.equal(text('gradient-value'),'0');
     assert.equal(nodes.get('pulse').hidden,false);assert.equal(nodes.get('capture-probe').disabled,false);
   }
 });

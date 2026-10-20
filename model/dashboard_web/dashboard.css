@@ -393,3 +393,61 @@ body .metrics small { line-height: 1.6; }
 
 .chart-help { color: var(--muted, #9bb0ac); font-size: 11px; line-height: 1.6; margin: 0 0 16px; }
 .series-guide { pointer-events: none; }
+
+/* One navigation row, with a compact sticky run summary. */
+.dashboard-header {
+  position: sticky; top: 0; z-index: 30;
+  padding: 16px max(28px, calc((100vw - 1504px) / 2)) 0;
+  background: #0e1819f5; border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+}
+body .compact-header { gap: 24px; margin: 0 0 12px; }
+.compact-header .app-brand { padding-right: 24px; border-right: 1px solid var(--border); font-size: 24px; }
+.compact-header > :nth-child(2) { flex: 1; min-width: 0; }
+body .compact-header h1 { font-size: 21px; letter-spacing: -.025em; margin: 0; }
+.compact-header .eyebrow { margin: 0 0 4px; font-size: 9px; }
+.compact-header .connection { flex: 0 1 auto; width: auto; padding: 0; font-size: 11px; }
+.compact-header .connection p { margin: 4px 0; }
+.compact-header .run-context { color: var(--mint); font-size: 11px; }
+.compact-header .gpu-status { font-size: 10px; }
+body .compact-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+body .compact-metrics article { padding: 12px 18px; background: transparent; border: 0; border-right: 1px solid var(--border); border-radius: 0; box-shadow: none; min-width: 0; }
+body .compact-metrics article:last-child { border-right: 0; }
+body .compact-metrics h2 { font-size: 10px; margin: 0 0 5px; padding: 0; }
+body .compact-metrics h2::before { display: none; }
+body .compact-metrics strong { font-size: clamp(17px, 1.65vw, 25px); line-height: 1.2; }
+body .compact-metrics small { display: block; font-size: 10px; line-height: 1.5; margin-top: 4px; }
+.dashboard-tabs, .local-tabs { display: flex; align-items: stretch; gap: 14px; }
+.dashboard-tabs { overflow-x: auto; scrollbar-width: thin; margin-top: 8px; }
+.local-tabs { flex: 0 0 auto; }
+.dashboard-tabs > a, .dashboard-tabs button {
+  flex: 0 0 auto; display: flex; align-items: center; white-space: nowrap;
+  background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+  padding: 13px 4px; margin: 0; color: var(--muted); text-decoration: none;
+  font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.dashboard-tabs > a:first-of-type { margin-left: auto; }
+.dashboard-tabs button[aria-selected="true"], .dashboard-tabs a[aria-current="page"] { color: var(--mint); border-bottom-color: var(--mint); }
+.dashboard-tabs a:hover, .dashboard-tabs button:hover { color: var(--text); background: #192724; }
+.dashboard-tabs :focus-visible { outline: 2px solid var(--mint); outline-offset: -3px; }
+.run-details { margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--inset); }
+.run-details summary { cursor: pointer; font-size: 12px; color: var(--text); }
+.run-details summary .muted { margin-left: 16px; font-size: 11px; }
+.run-details p { font-size: 12px; line-height: 1.7; margin: 10px 0 0; }
+.page-context p { margin: 0; }
+.game-list { overflow-wrap: anywhere; line-height: 1.8; color: var(--muted); font-size: 11px; }
+@media (max-width: 720px) {
+  .dashboard-header { padding: 10px 16px 0; }
+  body .compact-header { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px; }
+  .compact-header .app-brand { font-size: 20px; padding-right: 14px; }
+  body .compact-header h1 { font-size: 17px; }
+  .compact-header .eyebrow { display: none; }
+  .compact-header .connection { text-align: right; margin-left: auto; }
+  body .compact-metrics { display: flex; overflow-x: auto; }
+  body .compact-metrics article { flex: 1 0 140px; padding: 10px 12px; }
+  body .compact-metrics strong { font-size: 19px; }
+  .dashboard-tabs, .local-tabs { gap: 12px; }
+  .dashboard-tabs { margin-top: 6px; }
+  .dashboard-tabs > a, .dashboard-tabs button { min-height: 44px; padding: 10px 3px; }
+  .run-details summary .muted { display: block; margin: 6px 0 0 15px; }
+}

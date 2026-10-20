@@ -94,7 +94,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
     undefined, 'missing diversity must not silently exclude an evaluated level');
   assert.equal(nodes.get('world-table').children.length, 3, 'per-level detail remains available in the evaluation table');
   assert.equal(nodes.get('behavior-table').children.length, 1); // explicit empty row
-  assert.match(nodes.get('behavior-table').children[0].children[0].textContent, /Sin evaluaciones/);
+  assert.match(nodes.get('behavior-table').children[0].children[0].textContent, /No evaluations/);
   // Tabs preserve the same selected execution and remain keyboard-operable native buttons.
   nodes.get('tab-behavior').listeners.click();
   assert.equal(nodes.get('panel-world').hidden, true);
@@ -107,27 +107,27 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   data.campaign.source.age_seconds = 177;
   await vm.runInContext('poll()', context);
   assert.equal(text('actions'), '10', 'evaluation does not increment training actions');
-  assert.equal(text('behavior-win'), '43,75 %');
-  assert.match(text('behavior-wins'), /7\/16.*parcial/);
-  assert.match(text('behavior-status'), /progreso por bloques de partidas/);
-  assert.doesNotMatch(text('connection'), /sin datos recientes/);
+  assert.equal(text('behavior-win'), '43.75 %');
+  assert.match(text('behavior-wins'), /7\/16.*partial/);
+  assert.match(text('behavior-status'), /progress by episode blocks/);
+  assert.doesNotMatch(text('connection'), /no recent data/);
   assert.equal(nodes.get('connection').className, '');
   assert.equal(nodes.get('behavior-loss-card').hidden, true);
   assert.equal(nodes.get('behavior-actor-card').hidden, true);
   assert.equal(nodes.get('behavior-wins-card').hidden, true);
-  assert.match(text('speed-note'), /no hay TPS de aprendizaje/);
+  assert.match(text('speed-note'), /no training TPS/);
   Object.assign(data.campaign.progress.evaluation, {current_episode: 17, total_episodes: 32,
     episode_actions: 24, episode_budget: 128, seconds: 194, game: 'si01-v1', pair_index: 6, pair_count: 10});
   data.campaign.source.age_seconds = 1;
   await vm.runInContext('poll()', context);
   assert.equal(nodes.get('evaluation-progress').hidden, false);
-  assert.match(text('evaluation-progress'), /si01-v1.*bloque 6\/10.*Partida 17\/32.*24\/128.*194 s/);
-  assert.match(text('connection'), /progreso por acciones/);
-  assert.match(text('behavior-status'), /cada 2 s/);
+  assert.match(text('evaluation-progress'), /si01-v1.*block 6\/10.*Episode 17\/32.*24\/128.*194 s/);
+  assert.match(text('connection'), /progress per action/);
+  assert.match(text('behavior-status'), /every 2 s/);
   assert.equal(text('game'), 'si01-v1');
   data.campaign.source.age_seconds = 70;
   await vm.runInContext('poll()', context);
-  assert.match(text('connection'), /sin datos recientes/);
+  assert.match(text('connection'), /no recent data/);
   assert.equal(nodes.get('connection').className, 'warn');
   const old = nodes.get('execution-select').options.find(o => o.textContent.includes('world_reference'));
   ui.change('execution-select', old.value);
@@ -135,7 +135,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('updates'), '50');
   assert.equal(text('prediction'), '50 %');
   assert.equal(text('behavior-win'), '25 %');
-  assert.match(text('connection'), /Registro anterior/);
+  assert.match(text('connection'), /Previous record/);
   assert.equal(nodes.get('evaluation-progress').hidden, true);
   assert.equal(vm.runInContext('charts.latent.series[0].points[0].y', context), .7);
   assert.equal(nodes.get('world-table').children.length, 1);
@@ -149,7 +149,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('prediction'), '—');
   assert.equal(text('behavior-win'), '—');
   assert.equal(vm.runInContext('charts.latent.series[0].points.length', context), 0);
-  assert.match(text('connection'), /Inicializando/);
+  assert.match(text('connection'), /Initializing/);
   data.campaign.phase = 'campaign_error'; data.campaign.reason = 'expected failure';
   await vm.runInContext('poll()', context);
   assert.match(text('notice'), /expected failure/);
@@ -157,7 +157,7 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   data.campaign.report = {learning_probe: {available: true, status: 'running'}};
   await vm.runInContext('poll()', context);
   assert.equal(nodes.get('experiment-notice').hidden, false);
-  assert.match(text('experiment-summary'), /Ensayo de aprendizaje en curso/);
+  assert.match(text('experiment-summary'), /Learning trial in progress/);
   assert.match(text('notice'), /expected failure/, 'an active diagnostic does not hide the old failure');
   data.campaign.report.learning_probe.status = 'complete';
   await vm.runInContext('poll()', context);
@@ -176,9 +176,9 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   assert.equal(text('actions'), '500');
   assert.equal(text('prediction'), '—');
   assert.equal(vm.runInContext('charts.delta.series.length', context), 0);
-  assert.equal(text('behavior-win'), '37,5 %', 'latest aggregate learned policy, not per-level or initial');
+  assert.equal(text('behavior-win'), '37.5 %', 'latest aggregate learned policy, not per-level or initial');
   assert.match(text('behavior-wins'), /12\/32.*Final/);
-  assert.equal(text('behavior-random'), '12,5 %', 'baseline uses same phase and level');
+  assert.equal(text('behavior-random'), '12.5 %', 'baseline uses same phase and level');
   assert.equal(nodes.get('behavior-table').children.length, 5, 'phases and levels remain explicitly labeled in table');
   assert.equal(vm.runInContext('charts.behaviorLoss.series[0].points[0].y', context), .2);
   // Pending evaluation cannot borrow a final/random/initial/per-level result.
@@ -187,22 +187,22 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   data.behavior.progress.evaluation = {split: 'development', policy: 'q', episodes: 16, wins: 4};
   data.behavior.evaluations = [evaluation('final', 'random', null, 2, 16), evaluation('final', 'q', null, 0, 16, 'initial')];
   await vm.runInContext('poll()', context);
-  assert.equal(text('behavior-win'), 'En curso');
+  assert.equal(text('behavior-win'), 'In progress');
   assert.equal(text('behavior-random'), '—');
   assert.equal(text('behavior-ms'), '—');
   data.behavior.phase = 'behavior_fit';
   await vm.runInContext('poll()', context);
-  assert.equal(text('behavior-win'), 'Pendiente');
+  assert.equal(text('behavior-win'), 'Pending');
   data.behavior.phase = 'behavior_finished';
   await vm.runInContext('poll()', context);
   assert.equal(text('behavior-win'), '—');
   data.behavior.source.available = false;
   await vm.runInContext('poll()', context);
-  assert.match(text('connection'), /Log no disponible/);
+  assert.match(text('connection'), /Log unavailable/);
   // Bounded history must not replace an explicit unavailable selection by the live run.
   delete data.behavior;
   await vm.runInContext('poll()', context);
-  assert.match(text('connection'), /Registro no disponible/);
+  assert.match(text('connection'), /Record unavailable/);
   assert.equal(text('actions'), '—');
   // Current-source fallback without a campaign is still a complete world-only dashboard.
   const onlyWorld = {...data}; delete onlyWorld.campaign;
@@ -216,8 +216,8 @@ const data = {phase: 'stopped', reason: 'interrupted', source: {...source, updat
   ];
   const single = await dashboard(onlyWorld);
   assert.equal(single.text('actions'), '900');
-  assert.match(single.text('connection'), /detenido/i);
-  assert.match(single.text('notice'), /interrupción/);
+  assert.match(single.text('connection'), /stopped/i);
+  assert.match(single.text('notice'), /interruption/);
   assert.equal(vm.runInContext('JSON.stringify(charts.changes.series.map(s => s.points.map(p => p.y)))', single.context),
     '[[12,1],[23,2],[34,3],[45,4]]', 'legacy per-level records aggregate only within each evaluation');
   assert.equal(vm.runInContext('charts.spread.series[0].points.length', single.context), 2);
