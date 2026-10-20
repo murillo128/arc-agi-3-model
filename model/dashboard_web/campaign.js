@@ -231,21 +231,24 @@ function renderLearningProbe(probe) {
     add('text', {x: 42, y: 240, fill: '#9bb0ac', 'font-size': 12}, '0');
     add('text', {x: 525, y: 240, fill: '#9bb0ac', 'font-size': 12, 'text-anchor': 'end'}, `${fmt(max)} ${unit}`);
     const x=v=>42+v/max*483, y=v=>215-v*2;
-    for (const s of series) {
+    const layers=series.map(()=>[]);
+    for (const [i,s] of series.entries()) {
+      const addSeries=(tag,attrs)=>{const node=add(tag,attrs);layers[i].push({node});return node;};
       let segment=[];
-      const flush=()=>{if(segment.length)add('polyline',{points:segment.join(' '),fill:'none',stroke:s.color,'stroke-width':2});segment=[];};
+      const flush=()=>{if(segment.length)addSeries('polyline',{points:segment.join(' '),fill:'none',stroke:s.color,'stroke-width':2});segment=[];};
       for(const p of s.points){
         if(!ChartTools.valid(p)){flush();continue;}
         segment.push(`${x(p[0])},${y(p[1])}`);
-        add('circle',{cx:x(p[0]),cy:y(p[1]),r:3,fill:s.color});
+        addSeries('circle',{cx:x(p[0]),cy:y(p[1]),r:3,fill:s.color});
       }
       flush();
-      svg.append(...ChartTools.svgEMA(s.points,x,y,s.color));
+      for(const node of ChartTools.svgEMA(s.points,x,y,s.color)){layers[i].push({node,ema:true});svg.append(node);}
     }
     const guide=add('g',{class:'series-guide','pointer-events':'none'});
     const updateGuide=()=>{
       guide.replaceChildren();
       const selected=series.find(s=>s.label===ChartTools.selected(id)),last=selected?.points.findLast(ChartTools.valid);
+      ChartTools.svgFocus(layers,series.indexOf(selected));
       if(last)ChartTools.svgGuide(guide,{left:42,right:525,y:y(last[1]),lastX:x(last[0]),color:selected.color,text:`${fmt(last[1],2)} %`});
     };
     ChartTools.legend(legend,id,series.map(s=>({key:s.label,text:`${s.label}: ${fmt(s.points.findLast(ChartTools.valid)[1],2)} %`,color:s.color})),updateGuide);

@@ -40,16 +40,18 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
     svg.append(element('line', {x1: 50, x2: 680, y1: py, y2: py, stroke: '#30443e'}));
     svg.append(element('text', {x: 42, y: py + 4, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, number(max*i/4, max<.1?4:1)));
   }
-  data.forEach(({s,points,color})=>{
+  const layers=data.map(()=>[]);
+  data.forEach(({s,points,color},i)=>{
+    const append=(node,ema=false)=>{layers[i].push({node,ema});svg.append(node);};
     let segment=[];
-    const flush=()=>{if(segment.length)svg.append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color,'stroke-width':2}));segment=[];};
+    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color,'stroke-width':2}));segment=[];};
     for(const p of points) {
       if(!ChartTools.valid(p)){flush();continue;}
       segment.push(`${x(p[0])},${y(p[1])}`);
       const dot=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2.5,fill:color});
-      dot.append(element('title',{},`${s.label}: ${number(p[1],4)} · batch ${p[0]} · action ${number(p[2]?.actions,0)}`));svg.append(dot);
+      dot.append(element('title',{},`${s.label}: ${number(p[1],4)} · batch ${p[0]} · action ${number(p[2]?.actions,0)}`));append(dot);
     }
-    flush();svg.append(...ChartTools.svgEMA(points,x,y,color));
+    flush();ChartTools.svgEMA(points,x,y,color).forEach(node=>append(node,true));
   });
   limits.forEach(({value,label,color})=>{
     const line=element('line',{x1:50,x2:680,y1:y(value),y2:y(value),stroke:color,'stroke-width':1.5,'stroke-dasharray':'5 5'});
@@ -60,6 +62,7 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
   const guide=element('g',{class:'series-guide','pointer-events':'none'});svg.append(guide);
   updateGuide=()=>{
     const selected=data.find(d=>d.s.label===ChartTools.selected(id));guide.replaceChildren();
+    ChartTools.svgFocus(layers,data.indexOf(selected));
     if(selected?.last)ChartTools.svgGuide(guide,{left:50,right:680,y:y(selected.last.value),lastX:x(selected.last.row.batch),
       color:selected.color,text:number(selected.last.value,selected.s.digits??4)});
   };

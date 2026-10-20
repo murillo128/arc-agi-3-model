@@ -4,6 +4,17 @@ globalThis.ChartTools = (() => {
   const alpha = .1, hint = 'Thin line: EMA (α = 0.1). Select a legend label to pin the latest raw value.';
   const states = new Map();
   const valid = p => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]);
+  function focusStyle(selected, key, opacity=1) {
+    const active = selected != null && selected !== -1, highlighted = active && selected === key;
+    return {opacity: !active ? opacity : highlighted ? 1 : opacity*.2, emaWidth: highlighted ? 2.5 : .75};
+  }
+  function svgFocus(layers, selected) {
+    layers.forEach((layer, i) => layer.forEach(({node, opacity=1, ema=false}) => {
+      const style = focusStyle(selected, i, opacity);
+      node.setAttribute('opacity', style.opacity);
+      if (ema) node.setAttribute('stroke-width', style.emaWidth);
+    }));
+  }
   function ema(points) {
     let previous = null;
     return points.map(p => {
@@ -33,8 +44,8 @@ globalThis.ChartTools = (() => {
     }
     flush(); return nodes;
   }
-  function canvasEMA(ctx, points, x, y, color) {
-    ctx.strokeStyle = color; ctx.lineWidth = .75; ctx.beginPath();
+  function canvasEMA(ctx, points, x, y, color, width=.75) {
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
     let started = false;
     for (const p of ema(points)) {
       if (!valid(p)) { started = false; continue; }
@@ -92,6 +103,6 @@ globalThis.ChartTools = (() => {
     });
     state.sync();
   }
-  return {alpha, hint, ema, valid, svgEMA, canvasEMA, svgGuide, canvasGuide, legend,
+  return {alpha, hint, ema, valid, focusStyle, svgFocus, svgEMA, canvasEMA, svgGuide, canvasGuide, legend,
     selected:id=>states.get(id)?.selected??null};
 })();

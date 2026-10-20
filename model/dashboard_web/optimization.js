@@ -93,7 +93,7 @@
     g.strokeStyle=stroke; g.lineWidth=1.8; g.beginPath(); let started=false;
     rows.forEach((row, i) => { const value=key(row); if (!Number.isFinite(value)) { started=false; return; } if (!started) g.moveTo(x(i), y(value)); else g.lineTo(x(i), y(value)); started=true; }); g.stroke();
     rows.forEach((row,i) => { const value=key(row); if (!Number.isFinite(value)) return; g.beginPath(); g.arc(x(i),y(value),i===selected?4:2.4,0,2*Math.PI); g.fillStyle=stroke; g.fill(); });
-    ChartTools.canvasEMA(g,points,x,y,stroke);
+    ChartTools.canvasEMA(g,points,x,y,stroke,ChartTools.focusStyle(ChartTools.selected(id),label).emaWidth);
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText(String(rows[0].batch ?? rows[0].id ?? rows[0].t),left,h-10);
     g.textAlign='right'; g.fillText(String(rows.at(-1).batch ?? rows.at(-1).id ?? rows.at(-1).t),right,h-10);
     if(ChartTools.selected(id)===label&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:stroke,text:sci(last[1])});
@@ -260,7 +260,7 @@
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms)){active=false;return;}if(active)g.lineTo(x(row.t),y(row.rms));else g.moveTo(x(row.t),y(row.rms));active=true;});g.stroke();
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms))return;g.fillStyle=row.rms===0?C.amber:C.mint;g.beginPath();g.arc(x(row.t),y(row.rms),3,0,2*Math.PI);g.fill();});
     const points=p.steps.map(row=>[row.t,row.rms]),last=points.findLast(ChartTools.valid);
-    ChartTools.canvasEMA(g,points,x,y,C.mint);
+    ChartTools.canvasEMA(g,points,x,y,C.mint,ChartTools.focusStyle(ChartTools.selected('memory-gradient'),'rms').emaWidth);
     ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[{key:'rms',text:`RMS ∂L / ∂h: ${sci(last?.[1])}`,color:C.mint,disabled:!last}],()=>renderMemory(s));
     g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Truncation · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Loss · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('Final RMS ∂L / ∂h · log scale · zeros in amber at the floor',left,14);
     if(ChartTools.selected('memory-gradient')&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:C.mint,text:sci(last[1])});

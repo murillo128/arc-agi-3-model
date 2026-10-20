@@ -107,7 +107,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   series.forEach((s,i)=>{
     const colorIndex=s.colorIndex??i%4;
     const color=s.muted?'#94a7aa':colors[colorIndex], opacity=s.faint ? .2 : s.muted ? .45 : 1;
-    const append=node=>{layers[i].push({node,opacity});svg.append(node);};
+    const append=(node,ema=false)=>{layers[i].push({node,opacity,ema});svg.append(node);};
     let segment=[];
     const flush=()=>{if(segment.length)append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
     for(const p of s.points) {
@@ -118,7 +118,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
       circle.append(element('title',{},`${s.name}: ${fmt(p[1],4)} · action ${p[0]}${p[2]?' · '+p[2]:''}`));append(circle);
     }
     flush();
-    if(!s.pointsOnly)for(const node of ChartTools.svgEMA(s.points,x,y,color,opacity))append(node);
+    if(!s.pointsOnly)for(const node of ChartTools.svgEMA(s.points,x,y,color,opacity))append(node,true);
   });
   if(markers.length) {
     for(const m of markers) {const mark=element('rect',{x:x(m.start),y:height-35,width:Math.max(2,x(m.end)-x(m.start)),height:5,fill:'#94a7aa'});mark.append(element('title',{},`No real or predicted changes · actions ${m.start}–${m.end}`));svg.append(mark);}
@@ -127,8 +127,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
   const guide=element('g',{'class':'series-guide','pointer-events':'none','aria-hidden':'true'});svg.append(guide);
   state.update=()=>{
     const selected=state.hovered??state.focused??labels.find(l=>l.key===state.selected)?.index, last=lastPoints[selected];
-    layers.forEach((layer,i)=>layer.forEach(({node,opacity})=>node.setAttribute('opacity',
-      !last?opacity:i===selected?1:opacity*.2)));
+    ChartTools.svgFocus(layers,last?selected:null);
     labels.forEach((label,i)=>{
       legend.children[i].setAttribute('data-highlighted',String(!!last&&label.index===selected));
       if(label.index!==undefined)legend.children[i].setAttribute('aria-pressed',String(label.key===state.selected));
