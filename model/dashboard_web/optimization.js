@@ -333,7 +333,7 @@
     eventIndex=Math.min(eventIndex,Math.max(0,s.events.length-1));pointIndex=Math.min(pointIndex,Math.max(0,s.points.length-1));
     text('reference-label',s.reference_source==='training_pre_update'?'Visual NLL before learning':'Reference visual NLL');
     const lossSource=s.reference_source==='training_pre_update'
-      ? 'Visual NLL uses different training data in each batch and is measured before learning; each point records weights after that batch.'
+      ? 'New data from each batch: visual NLL is measured before learning; weights at each point are from after the update.'
       : 'Visual NLL uses the same real reference observations across batches.';
     text('reference-source',lossSource);text('path-loss-note',`${lossSource} Colors span the retained window; they do not describe a loss landscape.`);
     populateSelects(s);text('sample-note',`Up to ${s.sample_per_tensor} coefficients / tensor · fixed sample`);
