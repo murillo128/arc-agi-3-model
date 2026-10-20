@@ -109,7 +109,7 @@ function plot(id, series, {markers=[], thresholds=[], unit='', percent=false, re
     const color=s.muted?'#94a7aa':colors[colorIndex], opacity=s.faint ? .2 : s.muted ? .45 : 1;
     const append=(node,ema=false)=>{layers[i].push({node,opacity,ema});svg.append(node);};
     let segment=[];
-    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,'stroke-width':s.muted||s.faint?1:2,opacity}));segment=[];};
+    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.map(p=>`${x(p[0])},${y(p[1])}`).join(' '),fill:'none',stroke:color,opacity}));segment=[];};
     for(const p of s.points) {
       // Leave a gap when there was no measurement; never join across it.
       if(!finite(p[0])||!finite(p[1])) {flush();continue;}

@@ -101,10 +101,14 @@
       g.fillStyle=C.muted; g.fillText(log ? `10^${fmt(v, 1)}` : sci(v), left-10, yy+4);
     }
     if (selected >= 0 && selected < rows.length) { g.fillStyle='#8fd8bf12'; g.fillRect(x(selected)-8, top, 16, bottom-top); }
-    g.strokeStyle=stroke; g.lineWidth=1.8; g.beginPath(); let started=false;
+    const style=ChartTools.focusStyle(ChartTools.selected(id),label);
+    g.save(); g.globalAlpha=style.rawOpacity;
+    g.strokeStyle=stroke; g.lineWidth=style.rawWidth; g.beginPath(); let started=false;
     rows.forEach((row, i) => { const value=key(row); if (!Number.isFinite(value)) { started=false; return; } if (!started) g.moveTo(x(i), y(value)); else g.lineTo(x(i), y(value)); started=true; }); g.stroke();
     rows.forEach((row,i) => { const value=key(row); if (!Number.isFinite(value)) return; g.beginPath(); g.arc(x(i),y(value),i===selected?4:2.4,0,2*Math.PI); g.fillStyle=stroke; g.fill(); });
-    ChartTools.canvasEMA(g,points,x,y,stroke,ChartTools.focusStyle(ChartTools.selected(id),label).emaWidth);
+    g.globalAlpha=style.emaOpacity;
+    ChartTools.canvasEMA(g,points,x,y,stroke,style.emaWidth);
+    g.restore();
     g.fillStyle=C.muted; g.textAlign='left'; g.fillText(String(rows[0].batch ?? rows[0].id ?? rows[0].t),left,h-10);
     g.textAlign='right'; g.fillText(String(rows.at(-1).batch ?? rows.at(-1).id ?? rows.at(-1).t),right,h-10);
     if(ChartTools.selected(id)===label&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:stroke,text:sci(last[1])});
@@ -316,12 +320,16 @@
     g.setLineDash([4,4]);g.strokeStyle=C.lilac;g.beginPath();g.moveTo(left,top);g.lineTo(left,bottom);g.stroke();
     for(const t of p.boundaries){g.strokeStyle=C.amber;g.beginPath();g.moveTo(x(t),top);g.lineTo(x(t),bottom);g.stroke();}g.setLineDash([]);
     for(let i=0;i<=4;i++){const exponent=lo+(hi-lo)*i/4,yy=bottom-i*(bottom-top)/4;g.strokeStyle=C.grid;g.beginPath();g.moveTo(left,yy);g.lineTo(right,yy);g.stroke();g.textAlign='right';g.fillStyle=C.muted;g.fillText(`10^${fmt(exponent,1)}`,left-10,yy+4);}
-    g.lineWidth=1.8;g.strokeStyle=C.mint;g.beginPath();let active=false;
+    const points=p.steps.map(row=>[row.t,row.rms]),last=points.findLast(ChartTools.valid);
+    ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[{key:'rms',text:`RMS ∂L / ∂h: ${sci(last?.[1])}`,color:C.mint,disabled:!last}],()=>renderMemory(s));
+    const style=ChartTools.focusStyle(ChartTools.selected('memory-gradient'),'rms');
+    g.save();g.globalAlpha=style.rawOpacity;
+    g.lineWidth=style.rawWidth;g.strokeStyle=C.mint;g.beginPath();let active=false;
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms)){active=false;return;}if(active)g.lineTo(x(row.t),y(row.rms));else g.moveTo(x(row.t),y(row.rms));active=true;});g.stroke();
     p.steps.forEach(row=>{if(!Number.isFinite(row.rms))return;g.fillStyle=row.rms===0?C.amber:C.mint;g.beginPath();g.arc(x(row.t),y(row.rms),3,0,2*Math.PI);g.fill();});
-    const points=p.steps.map(row=>[row.t,row.rms]),last=points.findLast(ChartTools.valid);
-    ChartTools.canvasEMA(g,points,x,y,C.mint,ChartTools.focusStyle(ChartTools.selected('memory-gradient'),'rms').emaWidth);
-    ChartTools.legend($('memory-gradient-legend'),'memory-gradient',[{key:'rms',text:`RMS ∂L / ∂h: ${sci(last?.[1])}`,color:C.mint,disabled:!last}],()=>renderMemory(s));
+    g.globalAlpha=style.emaOpacity;
+    ChartTools.canvasEMA(g,points,x,y,C.mint,style.emaWidth);
+    g.restore();
     g.fillStyle=C.muted;g.textAlign='left';g.fillText(`Truncation · t=${start}`,left,bottom+23);g.textAlign='right';g.fillText(`Loss · t=${stop}`,right,bottom+23);g.textAlign='left';g.fillText('Final RMS ∂L / ∂h · log scale · zeros in amber at the floor',left,14);
     if(ChartTools.selected('memory-gradient')&&last)ChartTools.canvasGuide(g,{left,right,y:y(last[1]),lastX:x(last[0]),color:C.mint,text:sci(last[1])});
     text('probe-loss',fmt(p.loss,4));text('probe-cleared',fmt(p.cleared_loss,4));

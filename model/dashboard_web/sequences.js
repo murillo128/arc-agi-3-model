@@ -44,7 +44,7 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
   data.forEach(({s,points,color},i)=>{
     const append=(node,ema=false)=>{layers[i].push({node,ema});svg.append(node);};
     let segment=[];
-    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color,'stroke-width':2}));segment=[];};
+    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color}));segment=[];};
     for(const p of points) {
       if(!ChartTools.valid(p)){flush();continue;}
       segment.push(`${x(p[0])},${y(p[1])}`);

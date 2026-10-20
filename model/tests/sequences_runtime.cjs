@@ -206,7 +206,7 @@ const text = id => nodes.get(id).textContent;
   draw();
   const smooth=()=>nodes.get('quality').children.filter(n=>n.class==='series-ema');
   assert.equal(smooth().length,1);
-  assert.equal(smooth()[0]['stroke-width'],.75);
+  assert.equal(smooth()[0]['stroke-width'],1.8);
   assert.equal(smooth()[0].points,'50,220 365,201.2 680,184.28');
   assert.equal(smooth()[0].stroke,nodes.get('quality-legend').children[0].style.color);
   const selected=nodes.get('quality-legend').children[0];

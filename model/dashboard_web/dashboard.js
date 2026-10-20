@@ -81,8 +81,8 @@ class Chart {
     }
     this.series.forEach((s, i) => {
       const style=ChartTools.focusStyle(ChartTools.selected(this.id),s.name);
-      ctx.save();ctx.globalAlpha=style.opacity;
-      ctx.strokeStyle = colors[i % colors.length]; ctx.fillStyle = colors[i % colors.length]; ctx.lineWidth = 1.8; ctx.beginPath();
+      ctx.save();ctx.globalAlpha=style.rawOpacity;
+      ctx.strokeStyle = colors[i % colors.length]; ctx.fillStyle = colors[i % colors.length]; ctx.lineWidth = style.rawWidth; ctx.beginPath();
       let connected = false;
       for (const p of s.points) {
         if (!finite(p.x) || !finite(p.y)) { connected = false; continue; }
@@ -94,6 +94,7 @@ class Chart {
         if (!finite(p.x) || !finite(p.y)) continue;
         ctx.beginPath(); ctx.arc(x(p.x), y(p.y), 2.5, 0, Math.PI * 2); ctx.fill();
       }
+      ctx.globalAlpha=style.emaOpacity;
       ChartTools.canvasEMA(ctx,s.points.map(p=>[p.x,p.y]),x,y,colors[i%colors.length],style.emaWidth);
       ctx.restore();
     });

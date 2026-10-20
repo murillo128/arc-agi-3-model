@@ -235,7 +235,7 @@ function renderLearningProbe(probe) {
     for (const [i,s] of series.entries()) {
       const addSeries=(tag,attrs)=>{const node=add(tag,attrs);layers[i].push({node});return node;};
       let segment=[];
-      const flush=()=>{if(segment.length)addSeries('polyline',{points:segment.join(' '),fill:'none',stroke:s.color,'stroke-width':2});segment=[];};
+      const flush=()=>{if(segment.length)addSeries('polyline',{points:segment.join(' '),fill:'none',stroke:s.color});segment=[];};
       for(const p of s.points){
         if(!ChartTools.valid(p)){flush();continue;}
         segment.push(`${x(p[0])},${y(p[1])}`);

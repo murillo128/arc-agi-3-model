@@ -1,18 +1,20 @@
 'use strict';
 // Shared presentation only: never changes recorded measurements or phase gates.
 globalThis.ChartTools = (() => {
-  const alpha = .1, hint = 'Thin line: EMA (α = 0.1). Select a legend label to pin the latest raw value.';
+  const alpha = .1, hint = 'Main line: EMA (α = 0.1). Fine translucent line: individual measurements. Select a legend label to focus a series and pin its latest raw value.';
   const states = new Map();
   const valid = p => Number.isFinite(p?.[0]) && Number.isFinite(p?.[1]);
   function focusStyle(selected, key, opacity=1) {
     const active = selected != null && selected !== -1, highlighted = active && selected === key;
-    return {opacity: !active ? opacity : highlighted ? 1 : opacity*.2, emaWidth: highlighted ? 2.5 : .75};
+    const emphasis = !active ? opacity : highlighted ? 1 : opacity*.2;
+    return {rawOpacity: highlighted ? 1 : emphasis*.5, emaOpacity: emphasis,
+      rawWidth: .75, emaWidth: highlighted ? 2.5 : 1.8};
   }
   function svgFocus(layers, selected) {
     layers.forEach((layer, i) => layer.forEach(({node, opacity=1, ema=false}) => {
       const style = focusStyle(selected, i, opacity);
-      node.setAttribute('opacity', style.opacity);
-      if (ema) node.setAttribute('stroke-width', style.emaWidth);
+      node.setAttribute('opacity', ema ? style.emaOpacity : style.rawOpacity);
+      node.setAttribute('stroke-width', ema ? style.emaWidth : style.rawWidth);
     }));
   }
   function ema(points) {
@@ -33,7 +35,7 @@ globalThis.ChartTools = (() => {
     const flush = () => {
       if (segment.length) {
         const node = svgNode('polyline', {points: segment.join(' '), fill: 'none', stroke: color,
-          'stroke-width': .75, opacity, class: 'series-ema', 'pointer-events': 'none'});
+          'stroke-width': 1.8, opacity, class: 'series-ema', 'pointer-events': 'none'});
         node.append(svgNode('title', {}, 'EMA (α = 0.1)')); nodes.push(node);
       }
       segment = [];
@@ -44,7 +46,7 @@ globalThis.ChartTools = (() => {
     }
     flush(); return nodes;
   }
-  function canvasEMA(ctx, points, x, y, color, width=.75) {
+  function canvasEMA(ctx, points, x, y, color, width=1.8) {
     ctx.strokeStyle = color; ctx.lineWidth = width; ctx.beginPath();
     let started = false;
     for (const p of ema(points)) {
