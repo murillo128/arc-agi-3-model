@@ -115,12 +115,20 @@ las actualizaciones de representación; no compara escenas distintas.
 
 Se reutilizan los umbrales por etapa `representation_open` (0,10), `latent_drift`
 (0,15), `minimum_samples` (8), `minimum_changed` (4) y `patience` (3). Cada par
-necesita nuevas muestras para sumar un batch apto. La falta de evidencia, de
-cambios o de escala latente válida no cuenta como aprobado. Deben cumplir todos
-los niveles sintéticos y el primer nivel de cada juego SDK. Los niveles SDK
-superiores se exigen desde su primera muestra supervisada real; los aún no
-alcanzados se marcan como tales y no se consideran aprobados. Este requisito
-persiste aunque las muestras salgan de la ventana o se reanude el proceso.
+necesita nuevas muestras para sumar un batch apto. Primero deben haberse observado
+todos los niveles sintéticos y el primer nivel de cada juego SDK. Los niveles SDK
+superiores se incorporan desde su primera muestra supervisada real; los aún no
+alcanzados se marcan como tales y no se consideran aprobados. La cobertura
+observada persiste aunque las muestras salgan de la ventana o se reanude el proceso.
+Los pares ya observados con menos muestras, cambios o muestras de deriva que los
+mínimos se **ignoran para la admisión**, conservando sus métricas y sin sumar
+aprobados. Siguen recogiéndose y entrenándose normalmente. En cuanto reúnen datos
+suficientes vuelven a participar en la condición de paso. Debe haber al menos un
+par elegible y todos los elegibles deben cumplir los umbrales y `patience`;
+un error medido, una escala latente inválida o confirmaciones pendientes siguen
+bloqueando. Una ventana completamente insuficiente no activa el predictor.
+Los checkpoints anteriores recuperan la cobertura conocida desde su ventana,
+contadores positivos y niveles SDK observados, sin alterar pesos ni optimizadores.
 La admisión activa el predictor
 en el **siguiente** batch y se conserva; una regresión posterior permanece visible.
 `prediction_open` y `success` no activan un planner en este modo.
