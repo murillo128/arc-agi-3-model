@@ -152,6 +152,10 @@ class SequenceExplorationTests(unittest.TestCase):
         clicks = [tuple(a.data.values()) for a in actions if a.id == 6]
         self.assertEqual(len(clicks), 16); self.assertEqual(len(set(clicks)), 16)
         self.assertEqual(model.candidates(board(actions=(2, 4)), random.Random(0)), [Action(2), Action(4)])
+        with self.assertRaisesRegex(ValueError, 'No legal'):
+            model.candidates(board(actions=()), random.Random(0))
+        with self.assertRaisesRegex(ValueError, 'clicks'):
+            model.candidates(board(), random.Random(0), 0)
 
     def test_planner_success_still_outranks_a_change_prior(self):
         from contextlib import nullcontext
@@ -191,6 +195,17 @@ class SequenceExplorationTests(unittest.TestCase):
                 torch.testing.assert_close(a, b, rtol=0, atol=0)
             with self.assertRaisesRegex(ValueError, 'mismatch'):
                 ChangeExplorer(replace(c, uniform_probability=.5)).restore(checkpoint.load(path))
+
+    def test_benchmark_rejects_warmup_comparison_seed_collision_before_collection(self):
+        from model.compare_sequence_exploration import run as compare
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path, _ = config(root, sequence={})
+            args = SimpleNamespace(training_config=path, steps=None, seeds=[45], head_updates=1,
+                                   bootstrap_mixed=True, output=root/'results.json', head_output=None)
+            with self.assertRaisesRegex(ValueError, 'collide'), patch('model.compare_sequence_exploration.factories_for') as factories:
+                compare(args)
+            factories.assert_not_called()
 
     def test_explicit_adoption_preserves_world_state_then_ordinary_resume(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):

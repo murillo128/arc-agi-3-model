@@ -24,10 +24,15 @@ def run(args):
         if args.steps < 1:
             raise ValueError('steps must be positive')
         config = replace(config, session_steps=args.steps, block_steps=min(config.block_steps, args.steps))
-    policies = [SequenceExplorationConfig(policy=p) for p in ('uniform', 'mixed', 'learned')]
+    exploration = SequenceExplorationConfig(**plan.payload.get('sequence_exploration', {}))
+    policies = [replace(exploration, policy=p) for p in ('uniform', 'mixed', 'learned')]
     if (not args.seeds or len(set(args.seeds)) != len(args.seeds) or
             any(seed < 0 for seed in args.seeds) or args.head_updates < 1):
         raise ValueError('Use distinct nonnegative seeds and positive updates')
+    if args.bootstrap_mixed and any(seed % 50 == 45 for seed in args.seeds):
+        raise ValueError('Comparison seeds collide with mixed warmup seeds modulo reset offsets')
+    if args.output.exists() or (args.head_output and args.head_output.exists()):
+        raise ValueError('Comparison/head output already exists')
     explorer = ChangeExplorer(policies[-1])
     bootstrap = {}
     if args.head_source:

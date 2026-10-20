@@ -190,8 +190,12 @@ class ChangeExplorer:
 
     def candidates(self, observation, rng, clicks=16):
         """Optional planner prior: ordinary actions and uniform clicks survive."""
+        if type(clicks) is not int or not 1 <= clicks <= 4096:
+            raise ValueError('clicks must be in 1..4096')
         ordinary = [Action(i) for i in sorted(set(observation.available_actions)) if 1 <= i <= 7 and i != 6]
         if 6 not in observation.available_actions:
+            if not ordinary:
+                raise ValueError('No legal ordinary actions')
             return ordinary
         reserved = max(1, math.ceil(clicks * self.config.uniform_probability))
         uniform = [Action(6, dict(x=xy % 64, y=xy // 64))
