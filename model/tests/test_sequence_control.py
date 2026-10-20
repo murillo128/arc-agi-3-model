@@ -143,6 +143,41 @@ class SequenceControlTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cover every'):
             TrainingBatchDiagnostics(e, [a, b], 1)
 
+    def test_all_catalog_window_allows_fresh_evidence_patience_without_hiding_bad_levels(self):
+        from model.game_sequences import schedule_games
+        plan = load_plan(Path(__file__).parents[1]/'sequence_all_synthetic.example.json')
+        games = list(dict.fromkeys(s['game'] for s in plan.stages))
+        c = SequenceConfig(**plan.payload['sequence'])
+        self.assertEqual((len(games), len(plan.stages)), (71, 424))
+        for window, bad, expected in ((18, False, 'predictor'), (4, False, 'representation'),
+                                      (18, True, 'representation')):
+            with self.subTest(window=window, bad=bad):
+                controller = SequencePhaseControl(plan.stages, plan.settings,
+                    SequenceControlConfig(window_batches=window, diagnostic_samples=384))
+                for index in range(27):
+                    batch = set(schedule_games(games, index, c, seed=plan.settings['seed']))
+                    evidence = {f"{s['game']}/{s['level']}": counts(samples=8, changed=4, drift_samples=8,
+                        reconstruction_wrong=20 if bad and s['game']=='sy60-v1' and s['level']==6 else 1)
+                        for s in plan.stages if s['game'] in batch}
+                    controller.observe(index + 1, evidence)
+                    if index < 26:
+                        self.assertEqual(controller.phase, 'representation', 'all pairs need three fresh visits')
+                self.assertEqual(controller.phase, expected)
+
+    def test_eight_representation_updates_include_every_full_or_tail_session(self):
+        # The recorder observes which real frames fit_batch supplies; it does not select them.
+        for size in (8, 7):
+            with self.subTest(size=size):
+                rows = [session((i, i + 1), game=f'g{i}', seed=i) for i in range(size)]
+                seen = []
+                def update(observations, **kwargs):
+                    seen.append(int(observations[0].final[0, 0]))
+                learner = SimpleNamespace(engine=SimpleNamespace(device=torch.device('cpu'), model=torch.nn.Identity()),
+                    config=SequenceConfig(batch_games=8, representation_updates=8, game_schedule='shuffled'))
+                fit_batch(learner, rows, SimpleNamespace(update=update), train_predictor=False)
+                self.assertEqual(len(seen), 8)
+                self.assertEqual(set(seen), set(range(size)))
+
     def test_configuration_rejects_invalid_control_and_decoder_rate(self):
         for options in ({'window_batches': 0}, {'diagnostic_samples': True},
                         {'decoder_learning_rate_after_predictor': float('nan')}):

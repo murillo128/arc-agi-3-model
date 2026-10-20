@@ -2,8 +2,8 @@
 
 ## Secuencias con memoria entre niveles
 
-El modo optativo `model.sequence_training` entrena el predictor con **cuatro
-sesiones independientes** por batch. Una sesión conserva el contexto recurrente
+El modo optativo `model.sequence_training` entrena el predictor con **sesiones
+independientes** (cuatro por batch en el ejemplo base). Una sesión conserva el contexto recurrente
 durante sus niveles y reinicios, hasta su presupuesto (512 acciones en el ejemplo).
 Al comenzar otra sesión, incluso del mismo juego, la memoria empieza en cero.
 Los pesos se comparten entre todos los juegos; el predictor no recibe su nombre
@@ -101,10 +101,40 @@ siguen rechazados. El dashboard mantiene separados los dos tipos de medición.
 | `block_steps: 16` | Pasos que aportan pérdida en cada actualización, además del contexto previo con gradiente. |
 | `context_steps: 16` | Contexto previo adicional con gradiente y sin repetir su pérdida; permite aprender a través de cambios de nivel alineados con el corte del bloque. |
 | `level_steps: 32` | En sintéticos, acciones antes de pasar al siguiente nivel configurado; después se vuelve al primero. Si solo hay un nivel, se reinicia al agotar cada cuota. Un fracaso reinicia el mismo nivel hasta consumir su cuota. |
-| `game_schedule: "interleaved"` | Reparto circular entre juegos; `blocked` dedica cada batch a un tipo de juego, alternándolo en el siguiente. |
+| `game_schedule: "interleaved"` | Reparto circular entre juegos; `blocked` dedica cada batch a un tipo de juego. `shuffled` baraja cada vuelta y visita cada juego una vez, con un último batch menor si es necesario. |
 | `loss_start_weight: 1.0` | Peso de la primera acción: 1 mantiene la pérdida uniforme; 0.25 o 0.5 prueban una rampa. |
 | `loss_warmup_steps: 32` | Acciones hasta alcanzar peso 1, contado desde el inicio de la sesión, sin reiniciar en cada nivel. |
 | `representation_updates: 4` | Actualizaciones separadas de reconstrucción por batch; 0 congela encoder/decoder para comparar el predictor. Se rotan sesiones y se elige un par real por actualización. |
+
+El ejemplo [`sequence_all_synthetic.example.json`](sequence_all_synthetic.example.json)
+selecciona los **71 juegos sintéticos y sus 424 niveles**, con `objective: world_model`.
+Usa hasta ocho sesiones de 512 acciones: cada vuelta tiene ocho batches de ocho
+juegos y uno de siete. El orden se baraja por semilla de entrenamiento y vuelta;
+el contador de batches del checkpoint determina exactamente la continuación.
+Las acciones mantienen su orden causal y los niveles conservan el orden configurado.
+Los modos anteriores y sus checkpoints siguen usando su reparto original.
+
+Las ocho actualizaciones de representación incluyen cada sesión del batch, también
+en el batch corto (una sesión recibe una actualización adicional). Las 384 muestras
+de diagnóstico permiten al menos ocho por juego/nivel presente si hay suficientes
+transiciones reales; los cambios observados siguen siendo obligatorios. La ventana
+de 18 batches equivale a dos vueltas y evita perder evidencia entre visitas. Se mantienen
+los límites de calidad, el mínimo de evidencia y tres visitas aptas nuevas por cada
+par; una media global favorable no abre el predictor. Con más juegos, esta primera
+fase puede durar más y no se garantiza convergencia.
+
+Para iniciar este experimento desde pesos y optimizadores nuevos, usa una salida nueva:
+
+```sh
+.venv/bin/python -u -m model.sequence_training \
+  --training-config model/sequence_all_synthetic.example.json \
+  --output model/runs/sequences-all-synthetic --device cuda --unlimited
+```
+
+Conserva el directorio y la configuración del entrenamiento anterior. `--resume`
+se añade únicamente al retomar un checkpoint del nuevo experimento; no uses
+`--source` para esta inicialización desde cero. El número de sesiones es un límite
+por batch, no una acumulación de gradientes entre los 71 juegos.
 
 En cada bloque, el predictor recibe los latentes reales anteriores y sus acciones;
 el resultado real siguiente solo se incorpora después de predecir. Los saltos de

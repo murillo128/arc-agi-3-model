@@ -87,7 +87,8 @@ function render(data) {
   }
   $('status').textContent = ({running: 'Entrenando', paused: 'Pausado', budget_complete: 'Presupuesto terminado', error: 'Error', waiting: 'Esperando'})[data.status] || data.status;
   $('run-info').textContent = data.message || `${(data.games || []).join(' · ')} · Actualizado hace ${number(data.age_seconds, 0)} s`;
-  $('configuration').textContent = `${c.batch_games || '—'} sesiones independientes · ${c.session_steps || '—'} acciones por sesión · Bloque: ${c.block_steps || '—'} pasos + ${c.context_steps ?? 0} de contexto con gradiente · Peso inicial: ${number(c.loss_start_weight)} → 1 en ${c.loss_warmup_steps || '—'} acciones · ${c.game_schedule === 'blocked' ? 'Un juego por batch' : 'Juegos alternados'}`;
+  const shuffled=c.game_schedule==='shuffled';
+  $('configuration').textContent = `${shuffled?'Hasta ':''}${c.batch_games || '—'} sesiones independientes · ${c.session_steps || '—'} acciones por sesión · Bloque: ${c.block_steps || '—'} pasos + ${c.context_steps ?? 0} de contexto con gradiente · Peso inicial: ${number(c.loss_start_weight)} → 1 en ${c.loss_warmup_steps || '—'} acciones · ${shuffled?'Juegos barajados sin repetición':c.game_schedule === 'blocked' ? 'Un juego por batch' : 'Juegos alternados'}`;
   $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
   const budgetLabel=data.budget===null?' · Sin límite de acciones':data.budget?` · presupuesto ${number(data.budget,0)}`:'';
   $('actions').textContent = number(data.progress?.actions, 0); $('batches').textContent = `${number(data.progress?.batches, 0)} batches completados${budgetLabel}`;
@@ -132,7 +133,7 @@ function render(data) {
     `${number(pct(r.diagnostics?.reconstruction_error))} %`,`${number(pct(r.diagnostics?.rollout_error))} %`,
     number(r.quality?.all?.transitions,0),number(r.diagnostics?.sampled_transitions,0)]));
   table('schedule',(data.schedule||[]).map((s,i)=>[i+1,s.game,s.level,s.source,control?.phase==='representation'?'Encoder · decoder':'Encoder · decoder · predictor']));
-  $('schedule-info').textContent=`${c.game_schedule==='blocked'?'Un juego por batch':'Juegos intercalados en cada batch'} · rotación cada ${c.level_steps??'—'} movimientos en juegos sintéticos; el SDK progresa de forma nativa. Se conserva la memoria entre niveles de una sesión. Este modo no utiliza umbrales para activar el planner.`;
+  $('schedule-info').textContent=`${shuffled?'Cada juego una vez por vuelta, en orden barajado; el último batch puede ser menor':c.game_schedule==='blocked'?'Un juego por batch':'Juegos intercalados en cada batch'} · rotación cada ${c.level_steps??'—'} movimientos en juegos sintéticos; el SDK progresa de forma nativa. Se conserva la memoria entre niveles de una sesión. Este modo no utiliza umbrales para activar el planner.`;
   renderPreview(data);
 }
 function draw(id, grid) {

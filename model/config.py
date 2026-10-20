@@ -27,8 +27,8 @@ class SequenceConfig:
         if (type(self.loss_start_weight) not in (int, float) or
                 not math.isfinite(self.loss_start_weight) or not 0 < self.loss_start_weight <= 1):
             raise ValueError('loss_start_weight must be in (0, 1]')
-        if self.game_schedule not in ('interleaved', 'blocked'):
-            raise ValueError('game_schedule must be interleaved or blocked')
+        if self.game_schedule not in ('interleaved', 'blocked', 'shuffled'):
+            raise ValueError('game_schedule must be interleaved, blocked or shuffled')
 
 
 @dataclass(frozen=True)

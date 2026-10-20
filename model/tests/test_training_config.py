@@ -49,6 +49,31 @@ def config(root, entries=None, **overrides):
 
 
 class TrainingConfigTests(unittest.TestCase):
+    def test_all_synthetic_sequence_config_collects_every_game_and_level(self):
+        from model.config import SequenceConfig
+        from model.sequence_training import factories_for, close_factories, collect_batch
+        path = Path(__file__).parents[1]/'sequence_all_synthetic.example.json'
+        plan = load_plan(path)
+        expected_games = {'sc01-v1', 'si01-v1', 'mc01-v1'} | {
+            f'bf{i:02d}-v1' for i in range(1, 9)} | {f'sy{i:02d}-v1' for i in range(1, 61)}
+        self.assertEqual({s['game'] for s in plan.stages}, expected_games)
+        self.assertEqual(len(plan.stages), 424)
+        self.assertEqual({s['objective'] for s in plan.stages}, {'world_model'})
+        self.assertEqual(plan.payload['sequence_control']['window_batches'], 18)
+        self.assertEqual(plan.payload['sequence_control']['diagnostic_samples'], 384)
+        c = SequenceConfig(**(plan.payload['sequence'] | {'session_steps': 192}))
+        factories = factories_for(plan)
+        seen, sizes = set(), []
+        try:
+            for index in range(9):
+                sessions = collect_batch(factories, c, index, plan.settings['seed'])
+                sizes.append(len(sessions))
+                seen.update((s.game, t.level_number) for s in sessions for t in s.transitions if t.supervised)
+            self.assertEqual(sizes, [8] * 8 + [7])
+            self.assertEqual(seen, {(s['game'], s['level']) for s in plan.stages})
+        finally:
+            close_factories(factories)
+
     def test_complete_synthetic_catalog_and_real_sdk_level_isolation(self):
         self.assertEqual(len(synthetic_levels()), 71)
         self.assertEqual(synthetic_levels()['mc01-v1'], 6)
