@@ -79,7 +79,7 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
@@ -176,6 +176,12 @@ def load_plan(path):
     if 'sequence' in value:
         payload['sequence'] = asdict(SequenceConfig(**object_keys(
             value['sequence'], SequenceConfig.__dataclass_fields__, 'sequence')))
+    if 'sequence_exploration' in value:
+        from .sequence_exploration import SequenceExplorationConfig
+        if 'sequence' not in value:
+            raise ValueError('sequence_exploration requires sequence training')
+        payload['sequence_exploration'] = asdict(SequenceExplorationConfig(**object_keys(
+            value['sequence_exploration'], SequenceExplorationConfig.__dataclass_fields__, 'sequence_exploration')))
     if 'sequence_control' in value:
         from .sequence_control import SequenceControlConfig
         if 'sequence' not in value:

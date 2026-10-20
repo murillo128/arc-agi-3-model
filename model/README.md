@@ -277,6 +277,46 @@ mejoró la evaluación al 74,46 %**, por lo que no demuestran que el modelo ya
 aproveche la memoria para inferir reglas. Los resultados y límites están en
 [`sequence_training_evidence.json`](sequence_training_evidence.json).
 
+## Learned interaction exploration
+
+The mixed SDK/synthetic sequence example enables `sequence_exploration.policy:
+"learned"`. Omitting this section preserves the legacy uniform collector. The
+auxiliary CPU head estimates whether a real action changes the next image; it
+uses palette-invariant image statistics, local pixel neighborhoods, the legal
+action mask and previous real-action/change context. It does not backpropagate
+into the world model or replace the planner's success/duration heads.
+
+Action IDs remain uniform among the currently allowed IDs. For clicks, 25% stay
+uniform over native SDK coordinates 0..63. The rest sample visible-color
+candidates using learned change scores. Repeated confirmed no-op coordinates
+receive a temporary penalty on the same image, but are never banned. Flat or
+missing frames use uniform clicks. The predictor keeps every real transition,
+including no-ops; only reset/terminal/level-boundary responses are excluded from
+the auxiliary head's binary targets. Timers can still produce positive labels:
+this estimates **visible change**, not success or information gain.
+
+The head learns from a bounded recent feature replay after each batch and saves
+its own weights, Adam state and sampling RNG in `latest.pt`. To add it to an
+existing uniform run, add the section to a copy of the same training config and
+resume once with `--adopt-exploration`. An optional `--exploration-source HEAD.pt`
+loads only a separately bootstrapped auxiliary head. Later restarts use ordinary
+`--resume`; repeating adoption or changing other plan settings is rejected.
+World weights, existing optimizers, LRs, counters, phase, report history and the
+optimization projection identity are retained. Uniform fixed evaluation, when
+configured, remains uniform. The dashboard marks the collection change and
+shows changed actions/clicks, auxiliary loss, time and per-game counts; comparing
+predictor errors across this boundary also changes the sampled distribution.
+
+`python -m model.compare_sequence_exploration --help` provides a CPU comparison
+of uniform, visible-element and learned click collection. It accepts a trusted
+local real training corpus (only its `training` sessions) or an auxiliary head;
+`--bootstrap-mixed` adds separate real training seeds before comparison. Large
+corpora and head checkpoints belong in ignored run directories, not Git.
+`PathPlanner(..., change_prior=explorer)` optionally reuses the head to propose
+click candidates, keeping uniform candidates and every legal non-click action.
+Goal-success-first route ranking is unchanged; this prior does not start or
+train the goal planner in sequence mode.
+
 ## Monitorización completa e histórico del planner
 
 El dashboard de secuencias conserva las secciones de representación/predictor,

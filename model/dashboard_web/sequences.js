@@ -17,7 +17,8 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
     const points=[]; let previousGroup, last=null;
     for(const r of rows) {
       if(s.skip?.(r))continue;
-      const group=s.group?.(r)??r.measurement_source??'fixed_evaluation';
+      const collection=r.exploration?.policy==='uniform'?'uniform':r.exploration?.identity??'uniform';
+      const group=`${s.group?.(r)??r.measurement_source??'fixed_evaluation'}:${collection}`;
       if(previousGroup!==undefined&&group!==previousGroup)points.push([r.batch,null]);
       previousGroup=group;
       const value=s.value(r); points.push([r.batch,value,r]);
@@ -87,7 +88,7 @@ function phaseThresholds(data, key, label, color) {
     label:groups.size>1?`${label} · ${scope.join(', ')}`:label}));
 }
 const timingLabels = {collection_seconds:'Game',representation_seconds:'Representation',encode_seconds:'Encoding',
-  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',save_seconds:'Saving'};
+  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',save_seconds:'Saving'};
 function render(data) {
   displayedReport=data;
   const c = data.config || {}, rows = data.history || [], last = rows.at(-1) || {};
@@ -148,6 +149,23 @@ function render(data) {
   chart('latent-rank',measured,[series('Effective rank',r=>r.diagnostics.latent?.effective_rank),series('Observable maximum',r=>r.diagnostics.latent?.max_rank)]);
   chart('latent-inactive',measured,[series('Nearly constant %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
   chart('latent-sensitivity',measured,[series('Changed blocks',r=>r.diagnostics.latent?.changed_rms),series('Unchanged blocks',r=>r.diagnostics.latent?.unchanged_rms)]);
+  const exploration=data.exploration_config||{policy:'uniform'}, interaction=last.exploration;
+  const policyLabel={uniform:'Uniform exploration',mixed:'Visible-element clicks',learned:'Learned change prior'}[exploration.policy]||exploration.policy;
+  const adoption=data.exploration_adoptions?.at(-1);
+  $('exploration-policy').textContent=`${policyLabel}${exploration.policy==='uniform'?'':` · ${number(100*exploration.uniform_probability,0)}% uniform clicks`}${adoption?` · active from batch ${adoption.batch+1}`:''}`;
+  const changeRate=(row,numerator,denominator)=>{
+    const e=row.exploration;
+    return e&&Number.isFinite(e[numerator])&&e[denominator]>0?100*e[numerator]/e[denominator]:null;
+  };
+  chart('interaction-change',rows,[series('Changed actions %',r=>changeRate(r,'changed_actions','eligible_transitions')),
+    series('Changed clicks %',r=>changeRate(r,'changed_clicks','eligible_clicks'))],100);
+  chart('exploration-loss',rows,[series('Change-head BCE',r=>r.exploration?.head?.loss)]);
+  const head=interaction?.head;
+  $('exploration-head-info').textContent=head?.total_updates!==undefined?`${number(head.total_updates,0)} auxiliary updates · ${number(head.examples_seen,0)} real examples seen · ${number(last.exploration_seconds)} s last batch`:'No learned-head measurements yet';
+  table('exploration-games',(interaction?.games||[]).map(g=>[g.game,
+    `${number(g.changed_actions,0)} / ${number(g.eligible_transitions,0)}`,
+    `${number(g.changed_clicks,0)} / ${number(g.eligible_clicks,0)}`,
+    g.eligible_clicks>0?`${number(100*g.changed_clicks/g.eligible_clicks)} %`:'—',number(g.wins,0)]));
   chart('timing-chart',rows,Object.entries(timingLabels).map(([key,label])=>series(label,r=>r[key])));
   $('timings').replaceChildren();
   for (const [key, label] of Object.entries({...timingLabels,diagnostics_seconds:'Within evaluation: extra diagnostics'})) {

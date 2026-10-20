@@ -1,0 +1,611 @@
+{
+  "experiment": "Real click exploration; no world model updates",
+  "games": {
+    "synthetic": 71,
+    "sdk": 20
+  },
+  "seeds": [
+    42,
+    43
+  ],
+  "steps_per_session": 512,
+  "bootstrap": {
+    "initial": {
+      "loss": 0.5654487052815966,
+      "updates": 512,
+      "total_updates": 512,
+      "examples_seen": 46194,
+      "seconds": 0.27224637199833523
+    },
+    "selected": {
+      "loss": 0.5114395232667448,
+      "updates": 2048,
+      "total_updates": 2048,
+      "examples_seen": 46194,
+      "seconds": 1.0567055520077702,
+      "mixed_training": {
+        "loss": 0.49915941659128293,
+        "updates": 2048,
+        "total_updates": 4096,
+        "examples_seen": 92005
+      }
+    }
+  },
+  "initial_candidate": "Half visual/half uniform candidate pool; head fitted only on retained uniform training corpus",
+  "selected_candidate": "Palette-balanced visible candidate pool with 25% independent uniform clicks; extra mixed real warmup on separate even seeds",
+  "initial": [
+    {
+      "policy": "uniform",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93180,
+          "changed_actions": 55633,
+          "unchanged_actions": 37547,
+          "eligible_clicks": 33949,
+          "changed_clicks": 15510,
+          "unchanged_clicks": 18439,
+          "progress_actions": 598,
+          "levels_gained": 598,
+          "terminal_actions": 892,
+          "wins": 594,
+          "game_overs": 298,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 66.1049863051303,
+          "actions_per_second": 1409.6364768896133
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 40212,
+          "unchanged_actions": 32492,
+          "eligible_clicks": 27421,
+          "changed_clicks": 12093,
+          "unchanged_clicks": 15328,
+          "progress_actions": 594,
+          "levels_gained": 594,
+          "terminal_actions": 678,
+          "wins": 594,
+          "game_overs": 84,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 57.86346614616923,
+          "actions_per_second": 1256.475023745415
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20476,
+          "changed_actions": 15421,
+          "unchanged_actions": 5055,
+          "eligible_clicks": 6528,
+          "changed_clicks": 3417,
+          "unchanged_clicks": 3111,
+          "progress_actions": 4,
+          "levels_gained": 4,
+          "terminal_actions": 214,
+          "wins": 0,
+          "game_overs": 214,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 8.241520158961066,
+          "actions_per_second": 2484.9784511819635
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 16,
+          "eligible_clicks": 527,
+          "wins": 4,
+          "levels_gained": 4
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 24,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 72,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 7,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    },
+    {
+      "policy": "mixed",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93167,
+          "changed_actions": 59057,
+          "unchanged_actions": 34110,
+          "eligible_clicks": 33936,
+          "changed_clicks": 17754,
+          "unchanged_clicks": 16182,
+          "progress_actions": 1325,
+          "levels_gained": 1325,
+          "terminal_actions": 1610,
+          "wins": 1308,
+          "game_overs": 302,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 71.02609844194376,
+          "actions_per_second": 1311.9684460236535
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 43564,
+          "unchanged_actions": 29140,
+          "eligible_clicks": 27421,
+          "changed_clicks": 14273,
+          "unchanged_clicks": 13148,
+          "progress_actions": 1308,
+          "levels_gained": 1308,
+          "terminal_actions": 1399,
+          "wins": 1308,
+          "game_overs": 91,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 62.079216135971365,
+          "actions_per_second": 1171.1488083347783
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20463,
+          "changed_actions": 15493,
+          "unchanged_actions": 4970,
+          "eligible_clicks": 6515,
+          "changed_clicks": 3481,
+          "unchanged_clicks": 3034,
+          "progress_actions": 17,
+          "levels_gained": 17,
+          "terminal_actions": 211,
+          "wins": 0,
+          "game_overs": 211,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 8.946882305972395,
+          "actions_per_second": 2289.0655425665764
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 254,
+          "eligible_clicks": 527,
+          "wins": 119,
+          "levels_gained": 119
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 114,
+          "eligible_clicks": 1022,
+          "wins": 0,
+          "levels_gained": 2
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 77,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 56,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    },
+    {
+      "policy": "learned",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93164,
+          "changed_actions": 57917,
+          "unchanged_actions": 35247,
+          "eligible_clicks": 33933,
+          "changed_clicks": 17034,
+          "unchanged_clicks": 16899,
+          "progress_actions": 1052,
+          "levels_gained": 1052,
+          "terminal_actions": 1322,
+          "wins": 1032,
+          "game_overs": 290,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 95.4006388640264,
+          "actions_per_second": 976.7649473795898
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 42427,
+          "unchanged_actions": 30277,
+          "eligible_clicks": 27421,
+          "changed_clicks": 13558,
+          "unchanged_clicks": 13863,
+          "progress_actions": 1032,
+          "levels_gained": 1032,
+          "terminal_actions": 1109,
+          "wins": 1032,
+          "game_overs": 77,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 81.35702133907762,
+          "actions_per_second": 893.6413698946304
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20460,
+          "changed_actions": 15490,
+          "unchanged_actions": 4970,
+          "eligible_clicks": 6512,
+          "changed_clicks": 3476,
+          "unchanged_clicks": 3036,
+          "progress_actions": 20,
+          "levels_gained": 20,
+          "terminal_actions": 213,
+          "wins": 0,
+          "game_overs": 213,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 14.043617524948786,
+          "actions_per_second": 1458.31371180658
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 152,
+          "eligible_clicks": 527,
+          "wins": 57,
+          "levels_gained": 57
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 79,
+          "eligible_clicks": 1022,
+          "wins": 0,
+          "levels_gained": 2
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 55,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 34,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    }
+  ],
+  "selected": [
+    {
+      "policy": "uniform",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93180,
+          "changed_actions": 55633,
+          "unchanged_actions": 37547,
+          "eligible_clicks": 33949,
+          "changed_clicks": 15510,
+          "unchanged_clicks": 18439,
+          "progress_actions": 598,
+          "levels_gained": 598,
+          "terminal_actions": 892,
+          "wins": 594,
+          "game_overs": 298,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 67.8449047999311,
+          "actions_per_second": 1373.4856033005242
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 40212,
+          "unchanged_actions": 32492,
+          "eligible_clicks": 27421,
+          "changed_clicks": 12093,
+          "unchanged_clicks": 15328,
+          "progress_actions": 594,
+          "levels_gained": 594,
+          "terminal_actions": 678,
+          "wins": 594,
+          "game_overs": 84,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 59.34643361796043,
+          "actions_per_second": 1225.077828063405
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20476,
+          "changed_actions": 15421,
+          "unchanged_actions": 5055,
+          "eligible_clicks": 6528,
+          "changed_clicks": 3417,
+          "unchanged_clicks": 3111,
+          "progress_actions": 4,
+          "levels_gained": 4,
+          "terminal_actions": 214,
+          "wins": 0,
+          "game_overs": 214,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 8.498471181970672,
+          "actions_per_second": 2409.845201740272
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 16,
+          "eligible_clicks": 527,
+          "wins": 4,
+          "levels_gained": 4
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 24,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 72,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 7,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    },
+    {
+      "policy": "mixed",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93167,
+          "changed_actions": 59057,
+          "unchanged_actions": 34110,
+          "eligible_clicks": 33936,
+          "changed_clicks": 17754,
+          "unchanged_clicks": 16182,
+          "progress_actions": 1325,
+          "levels_gained": 1325,
+          "terminal_actions": 1610,
+          "wins": 1308,
+          "game_overs": 302,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 72.8343568330165,
+          "actions_per_second": 1279.396208765021
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 43564,
+          "unchanged_actions": 29140,
+          "eligible_clicks": 27421,
+          "changed_clicks": 14273,
+          "unchanged_clicks": 13148,
+          "progress_actions": 1308,
+          "levels_gained": 1308,
+          "terminal_actions": 1399,
+          "wins": 1308,
+          "game_overs": 91,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 63.615177976025734,
+          "actions_per_second": 1142.8719106531387
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20463,
+          "changed_actions": 15493,
+          "unchanged_actions": 4970,
+          "eligible_clicks": 6515,
+          "changed_clicks": 3481,
+          "unchanged_clicks": 3034,
+          "progress_actions": 17,
+          "levels_gained": 17,
+          "terminal_actions": 211,
+          "wins": 0,
+          "game_overs": 211,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 9.219178856990766,
+          "actions_per_second": 2221.455979723218
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 254,
+          "eligible_clicks": 527,
+          "wins": 119,
+          "levels_gained": 119
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 114,
+          "eligible_clicks": 1022,
+          "wins": 0,
+          "levels_gained": 2
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 77,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 56,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    },
+    {
+      "policy": "learned",
+      "groups": {
+        "all": {
+          "transitions": 93184,
+          "eligible_transitions": 93164,
+          "changed_actions": 59368,
+          "unchanged_actions": 33796,
+          "eligible_clicks": 33933,
+          "changed_clicks": 17961,
+          "unchanged_clicks": 15972,
+          "progress_actions": 1221,
+          "levels_gained": 1221,
+          "terminal_actions": 1502,
+          "wins": 1201,
+          "game_overs": 301,
+          "games": 91,
+          "sessions": 182,
+          "environment_actions": 93184,
+          "seconds": 99.82503993195132,
+          "actions_per_second": 933.4732053553058
+        },
+        "synthetic": {
+          "transitions": 72704,
+          "eligible_transitions": 72704,
+          "changed_actions": 43653,
+          "unchanged_actions": 29051,
+          "eligible_clicks": 27421,
+          "changed_clicks": 14234,
+          "unchanged_clicks": 13187,
+          "progress_actions": 1201,
+          "levels_gained": 1201,
+          "terminal_actions": 1283,
+          "wins": 1201,
+          "game_overs": 82,
+          "games": 71,
+          "sessions": 142,
+          "environment_actions": 72704,
+          "seconds": 85.1007212959812,
+          "actions_per_second": 854.3288340310856
+        },
+        "sdk": {
+          "transitions": 20480,
+          "eligible_transitions": 20460,
+          "changed_actions": 15715,
+          "unchanged_actions": 4745,
+          "eligible_clicks": 6512,
+          "changed_clicks": 3727,
+          "unchanged_clicks": 2785,
+          "progress_actions": 20,
+          "levels_gained": 20,
+          "terminal_actions": 219,
+          "wins": 0,
+          "game_overs": 219,
+          "games": 20,
+          "sessions": 40,
+          "environment_actions": 20480,
+          "seconds": 14.724318635970121,
+          "actions_per_second": 1390.8962788926133
+        }
+      },
+      "sparse_click_examples": {
+        "si01-v1": {
+          "changed_clicks": 187,
+          "eligible_clicks": 527,
+          "wins": 72,
+          "levels_gained": 72
+        },
+        "lp85-305b61c3": {
+          "changed_clicks": 269,
+          "eligible_clicks": 1020,
+          "wins": 0,
+          "levels_gained": 4
+        },
+        "ft09-0d8bbf25": {
+          "changed_clicks": 104,
+          "eligible_clicks": 1024,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sb26-7fbdac44": {
+          "changed_clicks": 66,
+          "eligible_clicks": 353,
+          "wins": 0,
+          "levels_gained": 0
+        },
+        "sk48-d8078629": {
+          "changed_clicks": 0,
+          "eligible_clicks": 173,
+          "wins": 0,
+          "levels_gained": 0
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "Visual change includes timers; it is not goal success or information gain.",
+    "Synthetic learned selection is slightly below visual-only overall; it improves the SDK aggregate and pooled click rate.",
+    "sk48 remained at zero changing clicks; this is not solved for every game.",
+    "CPU wall times were measured while the GPU trainer ran; long-term predictor improvement is not established."
+  ],
+  "reproduce": "PYTHONPATH=src python -m model.compare_sequence_exploration --training-config CONFIG --bootstrap-corpus TRUSTED_REAL_CORPUS --bootstrap-mixed --head-updates 2048 --head-output HEAD.pt --output REPORT.json --steps 512 --seeds 42 43"
+}
