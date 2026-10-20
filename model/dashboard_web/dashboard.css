@@ -391,6 +391,36 @@ body .metrics small { line-height: 1.6; }
 .app-nav > div a { flex-shrink: 0; white-space: nowrap; }
 .prediction-preview .quality-heading { flex-wrap: wrap; }
 
+/* Sequence preview: complete states first, then the changes between them. */
+body .prediction-comparison { margin-top: 22px; }
+.preview-state-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.preview-state-groups > section { min-width: 0; }
+.preview-row-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.preview-row-heading h4 { margin: 0; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.preview-time { flex-shrink: 0; padding: 4px 9px; border: 1px solid var(--card-border); border-radius: 6px; color: var(--mint); background: var(--card-inset); font-size: 11px; font-variant-numeric: tabular-nums; }
+.preview-frame-pair, .preview-delta-grid { display: grid; gap: 12px; }
+.preview-frame-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.preview-delta-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.preview-frame { margin: 0; min-width: 0; padding: 14px; border: 1px solid var(--card-border); border-radius: 10px; background: var(--card-inset); }
+.preview-frame figcaption { min-height: 2.8em; margin-bottom: 12px; padding-left: 9px; border-left: 2px solid var(--card-accent); color: var(--text); font-size: 12px; font-weight: 500; line-height: 1.4; }
+.preview-canvas { width: 100%; max-width: 224px; aspect-ratio: 1; margin-inline: auto; display: grid; place-items: center; }
+body .prediction-comparison .goal-image { width: 100%; height: 100%; max-width: 100%; object-fit: contain; }
+body .preview-frame p { margin: 12px 0 0; font-size: 10px; line-height: 1.5; }
+.preview-deltas { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--card-border); }
+.preview-deltas .preview-canvas { max-width: 192px; }
+.preview-delta-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px; margin-top: 14px; }
+body .preview-delta-footer p { margin: 0; font-size: 10px; }
+body .preview-delta-footer .legend { margin: 0; }
+@media (max-width: 1050px) { .preview-state-groups { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  .preview-state-groups { gap: 20px; }
+  .preview-frame { padding: 10px; }
+  .preview-frame-pair, .preview-delta-grid { gap: 10px; }
+  .preview-frame figcaption { font-size: 11px; }
+  .preview-delta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .preview-delta-grid > :last-child { grid-column: 1 / -1; }
+}
+
 .chart-help { color: var(--muted, #9bb0ac); font-size: 11px; line-height: 1.6; margin: 0 0 16px; }
 .series-guide { pointer-events: none; }
 

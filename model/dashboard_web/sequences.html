@@ -24,13 +24,49 @@
 <section id="world" role="tabpanel" aria-labelledby="tab-world">
 <p class="muted" id="diagnostic-scope">New metrics appear when a measurement completes. Earlier data are retained.</p>
 <article class="chart-card prediction-preview"><div class="quality-heading"><div><h3>One predictor action</h3><p id="preview-info">Waiting for a fixed-evaluation sample.</p></div><label>Sample game<select id="preview-game" aria-label="Game to inspect predictions"></select></label></div>
-<div id="preview-images" class="prediction-samples" hidden>
-<figure><figcaption>Real observation</figcaption><canvas id="preview-before" class="goal-image" aria-label="Real observation before acting"></canvas></figure>
-<figure><figcaption>Reconstruction</figcaption><canvas id="preview-reconstruction" class="goal-image" aria-label="Encoder and decoder reconstruction"></canvas></figure>
-<figure><figcaption>Actual delta</figcaption><canvas id="preview-real" class="goal-image" aria-label="Actual changes caused by the action"></canvas></figure>
-<figure><figcaption>Predicted delta</figcaption><canvas id="preview-predicted" class="goal-image" aria-label="Changes predicted before observing the result"></canvas></figure>
-<figure><figcaption>Difference by category</figcaption><canvas id="preview-difference" class="goal-image" aria-label="Delta errors and correct predictions"></canvas></figure>
-</div><div id="preview-legend" class="legend delta-mask-legend"></div></article>
+<div id="preview-images" class="prediction-comparison" hidden>
+  <div class="preview-state-groups">
+    <section aria-labelledby="preview-current-title">
+      <div class="preview-row-heading"><h4 id="preview-current-title">Current state</h4><span class="preview-time">t</span></div>
+      <div class="preview-frame-pair">
+        <figure class="preview-frame">
+          <figcaption>Real observation</figcaption>
+          <div class="preview-canvas"><canvas id="preview-before" class="goal-image" aria-label="Real observation before acting at t"></canvas></div>
+          <p>Observed before the action.</p>
+        </figure>
+        <figure class="preview-frame" data-tone="latent">
+          <figcaption>Reconstruction</figcaption>
+          <div class="preview-canvas"><canvas id="preview-reconstruction" class="goal-image" aria-label="Encoder and decoder reconstruction at t"></canvas></div>
+          <p>Decoded from the current latent state.</p>
+        </figure>
+      </div>
+    </section>
+    <section aria-labelledby="preview-next-title">
+      <div class="preview-row-heading"><h4 id="preview-next-title">Next state</h4><span class="preview-time">t + 1</span></div>
+      <div class="preview-frame-pair">
+        <figure class="preview-frame">
+          <figcaption>Actual next observation</figcaption>
+          <div class="preview-canvas"><canvas id="preview-next-real" class="goal-image" aria-label="Actual observation after acting at t plus 1"></canvas></div>
+          <p>Observed after the action.</p>
+        </figure>
+        <figure class="preview-frame" data-tone="latent">
+          <figcaption>Predicted next observation</figcaption>
+          <div class="preview-canvas"><canvas id="preview-next-predicted" class="goal-image" aria-label="Full observation predicted for t plus 1"></canvas></div>
+          <p>Predicted before observing the result.</p>
+        </figure>
+      </div>
+    </section>
+  </div>
+  <section class="preview-deltas" aria-labelledby="preview-deltas-title">
+    <div class="preview-row-heading"><h4 id="preview-deltas-title">What changed</h4><span class="preview-time">t → t + 1</span></div>
+    <div class="preview-delta-grid">
+      <figure class="preview-frame"><figcaption>Actual delta</figcaption><div class="preview-canvas"><canvas id="preview-real" class="goal-image" aria-label="Actual changes caused by the action"></canvas></div></figure>
+      <figure class="preview-frame" data-tone="latent"><figcaption>Predicted delta</figcaption><div class="preview-canvas"><canvas id="preview-predicted" class="goal-image" aria-label="Changes predicted before observing the result"></canvas></div></figure>
+      <figure class="preview-frame"><figcaption>Difference by category</figcaption><div class="preview-canvas"><canvas id="preview-difference" class="goal-image" aria-label="Delta errors and correct predictions"></canvas></div></figure>
+    </div>
+    <div class="preview-delta-footer"><p>Only changes are shown. The checkerboard marks unchanged pixels.</p><div id="preview-legend" class="legend delta-mask-legend"></div></div>
+  </section>
+</div></article>
 <div class="charts">
 <article class="chart-card"><h3>Representation and prediction quality <span id="quality-source">% · fixed evaluation</span></h3><p>Percentage errors; lower is better. Global reconstruction uses all pixels; reconstruction on changes uses the union of actual and reconstructed changes. The dotted line marks the current reconstruction threshold. Predictor activation also requires acceptable drift and enough evidence for every game and level, shown in Curriculum.</p><div id="fixed-quality-legend" class="legend"></div><svg id="fixed-quality" viewBox="0 0 700 260" role="img" aria-label="Representation and prediction quality"></svg></article>
 <article class="chart-card"><h3>Delta error early and late <span id="early-source">% · fixed evaluation</span></h3><p>Early interactions versus the rest of the session, without loss weighting. Level difficulty also changes; a difference alone does not prove that memory helps.</p><div id="quality-legend" class="legend"></div><svg id="quality" viewBox="0 0 700 260" role="img" aria-label="Delta error early and late"></svg></article>
