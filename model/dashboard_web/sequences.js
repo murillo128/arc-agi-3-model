@@ -97,11 +97,11 @@ function render(data) {
   $('drift-description').textContent=training?'Cambio relativo del encoder sobre las mismas imágenes del batch, antes y después de actualizar representación. Cada batch aporta nuevas imágenes; no se confunde movimiento de objetos con deriva del encoder.':'Cambio relativo del latente frente a la primera medición del proceso. Al reanudar se establece una nueva referencia; se separan las líneas entre referencias.';
   $('phase-card').hidden=!control;
   if(control){
-    $('phase-description').textContent=`Ventana de ${control.window_batches} batches. Todos los juegos y niveles deben cumplir reconstrucción y deriva con suficiente evidencia. La reconstrucción usa la unión de cambios reales y reconstruidos; se incluyen cambios observados poco frecuentes. La admisión del predictor se conserva; las métricas posteriores siguen visibles.`;
+    $('phase-description').textContent=`Window of ${control.window_batches} batches. All synthetic levels and the first level of every SDK game require reconstruction and drift evidence. Higher SDK levels become required once observed in training; unreached levels are not passes. Predictor admission is retained until the curriculum is extended.`;
     table('phase-rows',control.rows.map(r=>[`${r.game} / ${r.level}`,`${r.samples} / ${r.changed} · mínimo ${r.thresholds.minimum_samples} / ${r.thresholds.minimum_changed}`,
       `${number(pct(r.reconstruction_error))} % / ${number(pct(r.thresholds.representation_open))} %`,
       `${number(pct(r.latent_drift))} % / ${number(pct(r.thresholds.latent_drift))} %`,`${r.passes} / ${r.thresholds.patience}`,
-      !r.enough?'Recogiendo evidencia':r.passing?'Cumple':'Fuera del umbral']));
+      r.required===false?'Not reached yet':!r.enough?'Recogiendo evidencia':r.passing?'Cumple':'Fuera del umbral']));
   }
   $('status').textContent = ({running: 'Entrenando', paused: 'Pausado', budget_complete: 'Presupuesto terminado', error: 'Error', waiting: 'Esperando'})[data.status] || data.status;
   $('run-info').textContent = data.message || `${(data.games || []).join(' · ')} · Actualizado hace ${number(data.age_seconds, 0)} s`;

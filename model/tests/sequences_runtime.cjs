@@ -99,6 +99,10 @@ const text = id => nodes.get(id).textContent;
   assert.equal(nodes.get('phase-rows').children[0].children[0].textContent,'<game> / 2');
   assert.equal(nodes.get('phase-rows').children[0].children[2].textContent,'20 % / 10 %');
   assert.equal(nodes.get('phase-rows').children[0].children[5].textContent,'Recogiendo evidencia');
+  report.phase_control.rows[0].required=false;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('phase-rows').children[0].children[5].textContent,'Not reached yet');
+  report.phase_control.rows[0].required=true;
   assert.match(text('preview-info'),/antes de entrenar el batch/);
   assert.match(text('drift-description'),/antes y después de actualizar/);
   // The phase metric has a different denominator from global reconstruction.
