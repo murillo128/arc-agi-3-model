@@ -101,18 +101,18 @@ test('training batch loss is labeled separately from fixed reference loss',async
   assert.match(text('reference-source'),/weights at each point are from after the update/);
 });
 
-test('temporal optimization curves expose EMA and persistent actual-value guides, including log-scale memory',async()=>{
+test('temporal optimization curves expose persistent EMA guides, including log-scale memory',async()=>{
   const {nodes,state,click}=await dashboard();
   click('tab-path');
   const canvas=nodes.get('reference-history'),button=nodes.get('reference-history-legend').children[0];
   assert(canvas.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   button.listeners.click();
-  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='1'&&d[2]===8));
+  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='3.439'&&d[2]===8));
   state.report.updated_at=5;state.report.points.at(-1).reference_loss=0;
   await state.polling();
   assert.equal(nodes.get('reference-history-legend').children[0],button);
   assert.equal(button['aria-pressed'],'true');
-  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='0'&&d[2]===8));
+  assert(canvas.draws.some(d=>d[0]==='fillText'&&d[1]==='3.339'&&d[2]===8));
   button.listeners.click();
   assert(!canvas.draws.some(d=>d[0]==='strokeRect'));
   click('tab-memory');
@@ -120,6 +120,7 @@ test('temporal optimization curves expose EMA and persistent actual-value guides
   assert(memory.draws.some(d=>d[0]==='set'&&d[1]==='lineWidth'&&d[2]===1.8));
   memoryButton.listeners.click();
   assert(memory.draws.some(d=>d[0]==='strokeRect'));
+  assert(memory.draws.some(d=>d[0]==='fillText'&&d[1]==='0.0109'&&d[2]===8));
   state.report.updated_at=6;state.report.probe={status:'unavailable',reason:'No sample'};
   await state.polling();
   assert.equal(nodes.get('memory-gradient-legend').children.length,0);

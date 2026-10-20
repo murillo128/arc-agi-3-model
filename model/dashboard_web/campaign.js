@@ -247,7 +247,7 @@ function renderLearningProbe(probe) {
     const guide=add('g',{class:'series-guide','pointer-events':'none'});
     const updateGuide=()=>{
       guide.replaceChildren();
-      const selected=series.find(s=>s.label===ChartTools.selected(id)),last=selected?.points.findLast(ChartTools.valid);
+      const selected=series.find(s=>s.label===ChartTools.selected(id)),last=selected&&ChartTools.latestEMA(selected.points);
       ChartTools.svgFocus(layers,series.indexOf(selected));
       if(last)ChartTools.svgGuide(guide,{left:42,right:525,y:y(last[1]),lastX:x(last[0]),color:selected.color,text:`${fmt(last[1],2)} %`});
     };
