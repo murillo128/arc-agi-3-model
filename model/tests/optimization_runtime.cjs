@@ -101,6 +101,75 @@ test('training batch loss is labeled separately from fixed reference loss',async
   assert.match(text('reference-source'),/weights at each point are from after the update/);
 });
 
+test('trajectory radii distinguish relative residual motion on a fixed scale',async()=>{
+  const {nodes,state,text,click,input}=await dashboard();
+  const projections=state.report.planes.dynamics.projections;
+  const cases=[
+    {coverage:null,coverage_3d:null,step_norm:0},
+    {coverage:.08,coverage_3d:.155,step_norm:.0488},
+    {coverage:.005,coverage_3d:.011,step_norm:.0479},
+    {coverage:1/26,coverage_3d:.5,step_norm:7},
+  ];
+  projections.forEach((p,i)=>Object.assign(p,cases[i],{z:i*.3}));
+  state.report.updated_at++;
+  await state.polling();click('tab-path');
+  // The last arc is the selected point's outline, 4px outside its bubble.
+  const radius=()=>nodes.get('parameter-path').draws.filter(d=>d[0]==='arc').at(-1)[3]-4;
+  input('point-scrubber',1);const mostlyOutside=radius();
+  input('point-scrubber',2);const almostEntirelyOutside=radius();
+  assert(almostEntirelyOutside>mostlyOutside*2.5,'15.5% and 1.1% coverage must be visibly distinct');
+  assert(mostlyOutside>9.29&&mostlyOutside<9.32,'15.5% captured: about 9.30px');
+  assert(almostEntirelyOutside>28.59&&almostEntirelyOutside<28.62,'1.1% captured: about 28.60px');
+  assert.match(text('relative-step-value'),/^9\.482 ×$/);
+  assert.equal(text('outside-step-value'),'0.0476','keep absolute residual length in the inspector');
+  click('zoom-in');assert.equal(radius(),almostEntirelyOutside,'zoom does not rescale the encoding');
+  input('point-scrubber',3);
+  assert(Math.abs(radius()-5.7)<1e-12,'50% coverage means outside/inside = 1');
+  assert.equal(text('relative-step-value'),'1 ×');
+  click('view-2d');
+  assert(Math.abs(radius()-16.5)<1e-12,'1/26 captured means outside/inside = 5 in 2D');
+  assert.equal(text('relative-step-value'),'5 ×');
+  assert.match(text('path-size-label'),/outside \/ inside.*2D/);
+  assert.equal(text('path-size-half'),'5×');assert.equal(text('path-size-max'),'≥10×');
+  assert.match(text('path-size-note'),/radius.*10×.*30 px/i);
+  click('view-3d');
+  projections.forEach(p=>{p.step_norm*=100;});
+  projections[3].coverage_3d=.999;projections[3].step_norm=10000;
+  state.report.updated_at++;await state.polling();
+  nodes.get('live').checked=true;nodes.get('live').listeners.change();
+  input('point-scrubber',2);
+  assert.equal(radius(),almostEntirelyOutside,'absolute norms and other points cannot change this radius');
+  assert.equal(text('relative-step-value'),'9.482 ×');
+  assert.equal(text('outside-step-value'),'4.7636');
+});
+
+test('relative bubble boundaries retain honest missing, zero, infinite and capped states',async()=>{
+  const {nodes,state,text,click,input}=await dashboard();
+  const projections=state.report.planes.dynamics.projections;
+  click('tab-path'); // Original capture is legacy 2D with no PC3.
+  assert.equal(nodes.get('view-3d').disabled,true);
+  const radius=()=>nodes.get('parameter-path').draws.filter(d=>d[0]==='arc').at(-1)[3]-4;
+  input('point-scrubber',0);assert.equal(radius(),3);assert.equal(text('relative-step-value'),'—');
+  const cases=[
+    {coverage:null,step_norm:0,radius:3,label:'—'},
+    {coverage:null,step_norm:1,radius:3,label:'—'},
+    {coverage:1,step_norm:1,radius:3,label:'0 ×'},
+    {coverage:0,step_norm:1,radius:30,label:'∞ · no projected step'},
+    {coverage:1/401,step_norm:1,radius:30,label:'20 × · size capped at 10×'},
+  ];
+  for(const c of cases){
+    Object.assign(projections[1],{coverage:c.coverage,step_norm:c.step_norm});
+    state.report.updated_at++;await state.polling();
+    nodes.get('live').checked=true;nodes.get('live').listeners.change();
+    input('point-scrubber',1);
+    assert.equal(radius(),c.radius);assert.equal(text('relative-step-value'),c.label);
+    assert(nodes.get('parameter-path').draws.filter(d=>d[0]==='arc').every(d=>Number.isFinite(d[3])));
+  }
+  state.invalidJSON=true;await state.polling();
+  assert.equal(text('relative-step-value'),'—','invalid snapshots clear the new measurement');
+  assert.equal(nodes.get('path-size-scale').hidden,true);
+});
+
 test('temporal optimization curves expose persistent EMA guides, including log-scale memory',async()=>{
   const {nodes,state,click}=await dashboard();
   click('tab-path');
