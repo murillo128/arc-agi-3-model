@@ -95,10 +95,21 @@ def _validate_snapshot(state, session_count):
         _require(isinstance(plane, dict) and _integer(plane['basis_id']))
         projections = plane['projections']
         _require(isinstance(projections, list) and len(projections) == (len(points) if plane['basis_id'] else 0))
+        dimensions = set()
         for p in projections:
             _require(isinstance(p, dict) and _number(p['x']) and _number(p['y']))
             _require(_number(p['coverage'], 0, 1, nullable=True) and _number(p['angle'], 0, 180, nullable=True))
             _require(_number(p['step_norm'], 0))
+            _require(('z' in p) == ('coverage_3d' in p))
+            dimensions.add('z' in p)
+            if 'z' in p:
+                _require(_number(p['z']) and _number(p['coverage_3d'], 0, 1, nullable=True))
+                if p['step_norm'] == 0:
+                    _require(p['coverage'] is None and p['coverage_3d'] is None)
+                else:
+                    _require(p['coverage'] is not None and p['coverage_3d'] is not None
+                             and p['coverage_3d'] + 1e-9 >= p['coverage'])
+        _require(len(dimensions) <= 1)
 
     probe = state.get('probe')
     if probe is None:
