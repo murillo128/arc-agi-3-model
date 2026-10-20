@@ -180,12 +180,13 @@ function renderPreview(data) {
   $('preview-images').hidden=!sample;$('preview-legend').replaceChildren();
   if(!sample){
     $('preview-info').textContent=data.measurement_source==='training_pre_update'?'Waiting for a training-batch sample.':'Waiting for a fixed-evaluation sample.';
-    for(const id of ['before','reconstruction','real','predicted','difference'])draw(`preview-${id}`,null);
+    for(const id of ['before','reconstruction','next-real','next-predicted','real','predicted','difference'])draw(`preview-${id}`,null);
     return;
   }
   const arrows={1:'↑',2:'↓',3:'←',4:'→',5:'Space',6:'Click',7:'Undo'};
   $('preview-info').textContent=`${sample.game} · level ${sample.level} · step ${sample.step} · A${sample.action} ${arrows[sample.action]||''} · ${data.measurement_source==='training_pre_update'?'before training batch':'fixed evaluation of batch'} ${data.prediction_sample_batch}`;
   draw('preview-before',sample.previous);draw('preview-reconstruction',sample.reconstruction);
+  draw('preview-next-real',sample.actual);draw('preview-next-predicted',sample.predicted);
   const real=[], predicted=[], difference=[], counts=[0,0,0,0];
   sample.previous.forEach((row,y)=>{real[y]=[];predicted[y]=[];difference[y]=[];row.forEach((before,x)=>{
     const actual=sample.actual[y][x], guessed=sample.predicted[y][x], changed=actual!==before, invented=guessed!==before;
