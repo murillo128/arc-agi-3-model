@@ -95,6 +95,37 @@ class LMEXSyncTests(unittest.TestCase):
         config = json.loads((self.public / 'config.json').read_text())
         self.assertEqual(config['architectures'], ['WorldModel', 'PathValue'])
 
+    def test_sequence_export_includes_change_head_and_batch_progress(self):
+        self.payload.update(kind='game_sequences', version=1,
+            exploration={'version': 1, 'weights': {'layers.0.weight': torch.tensor([[.2, .8]])},
+                         'optimizer': {'private': torch.tensor([999.])},
+                         'replay_targets': torch.tensor([1.])})
+        self.payload['progress']['batches'] = 12
+        self.save()
+        self.publish()
+        tensors = load_file(self.public / 'model.safetensors')
+        self.assertEqual(set(tensors), {'encoder.weight', 'decoder.bias', 'exploration.layers.0.weight'})
+        torch.testing.assert_close(tensors['exploration.layers.0.weight'], torch.tensor([[.2, .8]]))
+        config = json.loads((self.public / 'config.json').read_text())
+        self.assertEqual(config['training_progress']['batches'], 12)
+        self.assertEqual(config['architectures'], ['WorldModel', 'ChangeHead'])
+
+    def test_current_architecture_names_operations_and_binds_actual_modules(self):
+        from model.config import NetworkConfig
+        from model.networks import WorldModel
+        from model.sequence_exploration import ChangeHead
+
+        document = json.loads(Path('model/architecture.json').read_text())
+        missing = [n['id'] for n in document['nodes']
+                   if n['kind'] == 'operation' and not n.get('operation')]
+        self.assertEqual(missing, [])
+        network = json.loads(Path('model/subgoal_config.json').read_text())['network']
+        with torch.device('meta'):
+            expected = dict(WorldModel(NetworkConfig(**network)).state_dict())
+            expected.update({f'exploration.{k}': v for k, v in ChangeHead().state_dict().items()})
+        bindings = {p['name']: [d['value'] for d in p['shape']] for p in document['parameters']}
+        self.assertEqual(bindings, {k: list(v.shape) for k, v in expected.items()})
+
     def test_bad_input_preserves_last_complete_package(self):
         self.publish()
         original = self.public.resolve()

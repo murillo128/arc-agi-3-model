@@ -2446,7 +2446,9 @@ con ese nombre, muévela fuera de la raíz de modelos antes de ejecutar el coman
 El sincronizador nunca reemplaza una carpeta o enlace ajeno silenciosamente.
 
 Copia `architecture.json` byte por byte y exporta `weights` de `latest.pt` en CPU
-con los mismos nombres, formas, tipos y valores. No carga optimizadores en GPU ni
+con los mismos nombres, formas, tipos y valores. En checkpoints de secuencias
+incluye los pesos de `ChangeHead` con el prefijo `exploration.`, sin su replay ni
+optimizador, y conserva el contador de batches. No carga optimizadores en GPU ni
 ejecuta el modelo. Construye el paquete completo dentro de la raíz de LMEX y
 cambia atómicamente un enlace interno. Conserva solo el paquete activo; si cambia
 solo la arquitectura, reutiliza el archivo inmutable de pesos sin otra exportación.
@@ -2456,9 +2458,28 @@ anterior y se reintenta. El entrenamiento sigue independiente.
 Los pesos de LMEX son los del **último checkpoint guardado**, no los parámetros
 en RAM tras cada actualización. La configuración exportada incluye los contadores
 de ese checkpoint. El refresco normal de LMEX detecta el cambio sin reiniciar su
-backend. La arquitectura sigue declarando cobertura parcial: no se inventan
-bindings entre sus cajas y los tensores; los pesos reales se pueden inspeccionar
-en Tensor Explorer. Los paquetes exportados, pesos y logs quedan fuera de Git.
+backend. La arquitectura describe el perfil de secuencias de `subgoal_config.json`:
+una invocación compartida del encoder, memoria recurrente, predictor global/local,
+decoder y cabeza de exploración. Sus 497 tensores tienen bindings exactos; no
+requiere los pesos del antiguo `PathValue`, ausente en este entrenamiento. La
+cobertura parcial se refiere al detalle de scheduling, pérdidas y optimizadores.
+Los pesos reales también se pueden inspeccionar en Tensor Explorer. Otros perfiles
+necesitan su propia descripción mediante `--architecture`. Los paquetes exportados,
+pesos y logs quedan fuera de Git.
+
+Al cambiar el entrenamiento activo, actualiza tanto `--checkpoint` como la revisión
+de código/arquitectura del servicio de sincronización. El trainer no necesita
+reiniciarse. Antes de publicar un perfil nuevo, valida un paquete materializado
+con el backend instalado del Explorer:
+
+```sh
+python -m llm_model_explorer.validate_architecture_cli /path/to/model-package --json
+```
+
+Comprueba además que una sesión nueva del endpoint público devuelve la arquitectura
+disponible y sus recursos de tensores. El refresco del selector de modelos abre el
+checkpoint nuevo; las sesiones fijadas al paquete anterior no se convierten
+silenciosamente en el nuevo.
 
 ## Comprobaciones locales
 
@@ -2469,10 +2490,9 @@ en Tensor Explorer. Los paquetes exportados, pesos y logs quedan fuera de Git.
 Comprueban la aritmética/probabilidades del delta, el gradiente visual conjunto,
 la equivalencia entre microbatches, la diversidad entre observaciones, la reanudación,
 la validación congelada y las fronteras reales del SDK. No ejecutan navegador.
-`architecture.json` conserva los IDs del diseño importado y describe el perfil
-base. Declara cobertura parcial para los componentes futuros y para los bindings
-de parámetros aún pendientes. La sincronización de LMEX usa los pesos reales del
-checkpoint, no los pesos aleatorios de la antigua maqueta.
+`architecture.json` conserva los IDs de los componentes neuronales compartidos y
+describe el perfil de secuencias actual. La sincronización de LMEX usa los pesos
+reales del checkpoint, no los pesos aleatorios de la antigua maqueta.
 
 Las pérdidas se inspiran en [SIGReg de LeJEPA](https://github.com/galilai-group/lejepa/blob/main/MINIMAL.md)
 y en la [restricción de varianza de VICReg](https://github.com/facebookresearch/vicreg).

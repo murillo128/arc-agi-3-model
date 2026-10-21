@@ -87,10 +87,15 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                     network = payload['world']['network']
                     progress = dict(payload.get('training_progress', {}))
                 else:
-                    weights = payload['weights']
+                    weights = dict(payload['weights'])
                     network = payload['network']
                     progress = {key: payload['progress'][key] for key in
-                                ('actions', 'updates', 'episodes', 'level_index') if key in payload['progress']}
+                                ('batches', 'actions', 'updates', 'episodes', 'level_index') if key in payload['progress']}
+                    exploration = payload.get('exploration') if payload.get('kind') == 'game_sequences' else None
+                    if exploration is not None:
+                        if exploration.get('version') != 1:
+                            raise ValueError('Unsupported exploration checkpoint version')
+                        weights.update({f'exploration.{k}': t for k, t in exploration['weights'].items()})
                 if not weights or any(not isinstance(t, torch.Tensor) or t.device.type != 'cpu'
                                       for t in weights.values()):
                     raise ValueError('Expected CPU state_dict tensors')
@@ -107,6 +112,10 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                     config['agent'] = payload['agent']
                     if payload['agent']['mode'] == 'path_mpc':
                         config['architectures'].append('PathValue')
+                elif payload.get('kind') == 'game_sequences':
+                    config['training_mode'] = 'game_sequences'
+                    if exploration is not None:
+                        config['architectures'].append('ChangeHead')
                 dtypes = {str(t.dtype).removeprefix('torch.') for t in weights.values()}
                 if len(dtypes) == 1:
                     config['torch_dtype'] = dtypes.pop()
