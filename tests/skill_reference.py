@@ -3,6 +3,26 @@ from collections import deque
 from itertools import product
 
 
+def sdk_action(p, command, corner=None):
+    """Address a witness command via native input; not an expected-state oracle.
+
+    Older archived revisions still have button-only hitboxes. Current figures
+    can move, so resolve their click coordinates immediately before each action.
+    """
+    if hasattr(p,'action_commands'):
+        for action,index in p.action_commands().items():
+            if index == command:
+                return action,None
+        rect = next(rect for index,rect in p.click_commands() if index == command)
+    elif command in p.arrow_commands:
+        return p.arrow_commands.index(command)+1,None
+    else:
+        rect = p.button_rects()[command]
+    x,y,w,h = rect
+    return 6,{'x':x+(w//2 if corner is None else (w-1)*corner),
+              'y':y+(h//2 if corner is None else (h-1)*corner)}
+
+
 def expand(codes, depth=1, recursive=False):
     """Independent declarative expansion, not the production stack interpreter."""
     def call(d):

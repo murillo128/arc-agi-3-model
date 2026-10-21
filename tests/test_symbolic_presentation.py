@@ -30,7 +30,6 @@ class PresentationTests(unittest.TestCase):
                         p.render()
                         c=UnclippedCanvas(p.palette,p.size)
                         p.draw(c)
-                        if not getattr(p,'board_controls',False): p.draw_controls(c)
                         for command in range(len(p.commands)):
                             after=p.transition(p.state,command)
                             p.transition_frames(p.state,command,after)
@@ -67,34 +66,34 @@ class PresentationTests(unittest.TestCase):
         f=p.render(); self.assertEqual(int(f[36,18]),0)
         p.click(8,31); self.assertEqual(p.state,(1,1,0))
 
-    def test_small_arrows_and_same_coloured_objects_have_spatial_addressing(self):
+    def test_cycle_cues_remain_but_exchange_and_arm_buttons_are_removed(self):
         p=self.puzzle('sy06',6)
         np.testing.assert_array_equal(p.render()[48:51,7:10],[[5,2,5],[5,5,2],[5,2,5]])
-        p=self.puzzle('sy07'); p.state=(0,0,0)
+        p=self.puzzle('sy07'); p.state=(1,0,2)
         f=p.render()
-        self.assertTrue(np.all(f[39,10:59]==2))  # first object to top exchange sample
-        self.assertTrue(np.all(f[35:56,50]==2))  # last object to lower sample
-        self.assertEqual(int(f[36,30]),5)       # middle has no exchange connection
-        p=self.puzzle('sy22'); p.state=(2,2,2)
+        self.assertTrue(np.all(f[36:43]==5))  # Removed exchange button connections.
+        p.input_action(5)
+        self.assertEqual(p.state,(2,0,1))
+        p=self.puzzle('sy22'); p.state=(2,2)
         f=p.render()
-        self.assertEqual(p.button_rects(),[(47,7,7,7),(55,7,7,7),(47,17,7,7),(55,17,7,7),(47,27,7,7),(55,27,7,7)])
-        for y,color in ((10,7),(20,8),(30,9)):
+        self.assertEqual(p.button_rects(),[])
+        for y,color in ((10,7),(20,8)):
             self.assertTrue(np.all(f[y,18:47]==color))
-        p.click(50,10); self.assertEqual(p.state,(1,2,2))
+        self.assertTrue(np.all(f[4:61,47:63]==5))
+        p.input_action(3); self.assertEqual(p.state,(1,2))
 
     def test_linkage_prerequisite_and_reversible_goal(self):
         p=self.puzzle('sy26',2); p.target=(1,3)
         f=p.render()
-        self.assertEqual(int(f[51,24]),2)
-        self.assertEqual(int(f[46,16]),6)  # minimum parent sample on child link
+        self.assertEqual(int(f[15,15]),2)  # Disabled mark beside the child endpoint.
         self.assertTrue(p.get_subgoals()[0]['achieved'])
         p.act(0)
         self.assertFalse(p.get_subgoals()[0]['achieved'])
-        self.assertEqual(int(p.render()[50,24]),0)
+        self.assertEqual(int(p.render()[15,12]),0)  # Mark follows the moved child.
         p.undo()
         np.testing.assert_array_equal(p.render()[4:61],f[4:61])
 
-    def test_reflection_cue_matches_visible_axis_at_every_orientation(self):
+    def test_click_reflects_the_visible_figure_at_every_orientation(self):
         # Literal cells for the level-three L at anchor (2,2), before/after flip.
         cells = (
             (((2,2),(2,3),(3,2)), ((1,2),(2,2),(2,3))),
@@ -103,37 +102,17 @@ class PresentationTests(unittest.TestCase):
             (((2,1),(2,2),(3,2)), ((2,2),(2,3),(3,2))),
         )
         for palette in (tuple(range(6,16)),tuple(range(15,5,-1))):
-            color=palette[1]
-            vertical=[
-                [2,2,2,2,2,2,2],
-                [2,color,5,2,5,color,2],
-                [2,color,5,2,5,color,2],
-                [color,color,5,2,5,color,color],
-                [2,5,5,2,5,5,2],
-                [2,5,5,2,5,5,2],
-                [2,2,2,2,2,2,2],
-            ]
-            horizontal=[
-                [2,2,2,color,2,2,2],
-                [2,color,color,color,5,5,2],
-                [2,5,5,5,5,5,2],
-                [2,2,2,2,2,2,2],
-                [2,5,5,5,5,5,2],
-                [2,color,color,color,5,5,2],
-                [2,2,2,color,2,2,2],
-            ]
-            for size in (3,5):
+            for size in (3,4,5):
                 for rotation in range(4):
                     for flip in (0,1):
                         with self.subTest(palette=palette,size=size,rotation=rotation,flip=flip):
                             p=self.puzzle('sy11'); p.palette=palette; p.size=size
                             p.state=(2,2,rotation,flip,2); p.target=((4,4),)
-                            cue=horizontal if rotation in (1,3) else vertical
                             self.assertEqual(p.cells(p.state),cells[rotation][flip])
-                            np.testing.assert_array_equal(p.render()[53:60,41:48],cue)
-                            p.click(44,56)
+                            self.assertTrue(np.all(p.render()[53:60] == 5))
+                            p.click(18+p.offset[0],22+p.offset[1])
                             self.assertEqual(p.cells(p.state),cells[rotation][1-flip])
-                            np.testing.assert_array_equal(p.render()[53:60,41:48],cue)
+                            self.assertTrue(np.all(p.render()[53:60] == 5))
 
     def test_exact_quantity_trays_zero_missing_excess_and_maximum(self):
         p=self.puzzle('sy46',6)
@@ -198,15 +177,16 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual([int(f[44,x]) for x in (45,48)],[6,7])
         self.assertEqual([int(f[55,x]) for x in (13,16,19,22)],[6,6,7,7])
 
-    def test_region_and_valve_controls_identify_their_actual_affected_set(self):
+    def test_paint_uses_native_actions_and_valves_remain_directly_clickable(self):
         p=self.puzzle('sy16',6); f=p.render()
-        self.assertEqual(p.button_rects()[0],(2,44,10,7))
-        self.assertEqual([int(f[45,x]) for x in (3,4,5,6)],[7]*4)
-        self.assertEqual([int(f[46,x]) for x in (3,4,5,6)],[2]*4)
-        p.click(7,47); self.assertEqual(p.state,(1,1,1,1)+(0,)*12)
+        self.assertEqual(p.button_rects(),[])
+        self.assertTrue(np.all(f[44:61]==5))
+        p.input_action(1); self.assertEqual(p.state,(1,1,1,1)+(0,)*12)
         p=self.puzzle('sy43',3); p.state=((0,0,0),False)
-        self.assertEqual(p.button_rects(),[(9,10,5,5),(16,15,5,5),(23,20,5,5),(51,45,10,14)])
+        self.assertEqual(p.button_rects(),[(9,10,5,5),(16,15,5,5),(23,20,5,5)])
         p.click(18,17); self.assertEqual(p.state,((0,1,0),False))
+        self.assertTrue(np.all(p.render()[45:61,51:61]==5))
+        p.input_action(5); self.assertEqual(p.state,((0,1,0),True))
 
 
 if __name__=='__main__': unittest.main()

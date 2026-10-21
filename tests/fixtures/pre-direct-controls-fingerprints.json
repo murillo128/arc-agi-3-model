@@ -1,0 +1,14 @@
+{
+  "base_commit": "edfe9b7fe4481d05d516103620b11c4e0edbe40f",
+  "description": "Captured with the unmodified legacy_fingerprint.py from this accepted main revision, before direct-control changes; includes the existing full-palette randomization and interaction feedback.",
+  "games": {
+    "sc01-v1": "05c71782a787d28464c0f128024aea04bd5ced85bd88d47a19fe515c1a304672",
+    "si01-v1": "2e86976cdc87881bf72c5d7ad83a26654d7a37dc80d1f763c2a295dc15d1db7a",
+    "sy10-v1": "2aceaa35d47c647a7b9dc0fcac4c28cf8e277733ed3d47963d878789aa89fbb1",
+    "sy47-v1": "f2772f9d6bc1f55968e063765540eb72d526c7be41c8e85283bf32730899fcfc",
+    "sy48-v1": "f58f146e5f9c29237504e7eeadbea419aa303041d8e6a2b163dca9c72e65b28c",
+    "sy55-v1": "2b77e92a7da28a661153b3acfb485d7e3bde68facd47041e848af602aefb5d2e",
+    "sy56-v1": "3b4c99cc91a8c119c939ecd6a12c9d8b773cf78b775a71297d3b060dea45b972",
+    "sy57-v1": "b15883c97445c333176a45870f52b657fab761c46dc2ab7fce6d4f0c91f47bb4"
+  }
+}

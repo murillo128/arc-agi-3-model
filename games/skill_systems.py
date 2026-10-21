@@ -58,6 +58,7 @@ class Keys(Puzzle):
         self.commands = tuple(f'Change attribute {i+1}' for i in range(self.n))
         if self.spec.skill == 'composicion_de_transformaciones' and self.level >= 3:
             self.commands += ('Swap first and last attribute',)
+            self.run_command = self.n
         self.state = (0,)*self.n
         self.target=tuple(self.rng.randrange(1,self.mod) for _ in range(self.n))
 
@@ -69,7 +70,7 @@ class Keys(Puzzle):
         return tuple(s)
 
     def button_rects(self):
-        return [(6+20*i,25,9,9) for i in range(self.n)] + ([(54,42,9,17)] if len(self.commands)>self.n else [])
+        return [(6+20*i,25,9,9) for i in range(self.n)]
 
     def draw(self,c):
         for i,(x,y,w,h) in enumerate(self.button_rects()[:self.n]):
@@ -87,33 +88,26 @@ class Keys(Puzzle):
                 c.arrow(x+4,36,0,-1,0 if enabled else 2,1)
                 if not enabled: c.rect(x+2,35,5,1,2)
         c.cycle(5,49,self.mod)
-        if len(self.commands)>self.n:
-            # Connect the actual first/last objects even when their colours
-            # coincide with the middle attribute. Samples alone are ambiguous.
-            c.line((10,35),(10,39),2); c.line((10,39),(58,39),2)
-            c.line((58,39),(58,41),2)
-            c.line((50,35),(50,55),2); c.line((50,55),(54,55),2)
-            x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True)
-            c.token(x+4,y+3,self.state[0],size=3)
-            c.arrow(x+3,y+7,0,1); c.arrow(x+6,y+7,0,-1)
-            c.token(x+4,y+13,self.state[-1],size=3)
 
 
 
 class Paint(Puzzle):
+    native_commands={1:0,2:1,3:2,4:3,5:4}
     def setup(self):
         self.n = 2 + (self.level-1)//2
         n=self.n
         self.masks=[tuple(range(n)),tuple(range((n-1)*n,n*n))]
         if self.level >= 2: self.masks += [tuple(range(0,n*n,n)),tuple(range(n-1,n*n,n))]
         if self.level >= 4: self.masks += [tuple(i*n+i for i in range(n))]
-        self.commands=tuple(f'Paint region {i//2+1} with color {i%2+1}' for i in range(len(self.masks)*2))
+        self.paint_colors=(1,2,1,2,1)[:len(self.masks)]
+        self.commands=tuple(f'Paint {region} with color {color}' for region,color in
+                            zip(('top row','bottom row','left column','right column','diagonal'),self.paint_colors))
         self.state=(0,)*(n*n)
         self.reachable_target(2*self.level-1)
 
     def transition(self,state,command):
         s=list(state)
-        for i in self.masks[command//2]: s[i]=command%2+1
+        for i in self.masks[command]: s[i]=self.paint_colors[command]
         return tuple(s)
 
     def subgoals(self,state=None):
@@ -125,18 +119,10 @@ class Paint(Puzzle):
         for k,s in enumerate((self.target,self.state)):
             for i,v in enumerate(s): c.rect(4+30*k+(i%n)*unit,13+(i//n)*unit,unit-1,unit-1,c.color(v))
             c.rect(2+30*k,10,unit*n+2,unit*n+5,0 if k==0 else 2,True)
-    def button_rects(self): return [(2+12*(i//2),44+8*(i%2),10,7) for i in range(len(self.commands))]
-
-    def draw_control(self,c,command,x,y):
-        # Each button carries the actual affected region and its paint colour.
-        mask=self.masks[command//2]
-        for j in range(self.n*self.n):
-            c.rect(x-4+j%self.n,y-2+j//self.n,1,1,c.color(command%2+1) if j in mask else 2)
-        c.rect(x+2,y-1,2,3,c.color(command%2+1))
-
 
 
 class Loops(Puzzle):
+    native_commands={1:3,2:2,3:1,4:0}
     def setup(self):
         self.n=min(8,1+self.level)
         self.cycles=(tuple(range(self.n)),tuple(range(min(3,self.n))))
@@ -154,19 +140,6 @@ class Loops(Puzzle):
         c.line((6,36),(6+7*(self.n-1),36),c.color(8))
         c.line((6,40),(6+7*(len(self.cycles[1])-1),40),c.color(9))
         c.rect(4,32,3,9,2,True)
-
-    def button_rects(self): return [(3+11*(i%2)+31*(i//2),48,9,11) for i in range(4)]
-
-    def draw_controls(self,c):
-        for i,(x,y,w,h) in enumerate(self.button_rects()):
-            color=c.color(8+i//2)
-            lane=42+2*(i//2)
-            c.line((6,36+4*(i//2)),(6,lane),color)
-            c.line((6,lane),(x+w//2,lane),color)
-            c.line((x+w//2,lane),(x+w//2,y),color)
-            c.rect(x,y,w,h,color,True)
-            c.turn(x+w//2,y+h//2,i%2==0)
-
 
 
 class Pegs(Puzzle):
@@ -219,6 +192,7 @@ class Pegs(Puzzle):
 
 
 class Agents(Puzzle):
+    native_commands={3:0,4:1,5:2}
     def setup(self):
         self.m=2+self.level
         self.role=self.rng.choice((-1,1)) if self.spec.skill=='inferencia_de_roles' else 1
@@ -239,15 +213,11 @@ class Agents(Puzzle):
             c.token(6+6*self.state[i],y,i)
         c.rect(54,32,5,5,2,True)  # The second mover is autonomous, not selected.
 
-    def draw_control(self,c,command,x,y):
-        if command<2: c.arrow(x,y,-1 if command==0 else 1,0,c.color(0))
-        else: c.wait(x,y)
-
-
 
 class Tanks(Puzzle):
+    native_commands={1:3,2:2,3:1,4:0}
     def setup(self):
-        self.n=min(4,2+(self.level-1)//2)
+        self.n=min(3,2+(self.level-1)//2)
         self.caps=tuple(self.rng.randint(2+self.level//2,3+self.level) for _ in range(self.n))
         self.commands=tuple(f'Transfer {i//2+1} {"right" if i%2==0 else "left"}' for i in range(2*(self.n-1)))
         self.state=(self.caps[0],)+(0,)*(self.n-1)
@@ -266,11 +236,6 @@ class Tanks(Puzzle):
             c.rect(x+1,bottom-unit*self.state[i],width-2,unit*self.state[i],c.color(0))
             c.line((x-1,bottom-unit*self.target[i]),(x+width,bottom-unit*self.target[i]),c.color(1))
             for slot in range(cap): c.rect(x,bottom-unit*slot,2,1,0)
-
-    def button_rects(self): return [(11+14*(i//2),47+8*(i%2),11,7) for i in range(len(self.commands))]
-
-    def draw_control(self,c,command,x,y): c.arrow(x,y,1 if command%2==0 else -1,0,c.color(0))
-
 
 
 class Flow(Puzzle):
@@ -330,11 +295,8 @@ class Flow(Puzzle):
             c.line((x,y),(x+4,y+5),c.color(i) if bit else 2)
             c.token(x+2,y+2,i,hollow=not bit,size=self.size)
             c.rect(x,y,5,5,0,True)
-        x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True)
-        c.play(x+3,y+h//2)
-        c.line((3,45),(x-2,45),2); c.arrow(x-2,45,1,0,2,1)
 
-    def button_rects(self): return [(9+7*i,10+5*i,5,5) for i in range(self.n)]+[(51,45,10,14)]
+    def button_rects(self): return [(9+7*i,10+5*i,5,5) for i in range(self.n)]
 
 
 
@@ -377,6 +339,3 @@ class Merge(Puzzle):
             v=self.state[0][i]
             if v>=0: c.token(x+4,y+4,v,size=min(7,self.size+v))
             if i==self.state[1]: c.rect(x,y,w,h,0,True)
-
-
-

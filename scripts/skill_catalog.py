@@ -12,18 +12,30 @@ if str(ROOT) not in sys.path:
 
 from games.skill_core import SPECS, LATER_PRACTICE, make_puzzle
 
+ACTION_LABELS = {1:'↑ / A1', 2:'↓ / A2', 3:'← / A3', 4:'→ / A4', 5:'Space / A5'}
+
 
 def control_targets(puzzle):
-    """Human-only addressing from the renderer's actual semantic hitboxes."""
-    return [dict(command=i, effect=effect, rect=list(rect),
-                 center=[rect[0]+rect[2]//2,rect[1]+rect[3]//2])
-            for i,(effect,rect) in enumerate(zip(puzzle.commands,puzzle.button_rects()))]
+    """Human-only direct actions or one actual-object hitbox per command."""
+    targets = {command: dict(command=command, effect=puzzle.commands[command], action=action)
+               for action,command in puzzle.action_commands().items()}
+    for command,rect in puzzle.click_commands():
+        targets.setdefault(command, dict(command=command, effect=puzzle.commands[command], action=6,
+                                        rect=list(rect), center=[rect[0]+rect[2]//2,rect[1]+rect[3]//2]))
+    return [targets[command] for command in sorted(targets)]
 
 
 def control_descriptions(puzzle):
-    if getattr(puzzle,'direct_controls',False): return list(dict.fromkeys(puzzle.commands))
-    return [f'{item["effect"]} · tap ({item["center"][0]}, {item["center"][1]})'
-            for item in control_targets(puzzle)]
+    descriptions = []
+    for item in control_targets(puzzle):
+        if item['action'] != 6:
+            description = f'{ACTION_LABELS[item["action"]]}: {item["effect"]}'
+        elif getattr(puzzle,'direct_controls',False):
+            description = item['effect']
+        else:
+            description = f'{item["effect"]} · tap object ({item["center"][0]}, {item["center"][1]})'
+        descriptions.append(description)
+    return list(dict.fromkeys(descriptions))
 
 
 def main(argv=None):

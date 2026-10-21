@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+from skill_reference import sdk_action
 
 
 def fingerprints(root):
@@ -44,8 +45,7 @@ def fingerprints(root):
                         frame(env.reset()); continue
                     if hasattr(env._game,'puzzle'):
                         p=env._game.puzzle
-                        x,y,w,h=p.button_rects()[i%len(p.commands)]
-                        action,data=6,{'x':x+w//2,'y':y+h//2}
+                        action,data=sdk_action(p,i%len(p.commands))
                     elif game=='sc01': action,data=(i%4)+1,None
                     else: action,data=6,{'x':16+i*4,'y':32}
                     frame(env.step(GameAction.from_id(action),data=data))

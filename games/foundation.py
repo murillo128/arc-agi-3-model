@@ -156,10 +156,6 @@ class Move(Basic):
         x,y = state[0]+dx,state[1]+dy
         return (x,y) if 0 <= x < self.width and 0 <= y < self.height else state
 
-    def button_rects(self):
-        # Visible arrows share the same mapping as keyboard and external D-pad.
-        return [(4+i*15,51,11,9) for i in range(4)]
-
     def point(self, state):
         x,y = state
         return (8+7*x+self.offset[0], 10+8*y+self.offset[1]) if self.mirror else (13+9*x+self.offset[0]-1, 10+8*y+self.offset[1])
@@ -183,9 +179,6 @@ class Move(Basic):
         else:
             c.token(x,y,0,size=s)
         c.token(tx,ty,0,True,size=s+2)
-        for (bx,by,w,h),(dx,dy) in zip(self.button_rects(),DIRS):
-            c.rect(bx,by,w,h,2,True)
-            arrow(c,bx+w//2,by+h//2,dx,dy)
 
 
 class Reflect(Move):
@@ -228,6 +221,7 @@ class Rotate(Basic):
 
 
 class Loop(Basic):
+    native_commands = {3:1,4:0}
     def setup(self):
         self.n = 2+(self.level-1)//2
         values = list(range(self.n)); self.rng.shuffle(values)
@@ -239,9 +233,6 @@ class Loop(Basic):
     def transition(self,state,command):
         return state[-1:]+state[:-1] if command==0 else state[1:]+state[:1]
 
-    def button_rects(self):
-        return [(12,49,15,11),(37,49,15,11)]
-
     def draw(self,c):
         for cx,cy,values,reference in ((18+self.offset[0]-1,29+self.offset[1],self.state,False),
                                      (47+self.offset[0]-1,29+self.offset[1],self.target,True)):
@@ -251,12 +242,10 @@ class Loop(Basic):
                 x=cx+round(10*math.sin(2*math.pi*i/self.n))
                 y=cy-round(10*math.cos(2*math.pi*i/self.n))
                 c.token(x,y,value,reference,size=self.size+3)
-        for i,(x,y,w,h) in enumerate(self.button_rects()):
-            c.rect(x,y,w,h,2,True)
-            turn_arrow(c,x+w//2,y+h//2,clockwise=i==0)
 
 
 class Transfer(Basic):
+    native_commands = {1:3,2:2,3:1,4:0}
     def setup(self):
         self.n = 2 if self.level<=4 else 3
         self.capacity = (2,2,4,4,4,4)[self.level-1]
@@ -268,8 +257,8 @@ class Transfer(Basic):
             start,target = (amount,0,0),(0,0,amount)
         if self.rng.randrange(2): start,target = start[::-1],target[::-1]
         self.state,self.target = start,target
-        self.commands = tuple('Transfer one unit right' if d==0 else 'Transfer one unit left'
-                              for _ in range(self.n-1) for d in range(2))
+        self.commands = tuple(f'Transfer one unit {"right" if d==0 else "left"} between tanks {edge+1} and {edge+2}'
+                              for edge in range(self.n-1) for d in range(2))
 
     def transition(self,state,command):
         edge,d = divmod(command,2)
@@ -281,10 +270,6 @@ class Transfer(Basic):
     def positions(self):
         return [16+self.offset[0],45+self.offset[0]] if self.n==2 else [10+self.offset[0],30+self.offset[0],50+self.offset[0]]
 
-    def button_rects(self):
-        xs = self.positions()
-        return [((a+b)//2-5,48+7*d,11,7) for a,b in zip(xs,xs[1:]) for d in range(2)]
-
     def draw(self,c):
         for i,x in enumerate(self.positions()):
             w=self.size+3
@@ -294,9 +279,6 @@ class Transfer(Basic):
                 if slot<self.state[i]: c.rect(x-w//2+1,y+1,w-2,4,c.color(0))
                 # Hollow target slots beside each tank: no numeric reading.
                 if slot<self.target[i]: c.rect(x+w//2+2,y+1,3,4,c.color(0),True)
-        for i,(x,y,w,h) in enumerate(self.button_rects()):
-            c.rect(x,y,w,h,2,True)
-            arrow(c,x+w//2,y+h//2,1 if i%2==0 else -1,0)
 
 
 class Pair(Basic):

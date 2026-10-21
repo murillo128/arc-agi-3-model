@@ -41,7 +41,7 @@ while preserving the context and control meanings. Examples:
 | Profile | Trivial end | Complex end |
 | --- | --- | --- |
 | sy05: coupled effects | One binary dial | Six four-state dials with adjacent coupled updates |
-| sy26: nonmonotonic subgoals | Adjust one rod | Four dependent rods; retract an already-correct parent, adjust children, restore it |
+| sy26: nonmonotonic subgoals | Adjust one rod | Two dependent rods with a larger range; retract an already-correct parent, adjust its child, restore it |
 | sy43: branching | One valve, then execute | Six stages, seven outlets and multiple propagated source sets |
 | sy47: function composition | Translate one glyph | Six-glyph phrase through three dictionaries |
 | sy55: partial memory | Reveal one pair | Six shuffled pairs; failed guesses reveal both faces only transiently |
@@ -74,11 +74,33 @@ same seed rather than silently sampling a different puzzle.
 
 Frames are 64 × 64 palette arrays. Top pips show current subgoal satisfaction and
 the bottom bar shows remaining budget. A satisfied pip can become unsatisfied.
-Controls depict their object, affected region or movement directly.
+There are no detached button panels inside the frame. Up to five native actions
+control movement and operations directly. ACTION6 clicks actual figures, tiles,
+cards or switches; ACTION7 undoes a command. The external browser D-pad remains
+available for human play and is never part of the observation.
 `skill_catalog.py --game <id>` reports semantic command effects and their native
-hitboxes for human inspection. Spatial contexts also expose arrow actions. Flow/Program expose Space to execute; Ghost exposes it to record.
+action IDs or object hitboxes for human inspection. Flow/Program expose Space to
+execute. Ghost uses Space to wait and a click on the current mover to record.
 Board-control games are clicked directly: pegs and landings, blocks, answer
 glyphs, sigil dots or cards. There is no dragging or universal ACTION5 meaning.
+
+The direct-control revision simplifies formerly larger command sets:
+
+| Mechanic | Direct actions and figure clicks |
+| --- | --- |
+| Geometry | Arrows move, Space rotates, clicking the figure reflects it. Moving-reference profiles use Space to cycle through legal mirror positions instead of rotating. |
+| Centroid / rods | At most two arms or rods. Left/Right operate the first pair; Up/Down the second. Later levels increase range and preserve parent/child constraints. |
+| Paint | Up/Down paint top/bottom; Left/Right paint left/right; Space paints the diagonal. Each region has a fixed colour (1, 2, 1, 2, 1), so overlapping strokes still depend on order. Only regions introduced by that level are available. |
+| Tanks | At most three tanks: Left/Right transfer on the first connection, Up/Down on the second. Capacities still grow at later levels. |
+| Loops | Left/Right rotate the whole loop backward/forward; Up/Down rotate the short loop backward/forward. |
+| Gravity / autonomous movers / timing | Left/Right move; Space reverses gravity or waits, according to the context. |
+| Keys / flow / program | Click the attributes, valves or instruction cells themselves. Space swaps attributes or executes when available. |
+
+Figure hitboxes follow the figure as it moves. A click where a removed button
+used to be is a miss. No extra object-selection mode is introduced. Existing
+peg/block selection remains part of those board games. These changes deliberately
+alter affected action meanings and some generated targets; historical button-era
+replay fingerprints are not a compatibility requirement for those profiles.
 
 For token panels, hollow upper tokens are goals and lower solid tokens are live
 values. Paint uses a left reference and right canvas. Crosses mark geometry or
@@ -110,7 +132,7 @@ puzzle = make_puzzle("subobjetivos_no_monotonos", seed=42, level=6,
 observation = puzzle.render()          # Actor-visible 64x64 frame
 labels = puzzle.get_subgoals()         # Teacher-only detached snapshot
 info = puzzle.get_training_info()      # Teacher-only skill/level/budget metadata
-puzzle.act(0)                         # Command index; click(x, y) also works
+puzzle.input_action(3)                # Native ACTION3: retract the first rod
 next_observation = puzzle.render()
 ```
 
@@ -155,8 +177,8 @@ python -m unittest discover -s tests -p 'test_skill_sdk.py' -v
 The pure suite checks literal rule contracts for every context, negative controls,
 render purity, detached labels, budget/Undo, replay and visual-seed interventions.
 It generates **23,040 instances** (60 profiles × 6 levels × 64 seeds) and solves
-**1,440 instances** (60 × 6 × 4 seeds), replaying test-only plans through actual
-rendered click hitboxes within budget. Search establishes reachability using real
+**1,440 instances** (60 × 6 × 4 seeds), replaying test-only plans through advertised
+native actions and actual-object click hitboxes within budget. Search establishes reachability using real
 transitions; independent literal fixtures and declarative program expansion own
 semantic correctness. This is neither an agent benchmark nor an all-seeds proof.
 

@@ -17,7 +17,7 @@ from arc3.envs.sdk import open_arcade
 from games.skill_core import SPECS, SKILL_SPECS
 from scripts.play_game import PlaySession, web_routes
 from play_game_browser import assert_native_pixels, assert_display_pixels, selected, capture
-from skill_reference import plan
+from skill_reference import plan, sdk_action
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,12 +52,21 @@ def load(page, source, game):
 
 
 def click_command(page,session,command,touch=False):
-    x,y,w,h = session.env._game.puzzle.button_rects()[command]
+    action,data = sdk_action(session.env._game.puzzle,command)
+    if action != 6:
+        control = page.locator(f'[data-action="ACTION{action}"]')
+        if touch: control.tap()
+        else:
+            control.focus()
+            page.keyboard.press(('ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space')[action-1])
+        settled(page)
+        assert_native_pixels(page,session.payload())
+        return
     page.locator('#game').scroll_into_view_if_needed()
     box = page.locator('#game').bounding_box()
     # Native pointer/touch conversion, including noninteger CSS scaling.
-    px=box['x']+(x+w/2)*box['width']/64
-    py=box['y']+(y+h/2)*box['height']/64
+    px=box['x']+(data['x']+.5)*box['width']/64
+    py=box['y']+(data['y']+.5)*box['height']/64
     (page.touchscreen.tap if touch else page.mouse.click)(px,py)
     settled(page)
     assert_native_pixels(page,session.payload())
@@ -116,7 +125,8 @@ def check_contexts(page,url,session,mobile):
         page.locator('#help').click()
         expect(page.locator('#help-title')).to_be_in_viewport()
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-        assert 'Space:' in page.locator('#keyboard-help').inner_text() if session.env._game.puzzle.run_command is not None else 'Space is unavailable' in page.locator('#keyboard-help').inner_text()
+        keyboard_help=page.locator('#keyboard-help').inner_text()
+        assert ('Space / A5:' in keyboard_help) == (5 in session.frame.available_actions)
         page.locator('#close-help').click()
         page.evaluate('scrollTo(0,0)')
         for level in range(1,7):
@@ -143,7 +153,7 @@ def check_contexts(page,url,session,mobile):
                     assert p.cells(p.state)==((1,1),(2,0),(2,1))
                     assert_display_pixels(page,session.payload())
                     capture(page,f'symbols-reflection-flipped-{"mobile" if mobile else "desktop"}')
-                    expect(page.locator('#control-legend')).to_contain_text('Reflect across shown axis')
+                    expect(page.locator('#control-legend')).to_contain_text('Reflect the piece')
                     page.locator('#restart').click(); settled(page)
                     p=session.env._game.puzzle
                 page.locator('#debug-enabled').check(); page.evaluate('() => detailsQueue')

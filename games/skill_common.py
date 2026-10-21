@@ -122,8 +122,10 @@ def condition(name: str, current: Any, target: Any, *, monotonic=False, depends_
 
 class Puzzle:
     context = ''
+    board_controls = False
     arrow_commands: tuple[int, ...] = ()
     run_command: int | None = None
+    native_commands: dict[int, int] = {}
 
     def __init__(self, spec: SkillSpec, seed: int, level: int, *, appearance_seed: int | None = None):
         if type(seed) is not int or type(level) is not int or not 1 <= level <= LEVELS:
@@ -219,30 +221,47 @@ class Puzzle:
         # Terminal states require RESET, as in the SDK. Undo never refunds budget.
         if self.won or self.lost: return
         self.steps += 1
-        if self.history: self.state = self.history.pop()
+        if self.history:
+            self.state = self.history.pop()
         self.event = 'undo'
         self.transient_frames = []
         self.lost = self.steps >= self.budget
 
     def button_rects(self):
-        n = len(self.commands)
-        return [(1+8*i, 53, 7, 7) for i in range(n)]
+        """Hitboxes of actual board objects, never an on-frame control panel."""
+        return []
 
-    def draw_controls(self,c):
-        for i,(x,y,w,h) in enumerate(self.button_rects()):
-            c.rect(x,y,w,h,2,True)
-            self.draw_control(c,i,x+w//2,y+h//2)
+    def action_commands(self):
+        commands = {i+1: command for i,command in enumerate(self.arrow_commands)}
+        commands.update(self.native_commands)
+        if self.run_command is not None:
+            commands[5] = self.run_command
+        return {action: command for action,command in commands.items()
+                if 0 <= command < len(self.commands)}
 
-    def draw_control(self,c,command,x,y):
-        if command in self.arrow_commands:
-            c.arrow(x,y,*DIRS[self.arrow_commands.index(command)])
+    def click_commands(self):
+        if not self.board_controls:
+            return []
+        direct = set(self.action_commands().values())
+        return [(i,rect) for i,rect in enumerate(self.button_rects()) if i not in direct]
+
+    def available_actions(self):
+        return sorted(set(self.action_commands()) | {7} | ({6} if self.click_commands() else set()))
+
+    def input_action(self, action, x=None, y=None):
+        if action == 6:
+            self.click(x,y)
+        elif action == 7:
+            self.undo()
+        elif action in self.action_commands():
+            self.act(self.action_commands()[action])
         else:
-            raise NotImplementedError(f'Missing pictorial control: {self.spec.context}/{command}')
+            self.miss()
 
     def click(self, x, y):
         if type(x) is not int or type(y) is not int or not (0<=x<64 and 0<=y<64):
             self.miss(); return
-        for i,(bx,by,w,h) in enumerate(self.button_rects()):
+        for i,(bx,by,w,h) in self.click_commands():
             if bx <= x < bx+w and by <= y < by+h:
                 self.act(i); return
         self.miss()
@@ -257,7 +276,6 @@ class Puzzle:
     def render(self):
         c = Canvas(self.palette,self.size)
         self.draw(c)
-        if not getattr(self, 'board_controls', False): self.draw_controls(c)
         goals = self.subgoals()
         for i,g in enumerate(goals[:30]):
             c.rect(2+2*i,1,1,2,0 if g['achieved'] else 2)
@@ -277,6 +295,3 @@ class Puzzle:
                 'steps':self.steps, 'budget':self.budget,
                 'difficulty':{name:getattr(self,name) for name in ('n','m','mod','limit','depth','d','slots','period') if hasattr(self,name)},
                 'subgoals':self.get_subgoals()}
-
-
-

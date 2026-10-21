@@ -223,14 +223,15 @@ class ProtocolTests(unittest.TestCase):
         normal = self.state()
         self.assertNotIn('subgoals',normal)
         self.assertEqual(debug().status_code,403)
-        self.assertEqual(help_info()['help']['controls'],['Retract rod 1 · tap (4, 56)','Extend rod 1 · tap (12, 56)'])
+        self.assertEqual(help_info()['help']['controls'],['← / A3: Retract rod 1','→ / A4: Extend rod 1'])
         self.session.debug_subgoals = True
         self.assertTrue(help_info()['debug_available'])
         labels = debug().get_json()
         self.assertEqual(set(labels),{'epoch','game','level','steps','budget','subgoals'})
         self.assertEqual(labels['subgoals'][0]['current'],1)
         self.assertEqual(self.state(),normal)
-        self.action('ACTION6',data={'x':63,'y':63})
+        self.assertEqual(self.action('ACTION6',data={'x':63,'y':63}).status_code,400)
+        self.action('ACTION7')
         self.assertEqual(debug().get_json()['steps'],1)
         self.action('RESET')
         self.assertEqual(debug().get_json()['steps'],0)
@@ -246,9 +247,8 @@ class ProtocolTests(unittest.TestCase):
         self.select('sc01-v1','synthetic')
         self.assertEqual(debug().status_code,403)
         self.select('sy11-v1','synthetic')
-        self.assertEqual(help_info()['help']['controls'][5],
-                         'Reflect across shown axis · tap (44, 56)')
-        self.assertIn('axis turns with the piece',help_info()['help']['text'])
+        self.assertTrue(help_info()['help']['controls'][5].startswith('Reflect the piece · tap object ('))
+        self.assertIn('turns with the piece',help_info()['help']['text'])
 
     def test_action_validation_and_real_animation(self):
         initial = self.state()

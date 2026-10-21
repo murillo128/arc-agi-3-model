@@ -28,12 +28,7 @@ class SkillGame(ARCBaseGame):
         self._available_actions = self._actions()
 
     def _actions(self):
-        actions = [6, 7]
-        if self.puzzle.arrow_commands:
-            actions += [1, 2, 3, 4]
-        if self.puzzle.run_command is not None:
-            actions.append(5)
-        return sorted(actions)
+        return self.puzzle.available_actions()
 
     def on_set_level(self, level):
         self.number = level.get_data('number')
@@ -71,14 +66,9 @@ class SkillGame(ARCBaseGame):
                     self.puzzle.miss()
                 else:
                     self.puzzle.click(*point)
-            elif action == 7:
-                self.puzzle.undo()
-            elif action in (1, 2, 3, 4) and self.puzzle.arrow_commands:
-                self.puzzle.act(self.puzzle.arrow_commands[action - 1])
-            elif action == 5 and self.puzzle.run_command is not None:
-                self.puzzle.act(self.puzzle.run_command)
             else:
-                self.puzzle.miss()
+                self.puzzle.input_action(action)
+            self._available_actions = self._actions()
             self._last_transition = {
                 'level': self.number, 'before': before,
                 'after': self.puzzle.get_subgoals(),

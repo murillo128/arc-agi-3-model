@@ -4,6 +4,7 @@ No production transition calls: this is separate from literal rule assertions.
 Memory witnesses know the deck; they do not measure blind exploration.
 """
 from games.skill_common import DIRS
+from skill_reference import sdk_action
 
 
 def plan(p):
@@ -30,11 +31,3 @@ def plan(p):
     if kind=='bf08':
         return [i for value in range(p.n) for i,v in enumerate(p.deck) if v==value]
     raise ValueError(kind)
-
-
-def sdk_action(p,command):
-    """Advertised arrows for movement; actual piece/arrow hitboxes otherwise."""
-    if p.arrow_commands:
-        return p.arrow_commands.index(command)+1,None
-    x,y,w,h=p.button_rects()[command]
-    return 6,{'x':x+w//2,'y':y+h//2}

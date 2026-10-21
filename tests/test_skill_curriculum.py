@@ -16,7 +16,7 @@ import numpy as np
 from games.skill_core import (BY_ID, CATALOG, CONTEXTS, Canvas,
                              execute_program, make_puzzle)
 from games.skill_core import SKILL_SPECS as SPECS
-from skill_reference import expand, plan
+from skill_reference import expand, plan, sdk_action
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,10 +57,11 @@ class LiteralRulesTests(unittest.TestCase):
     def test_paint_overwrites_only_its_region(self):
         p = self.game('orden_no_conmutativo',2)
         start = (0,0,0,0)
-        a = p.transition(p.transition(start,0),5)
-        b = p.transition(p.transition(start,5),0)
-        self.assertEqual(a, (2,1,2,0))
-        self.assertEqual(b, (1,1,2,0))
+        # Top row is colour 1, right column colour 2: order still matters.
+        a = p.transition(p.transition(start,0),3)
+        b = p.transition(p.transition(start,3),0)
+        self.assertEqual(a, (1,2,0,2))
+        self.assertEqual(b, (1,1,0,2))
         self.assertEqual(p.transition(start,0), (1,1,0,0))
 
     def test_wall_breaks_mirrored_invariants(self):
@@ -296,6 +297,77 @@ class LifecycleTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def test_native_actions_replace_detached_panels(self):
+        # The public contract is up to five general actions, plus clicks on
+        # actual objects and Undo. Keep every semantic command reachable.
+        from games.skill_core import SPECS as all_specs
+        panel_contexts = {'transform','twins','centroid','linkage','maze','loops',
+                          'boxes','agents','tanks','gravity','ghost','timing','paint',
+                          'basic_move','basic_reflect','basic_loop','basic_transfer'}
+        for spec in all_specs:
+            for level in range(1,7):
+                p=make_puzzle(spec.game_id,42,level)
+                with self.subTest(game=spec.game_id,level=level):
+                    native=p.action_commands()
+                    clicks=p.click_commands()
+                    self.assertLessEqual(set(native),{1,2,3,4,5})
+                    self.assertEqual(set(native.values())|{i for i,_ in clicks},set(range(len(p.commands))))
+                    self.assertEqual(6 in p.available_actions(),bool(clicks))
+                    if spec.context in panel_contexts:
+                        self.assertTrue(np.all(p.render()[53:61] == 5))
+                        state=p.state
+                        p.click(4,56)  # Former first button.
+                        self.assertEqual(p.state,state)
+                        self.assertEqual((p.event,p.steps),('miss',1))
+
+    def test_direct_action_meanings_and_simplified_rule_limits(self):
+        # Hand-calculated state changes; do not derive expectations from the
+        # action map or the transition implementation used by witness helpers.
+        cases = (
+            ('sy22',6,(3,3),1,(3,2)), ('sy22',6,(3,3),4,(4,3)),
+            ('sy25',6,(2,2),2,(2,3)), ('sy25',6,(2,2),3,(1,2)),
+            ('sy40',6,(1,1,1),1,(1,2,0)), ('sy40',6,(1,1,1),4,(0,2,1)),
+            ('sy16',2,(0,0,0,0),4,(0,2,0,2)),
+            ('sy31',3,(0,1,2,3),4,(3,0,1,2)),
+            ('sy31',3,(0,1,2,3),2,(2,0,1,3)),
+            ('bf06',5,(0,1,2,3),3,(1,2,3,0)),
+            ('bf07',6,(1,1,1),2,(1,0,2)),
+        )
+        for game,level,start,action,expected in cases:
+            with self.subTest(game=game,action=action):
+                p=make_puzzle(game,42,level)
+                p.state=start
+                p.input_action(action)
+                self.assertEqual(p.state,expected)
+                self.assertEqual(p.steps,1)
+        for level in range(1,7):
+            self.assertLessEqual(make_puzzle('sy22',42,level).n,2)
+            self.assertLessEqual(make_puzzle('sy25',42,level).n,2)
+            self.assertLessEqual(make_puzzle('sy40',42,level).n,3)
+            self.assertLessEqual(len(make_puzzle('sy16',42,level).commands),5)
+        self.assertEqual(make_puzzle('sy22',42,1).available_actions(),[3,4,7])
+        self.assertEqual(make_puzzle('sy16',42,1).available_actions(),[1,2,7])
+
+    def test_mirror_cycles_legal_positions_and_ghost_records_on_figure_click(self):
+        p=make_puzzle('sy13',42,1)
+        p.state=(1,1,0,0,1)
+        p.input_action(5)
+        self.assertEqual(p.state,(1,1,0,0,2))
+        # Skip off-board reflected copies and wrap to the first legal axis.
+        p=make_puzzle('sy13',42,1)
+        p.state=(1,1,0,0,2)
+        p.input_action(5)
+        self.assertEqual(p.state,(1,1,0,0,1))
+        p=make_puzzle('sy58',42,4)
+        p.input_action(3)
+        self.assertEqual(p.state,((-1,0),(2,),(),1))
+        p.input_action(5)  # Space waits; it no longer records a ghost.
+        self.assertEqual(p.state,((-1,0),(2,5),(),2))
+        p.input_action(6,x=24,y=10)  # Actual mover after the left step.
+        self.assertEqual(p.state,((0,0),(),((2,5),),0))
+        p.input_action(7)
+        self.assertEqual(p.state,((-1,0),(2,5),(),2))
+
     def test_late_levels_add_structure_in_saturated_contexts(self):
         # More attributes/values, rod range, sigil strokes or program slots;
         # this does not assert increasing shortest paths or learning difficulty.
@@ -372,7 +444,7 @@ class GenerationTests(unittest.TestCase):
                                     if make_puzzle(spec.skill,123,level,appearance_seed=i).size==size)
                     p = make_puzzle(spec.skill,123,level,appearance_seed=cosmetic)
                     q = make_puzzle(spec.skill,123,level)
-                    rectangles = p.button_rects()
+                    rectangles = [rect for _,rect in p.click_commands()]
                     occupied = set()
                     for x,y,w,h in rectangles:
                         cells = {(u,v) for u in range(x,x+w) for v in range(y,y+h)}
@@ -380,10 +452,10 @@ class GenerationTests(unittest.TestCase):
                         self.assertFalse(occupied & cells,(spec.game_id,level,size))
                         occupied.update(cells)
                     for command in commands:
-                        x,y,w,h = rectangles[command]
                         # Opposite inclusive corners detect clipped or oversized
                         # addressing; midpoint-only witnesses miss such bugs.
-                        p.click(x if size==3 else x+w-1,y if size==3 else y+h-1)
+                        action,data = sdk_action(p,command,corner=int(size!=3))
+                        p.input_action(action,**(data or {}))
                         q.act(command)
                         self.assertEqual(p.state,q.state,(spec.game_id,level,size))
                         self.assertEqual(p.get_subgoals(),q.get_subgoals())
@@ -411,10 +483,10 @@ class GenerationTests(unittest.TestCase):
                         self.assertGreater(len(commands),0)
                         self.assertLessEqual(len(commands),p.budget)
                         for command in commands:
-                            # Click the rendered hitbox: exercise action addressing,
-                            # not just calling the transition function directly.
-                            x,y,w,h = p.button_rects()[command]
-                            p.click(x+w//2,y+h//2)
+                            # Exercise advertised actions and current figure
+                            # hitboxes, not just the pure transition function.
+                            action,data = sdk_action(p,command)
+                            p.input_action(action,**(data or {}))
                             self.assertFalse(p.lost)
                         self.assertTrue(p.won)
                         self.assertTrue(all(g['achieved'] for g in p.get_subgoals()))

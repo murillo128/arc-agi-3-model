@@ -281,6 +281,20 @@ canvas and obtains exact control locations from the native renderer. See the
 for coordinate migration and the limits of validation. Live refresh follows
 independent review and merge; an isolated test server is not deployment.
 
+## Direct actions and object clicks
+
+Synthetic games no longer paint detached control buttons into their observation.
+Movement and operations use the SDK's native actions; clicks act on the figure,
+tile, card or switch itself. Foundations `bf03`/`bf05` use arrows, `bf06` uses
+Left/Right, and `bf07` uses Left/Right for its first transfer connection and
+Up/Down for the second. Other foundation clicks already act on real objects.
+
+The external web controls and HELP remain available for people. HELP and
+`skill_catalog.py` list the actions enabled at the current level. See the
+[micro-skill controls](skills/README.md#controls-feedback-and-subgoals) for the
+simplified rules in larger command sets. Weights and training settings are not
+reset by this source change; running processes need to load the updated games.
+
 ## Training palette
 
 All synthetic games apply a full permutation of the 16 colors to the final

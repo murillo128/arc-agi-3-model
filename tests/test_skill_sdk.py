@@ -6,7 +6,7 @@ import unittest
 import numpy as np
 
 from games.skill_core import SPECS, SKILL_SPECS
-from skill_reference import plan
+from skill_reference import plan, sdk_action
 
 HAS_SDK = find_spec('arc_agi') is not None and find_spec('arcengine') is not None
 if HAS_SDK:
@@ -19,9 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(HAS_SDK, 'Requires project Python 3.12 and arc-agi==0.9.9; no SDK mock is used')
 class OfflineSDKTests(unittest.TestCase):
-    def click(self, env, command):
-        x,y,w,h = env._game.puzzle.button_rects()[command]
-        return env.step(GameAction.ACTION6, data={'x':x+w//2,'y':y+h//2})
+    def command(self, env, command):
+        action,data = sdk_action(env._game.puzzle,command)
+        self.assertIn(action,env.observation_space.available_actions)
+        return env.step(GameAction.from_id(action),data=data)
 
     def setUp(self):
         self.arcade = Arcade(operation_mode=OperationMode.OFFLINE,
@@ -49,8 +50,7 @@ class OfflineSDKTests(unittest.TestCase):
                         np.testing.assert_array_equal(env.observation_space.frame[-1],
                                                       env._game.palette[p.render()])
                         for command in plan(p):
-                            x,y,w,h = p.button_rects()[command]
-                            result = env.step(GameAction.ACTION6,data={'x':x+w//2,'y':y+h//2})
+                            result = self.command(env,command)
                             self.assertIsNotNone(result)
                             self.assertNotEqual(result.state,GameState.GAME_OVER)
                             self.assertTrue(result.frame)
@@ -114,7 +114,7 @@ class OfflineSDKTests(unittest.TestCase):
             result = env.step(GameAction.ACTION6,data={'x':63,'y':63})
         self.assertEqual(p.steps,p.budget-1)
         self.assertEqual(p.state,(0,))
-        result = self.click(env,0)
+        result = self.command(env,0)
         self.assertEqual(result.levels_completed,1)
         self.assertEqual(training_info(env)['last_transition']['outcome'],'level_complete')
         level_two = result.frame[-1].copy()
@@ -136,38 +136,41 @@ class OfflineSDKTests(unittest.TestCase):
         np.testing.assert_array_equal(reset.frame[-1],initial)
         np.testing.assert_array_equal(env.reset().frame[-1],initial)
 
-    def test_reflection_axis_changes_after_real_sdk_rotation(self):
+    def test_space_rotates_and_clicking_the_figure_reflects_without_buttons(self):
         env=self.arcade.make('sy11-v1',seed=0,scorecard_id=self.card)
         for _ in range(2):
-            for command in plan(env._game.puzzle): self.click(env,command)
+            for command in plan(env._game.puzzle): self.command(env,command)
         p=env._game.puzzle
         palette=env._game.palette
         self.assertEqual(p.level,3)
         self.assertEqual(p.cells(p.state),((1,1),(1,2),(2,1)))
         before=env.observation_space.frame[-1]
-        self.assertEqual(int(before[54,44]),palette[2])  # vertical reflection axis
-        self.assertEqual(int(before[56,42]),palette[p.palette[1]])
-        rotated=env.step(GameAction.ACTION6,data={'x':36,'y':56})
+        self.assertTrue(np.all(before[53:60] == palette[5]))
+        # The old reflection button no longer changes the piece.
+        env.step(GameAction.ACTION6,data={'x':44,'y':56})
+        self.assertEqual(p.cells(p.state),((1,1),(1,2),(2,1)))
+        self.assertEqual(p.event,'miss')
+        rotated=env.step(GameAction.ACTION5)
         self.assertEqual(p.cells(p.state),((0,1),(1,1),(1,2)))
         np.testing.assert_array_equal(rotated.frame[-1],palette[p.render()])
-        self.assertEqual(int(rotated.frame[-1][56,42]),palette[2])  # horizontal axis
-        self.assertEqual(int(rotated.frame[-1][54,44]),palette[p.palette[1]])
-        reflected=env.step(GameAction.ACTION6,data={'x':44,'y':56})
+        # Click the figure's anchor, not a control elsewhere in the frame.
+        reflected=env.step(GameAction.ACTION6,data={'x':13+p.offset[0],'y':17+p.offset[1]})
         self.assertEqual(p.cells(p.state),((0,1),(1,0),(1,1)))
         np.testing.assert_array_equal(reflected.frame[-1],palette[p.render()])
-        np.testing.assert_array_equal(reflected.frame[-1][53:60,41:48],
-                                      rotated.frame[-1][53:60,41:48])
+        self.assertTrue(np.all(reflected.frame[-1][53:60] == palette[5]))
+        env.step(GameAction.ACTION7)
+        self.assertEqual(p.cells(p.state),((0,1),(1,1),(1,2)))
 
     def test_nonmonotonic_labels_simultaneous_conditions_and_undo(self):
         env = self.arcade.make('sy26-v1',seed=42,scorecard_id=self.card)
-        for command in plan(env._game.puzzle): self.click(env,command)
+        for command in plan(env._game.puzzle): self.command(env,command)
         self.assertEqual(training_info(env)['level'],2)
         info = training_info(env)
         self.assertEqual(info['subgoals'][0],dict(id='target-0',achieved=True,
                          current=1,target=1,monotonic=False,depends_on=[]))
-        self.click(env,3)  # Parent not retracted: child extension is blocked.
+        self.command(env,3)  # Parent not retracted: child extension is blocked.
         self.assertEqual(training_info(env)['subgoals'],info['subgoals'])
-        self.click(env,0)
+        self.command(env,0)
         self.assertFalse(training_info(env)['subgoals'][0]['achieved'])
         env.step(GameAction.ACTION7)
         self.assertEqual(training_info(env)['subgoals'],info['subgoals'])
@@ -177,10 +180,10 @@ class OfflineSDKTests(unittest.TestCase):
         env.reset()
         self.assertIsNone(training_info(env)['last_transition'])
         coupled = self.arcade.make('sy05-v1',seed=42,scorecard_id=self.card)
-        self.click(coupled,0)  # Level one.
+        self.command(coupled,0)  # Level one.
         self.assertEqual(coupled._game.puzzle.state,(0,0))
         self.assertEqual(coupled._game.puzzle.target,(1,1))
-        self.click(coupled,0)
+        self.command(coupled,0)
         transition = training_info(coupled)['last_transition']
         self.assertEqual(transition['level'],2)
         self.assertEqual([g['achieved'] for g in transition['before']],[False,False])
@@ -192,13 +195,13 @@ class OfflineSDKTests(unittest.TestCase):
             env = self.arcade.make(game,seed=42,scorecard_id=self.card)
             # Sequential entry to a nontrivial level, never set_level.
             for _ in range(2):
-                for command in plan(env._game.puzzle): self.click(env,command)
+                for command in plan(env._game.puzzle): self.command(env,command)
             p = env._game.puzzle
             steps = p.steps
             if game == 'sy51-v1':
                 # Set three literal emit-0 instructions. Output prefixes must
                 # contain 1, 2, 3 tokens, in that order, on the live output row.
-                for command in (0,2,4): self.click(env,command)
+                for command in (0,2,4): self.command(env,command)
                 steps += 3
                 result = env.step(GameAction.ACTION5)
                 counts = [np.count_nonzero(f[18:22,2:54] == env._game.palette[p.palette[0]])
@@ -208,7 +211,7 @@ class OfflineSDKTests(unittest.TestCase):
                 # Turn every branch on. Each source reaches the next lane in
                 # sequence. Inspect native outlet pixels, not helper output.
                 for i,bit in enumerate(p.state[0]):
-                    if not bit: self.click(env,i); steps += 1
+                    if not bit: self.command(env,i); steps += 1
                 result = env.step(GameAction.ACTION5)
                 for stage, frame in enumerate(result.frame[:3],1):
                     for lane in range(1,4):

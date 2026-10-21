@@ -105,20 +105,19 @@ class Program(Puzzle):
             condition('output-length',len(out),len(self.target)),condition('executed',ran,True)]
 
     def button_rects(self):
-        return [(2+9*(i//2)+4*(i%2),29,4,7) for i in range(2*self.n)]+[(56,28,7,10)]
+        return [(2+9*(i//2)+4*(i%2),29,4,7) for i in range(2*self.n)]
 
     def draw(self,c):
         for row,seq in enumerate((self.target,self.state[1])):
             c.rect(1,6+row*10,56,10,0 if row==0 else 2,True)
             for i,v in enumerate(seq): c.token(4+3*(i%18),9+row*10+(i//18)*4,v,size=2)
-        for i,(x,y,w,h) in enumerate(self.button_rects()[:-1]):
+        for i,(x,y,w,h) in enumerate(self.button_rects()):
             code=self.state[0][i//2]
             c.rect(x,y,w,h,2,True)
             c.rect(x+1,y+2,2,1+c.size//2,0 if code&(1<<(i%2)) else 2)
             if i%2:
                 c.line((x-2,37),(x+4,37),2)
                 if i<2*self.n-1: c.arrow(x+4,37,1,0,2,1)
-        x,y,w,h=self.button_rects()[-1]; c.rect(x,y,w,h,2,True); c.play(x+1,y+5)
         # Four concrete switch configurations, each with its emitted output.
         # Nested paired brackets show call/return around the two emissions.
         # This is the instruction dictionary, never the target-solving program.
@@ -219,6 +218,3 @@ class Memory(Puzzle):
             if i in self.state[1:]:
                 c.token(x+3,y+5,self.deck[i])
             else: c.rect(x+2,y+3,3,5,c.color(9),True)
-
-
-

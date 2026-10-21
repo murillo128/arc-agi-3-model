@@ -13,7 +13,7 @@ import numpy as np
 
 from games.skill_core import FOUNDATION_SPECS, SPECS, make_puzzle
 from games.skill_common import Canvas
-from foundation_reference import plan
+from foundation_reference import plan, sdk_action
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -176,10 +176,10 @@ class FoundationInstances(unittest.TestCase):
                                     self.assertLess(u+5,31); self.assertGreater(63-u-5,32)
                         for command in commands:
                             before=p.steps
-                            x,y,w,h=rects[command]
-                            # Movement uses actual board arrows too. Click
+                            # Native actions move directly. Object clicks use
                             # inclusive corners to catch addressing clipping.
-                            p.click(x if size==3 else x+w-1,y if size==3 else y+h-1)
+                            action,data=sdk_action(p,command,corner=int(size!=3))
+                            p.input_action(action,**(data or {}))
                             self.assertEqual(p.steps,before+1)
                             self.assertFalse(p.lost)
                         self.assertTrue(p.won,(key,seed,appearance,commands))
@@ -237,10 +237,11 @@ class FoundationInstances(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output=Path(directory)/'current.json'
             subprocess.run([sys.executable,str(ROOT/'tests/legacy_fingerprint.py'),str(ROOT),str(output)],check=True)
-            expected=json.loads((ROOT/'tests/fixtures/legacy-game-fingerprints.json').read_text())
-            # Issue #64 intentionally replaces 54 old presentations. Retain
-            # the historical file unchanged and the exact unaffected checks;
-            # presentation_replay owns all-ID baseline logical equivalence.
+            expected=json.loads((ROOT/'tests/fixtures/pre-direct-controls-fingerprints.json').read_text())['games']
+            # Captured from accepted main, not this candidate. The older
+            # issue-62 fixture predates palette randomization and click feedback;
+            # retain that historical file without treating it as today's oracle.
+            # Changed action contracts have separate rule/witness tests.
             unchanged=('sc01-v1','si01-v1','sy10-v1','sy47-v1','sy48-v1','sy55-v1','sy56-v1','sy57-v1')
             current=json.loads(output.read_text())
             self.assertEqual({g:current[g] for g in unchanged},{g:expected[g] for g in unchanged})
