@@ -180,14 +180,16 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
         examples_per_second=sum(x['examples'] for x in updates)/max(1e-9, predictor_seconds))
 
 
-def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(), explorer=None, exploration_adoptions=()):
+def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(),
+             restrictions=(), explorer=None, exploration_adoptions=()):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
         sequence=asdict(learner.config), predictor_optimizer=learner.optimizer.state_dict(),
         representation_optimizer=representation.optimizer.state_dict(),
         progress=dict(batches=batches, actions=actions, updates=learner.updates),
-        curriculum_extensions=list(extensions), exploration_adoptions=list(exploration_adoptions),
+        curriculum_extensions=list(extensions), curriculum_restrictions=list(restrictions),
+        exploration_adoptions=list(exploration_adoptions),
         **(dict(exploration=explorer.snapshot()) if explorer is not None else {}),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
@@ -212,9 +214,21 @@ def extended_plan_matches(previous, current):
     return expected == previous
 
 
-def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False,
+def restricted_plan_matches(previous, current):
+    """Only remove stages, retaining their order, definitions and all settings."""
+    if not 0 < len(current['stages']) < len(previous['stages']):
+        return False
+    remaining = iter(previous['stages'])
+    if not all(any(old == stage for old in remaining) for stage in current['stages']):
+        return False
+    expected = copy.deepcopy(current)
+    expected['stages'] = previous['stages']
+    return expected == previous
+
+
+def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False, restrict=False,
                 adopt_exploration=False, explorer=None):
-    if sum((adopt, extend, adopt_exploration)) > 1:
+    if sum((adopt, extend, restrict, adopt_exploration)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
     expected = copy.deepcopy(plan.payload)
     if adopt:
@@ -232,17 +246,22 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
         expected.pop('sequence_exploration', None)
     changed = previous_plan != expected
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
-            (changed and not (extend and extended_plan_matches(saved['plan'], expected))) or
+            (changed and not (extend and extended_plan_matches(saved['plan'], expected)) and
+             not (restrict and restricted_plan_matches(saved['plan'], expected))) or
             saved['sequence'] != asdict(learner.config)):
         raise ValueError('Resume requires the same sequence configuration and training plan')
     if control is not None and not adopt:
         if 'sequence_control' not in saved:
             raise ValueError('Missing checkpoint phase state; use explicit adoption for legacy runs')
-        control.restore(saved['sequence_control'], extend=extend and changed)
+        control.restore(saved['sequence_control'], extend=extend and changed, restrict=restrict and changed)
     if explorer is not None and not adopt_exploration:
         if 'exploration' not in saved:
             raise ValueError('Missing change-head state; use --adopt-exploration for initial adoption')
         explorer.restore(saved['exploration'])
+        if restrict and changed:
+            # Replay has no game labels: discard old examples, retaining the
+            # learned head, Adam moments, counters and random generator.
+            explorer.replay.clear()
     learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
     learner.updates = saved['progress']['updates']
@@ -281,6 +300,7 @@ def run(args):
         raise ValueError('Choose --source for a fresh run or --resume, not both')
     adopt = getattr(args, 'adopt_training_phases', False)
     extend = getattr(args, 'extend_curriculum', False)
+    restrict = getattr(args, 'restrict_curriculum', False)
     adopt_exploration = getattr(args, 'adopt_exploration', False)
     exploration_source = getattr(args, 'exploration_source', None)
     if adopt_exploration and (not args.resume or adopt or extend or exploration.policy != 'learned'):
@@ -291,6 +311,8 @@ def run(args):
         raise ValueError('--adopt-training-phases requires --resume')
     if extend and (not args.resume or adopt):
         raise ValueError('--extend-curriculum requires --resume without --adopt-training-phases')
+    if restrict and (not args.resume or adopt or extend or adopt_exploration):
+        raise ValueError('--restrict-curriculum requires --resume without other adoptions/extensions')
     if args.max_batches is not None and args.max_batches < 1:
         raise ValueError('--max-batches must be positive')
     action_budget = None if getattr(args, 'unlimited', False) else plan.settings['actions']
@@ -308,11 +330,14 @@ def run(args):
                 raise ValueError('Expected an auxiliary change-head checkpoint')
             explorer.restore(bootstrap['exploration'])
         batches, actions, extensions, exploration_adoptions = 0, 0, [], []
+        restrictions, restricted = [], False
         if args.resume:
             saved = checkpoint.load(source)
             batches, actions = restore_run(saved, plan, learner, representation, control,
-                                           adopt=adopt, extend=extend, adopt_exploration=adopt_exploration, explorer=explorer)
+                                           adopt=adopt, extend=extend, restrict=restrict,
+                                           adopt_exploration=adopt_exploration, explorer=explorer)
             extensions = list(saved.get('curriculum_extensions', []))
+            restrictions = list(saved.get('curriculum_restrictions', []))
             exploration_adoptions = list(saved.get('exploration_adoptions', []))
             if adopt_exploration:
                 exploration_adoptions.append(dict(batch=batches, actions=actions, config=asdict(exploration)))
@@ -322,6 +347,13 @@ def run(args):
                     games_before=list(dict.fromkeys(s['game'] for s in saved['plan']['stages'])),
                     games_after=list(dict.fromkeys(s['game'] for s in plan.stages)),
                     added_stages=list(plan.stages[len(saved['plan']['stages']):])))
+            restricted = restrict and saved['plan'] != plan.payload
+            if restricted:
+                restrictions.append(dict(batch=batches, actions=actions,
+                    previous_plan=digest(saved['plan']), plan=plan.identity,
+                    games_before=list(dict.fromkeys(s['game'] for s in saved['plan']['stages'])),
+                    games_after=list(dict.fromkeys(s['game'] for s in plan.stages)),
+                    removed_stages=[s for s in saved['plan']['stages'] if s not in plan.stages]))
             del saved
         predictor_learning_rate(learner, rate)
         if control:
@@ -343,6 +375,7 @@ def run(args):
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
         report['curriculum_extensions'] = extensions
+        report['curriculum_restrictions'] = restrictions
         report['exploration_config'] = asdict(exploration)
         report['exploration_adoptions'] = exploration_adoptions
         report['budget'] = action_budget
@@ -355,12 +388,14 @@ def run(args):
             report['optimization_identity'] = telemetry.identity
         if args.resume and report_path.exists():
             previous = json.loads(report_path.read_text())
-            if adopt:
-                # Keep the original report as evidence; never join different metric sources.
-                archive = output / f'report-before-training-phases-{batches}.json'
+            if adopt or restricted:
+                # Do not join different metric sources or game populations.
+                boundary = 'training-phases' if adopt else 'curriculum-restriction'
+                archive = output / f'report-before-{boundary}-{batches}.json'
                 if not archive.exists():
                     archive.write_text(json.dumps(previous, allow_nan=False) + '\n')
-                report['adopted_at_batch'] = batches
+                if adopt:
+                    report['adopted_at_batch'] = batches
             else:
                 report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
                 report['prediction_samples'] = previous.get('prediction_samples', [])
@@ -434,7 +469,8 @@ def run(args):
                 actions += real_actions
                 save_start = time.perf_counter()
                 save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
-                         extensions=extensions, explorer=explorer, exploration_adoptions=exploration_adoptions)
+                         extensions=extensions, restrictions=restrictions,
+                         explorer=explorer, exploration_adoptions=exploration_adoptions)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -481,6 +517,8 @@ def main():
                         help='Explicitly override only the predictor LR, preserving optimizer state on resume')
     parser.add_argument('--extend-curriculum', action='store_true',
                         help='Explicitly append training games/levels on resume, preserving weights and optimizers')
+    parser.add_argument('--restrict-curriculum', action='store_true',
+                        help='Explicitly remove training games/levels on resume, preserving weights, optimizers and phase')
     parser.add_argument('--adopt-training-phases', action='store_true',
                         help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
     parser.add_argument('--adopt-exploration', action='store_true',

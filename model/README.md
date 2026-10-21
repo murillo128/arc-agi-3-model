@@ -127,6 +127,19 @@ report, while historical batches remain identifiable as the earlier catalog.
 Once the extended checkpoint is saved, ordinary `--resume` works again; leaving
 `--extend-curriculum` on with the identical plan is also safe.
 
+To remove games or levels, stop the trainer gracefully, remove only those entries
+from its configuration, then resume with `--resume --restrict-curriculum`.
+The retained stages must keep their order and exact definitions; learning rates,
+thresholds, SDK splits and other settings cannot change in the same operation.
+Weights, optimizer moments, counters, RNG and the current training phase survive.
+Phase evidence is filtered to retained stages. The exploration head also survives;
+its unlabelled replay buffer is cleared so removed games are no longer rehearsed.
+The previous report is archived as `report-before-curriculum-restriction-BATCH.json`,
+and dashboard history and optimization measurements start a new segment for the
+smaller catalog. The checkpoint and report record the restriction boundary.
+After the first save, ordinary `--resume` works; leaving the flag on with the same
+plan is idempotent.
+
 ### Fases sobre los datos de entrenamiento
 
 El ejemplo incluye `sequence_control: {"window_batches": 4, "diagnostic_samples": 128,

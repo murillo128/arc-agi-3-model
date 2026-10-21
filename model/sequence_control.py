@@ -116,31 +116,33 @@ class SequencePhaseControl:
                     observed_native_levels=sorted(self.observed_native_levels),
                     observed_pairs=sorted(self.observed_pairs))
 
-    def restore(self, saved, *, extend=False):
+    def restore(self, saved, *, extend=False, restrict=False):
         previous = set(saved['streaks'])
         expanded = extend and previous < self.stages.keys()
+        reduced = restrict and set(self.stages) < previous
         config = asdict(self.config)
         if expanded and config['window_batches'] >= saved['config']['window_batches']:
             config['window_batches'] = saved['config']['window_batches']
-        if (saved.get('version') != 1 or saved['config'] != config or
+        if ((extend and restrict) or saved.get('version') != 1 or saved['config'] != config or
                 saved['phase'] not in ('representation', 'predictor') or
-                (previous != set(self.stages) and not expanded)):
+                (previous != set(self.stages) and not (expanded or reduced))):
             raise ValueError('Incompatible sequence phase state')
         self.phase, self.admitted_batch = saved['phase'], saved['admitted_batch']
         if expanded:
             self.phase, self.admitted_batch = 'representation', None
         self.window.clear()
-        self.window.extend(saved['window'])
-        self.streaks = dict.fromkeys(self.stages, 0) | saved['streaks']
+        self.window.extend(dict(entry, pairs={k: v for k, v in entry['pairs'].items() if k in self.stages})
+                           if reduced else entry for entry in saved['window'])
+        self.streaks = {key: saved['streaks'].get(key, 0) for key in self.stages}
         self.observed_native_levels = set(saved.get('observed_native_levels', (
             key for entry in self.window for key, row in entry['pairs'].items()
-            if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0)))
+            if self.stages[key].get('source') == 'sdk' and row.get('samples', 0) > 0))) & self.stages.keys()
         # Existing version-1 checkpoints predate the all-source coverage set.
         known_pairs = {key for entry in self.window for key, row in entry['pairs'].items()
                        if row.get('samples', 0) > 0}
         known_pairs.update(key for key, passes in self.streaks.items() if passes > 0)
         known_pairs.update(self.observed_native_levels)
-        self.observed_pairs = set(saved.get('observed_pairs', known_pairs))
+        self.observed_pairs = set(saved.get('observed_pairs', known_pairs)) & self.stages.keys()
 
     def report(self):
         return dict(phase=self.phase, admitted_batch=self.admitted_batch,
