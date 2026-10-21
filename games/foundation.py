@@ -10,26 +10,6 @@ import math
 from games.skill_common import DIRS, Puzzle, condition
 
 
-def arrow(c, x, y, dx, dy, color=0):
-    """A direction, drawn without a symbolic opcode or alphabetic label."""
-    c.line((x-3*dx, y-3*dy), (x+3*dx, y+3*dy), color)
-    for sign in (-1, 1):
-        c.line((x+3*dx, y+3*dy),
-               (x+dx+sign*2*dy, y+dy-sign*2*dx), color)
-
-
-def turn_arrow(c, x, y, clockwise=True):
-    points = [(x+round(4*math.cos(t)), y+round(4*math.sin(t)))
-              for t in [i*math.pi/12 for i in range(3, 22)]]
-    if not clockwise:
-        points = [(2*x-u, v) for u, v in points]
-    for a, b in zip(points, points[1:]):
-        c.line(a, b, 0)
-    u, v = points[-1]
-    c.line((u, v), (u-3 if clockwise else u+3, v), 0)
-    c.line((u, v), (u, v-3), 0)
-
-
 class Basic(Puzzle):
     board_controls = True
     direct_controls = True
@@ -212,7 +192,6 @@ class Rotate(Basic):
 
     def draw(self,c):
         for i,(x,y) in enumerate(self.positions()):
-            turn_arrow(c,x,y-19)
             for dx,dy in self.cells(self.target[i]):
                 c.rect(x+7*dx-3,y+7*dy-3,7,7,c.color(i),True)
             for dx,dy in self.cells(self.state[i]):

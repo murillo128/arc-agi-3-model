@@ -258,8 +258,9 @@ config directory, `MPLCONFIGDIR=/tmp/arc3-mpl` avoids its cache warning.
 `si01-v1`, or `sy01-v1`–`sy60-v1`. The existing harder games remain available.
 The eight contexts teach two-colour matching, permanent switch chains, movement,
 rotation, a fixed reflection, one loop, unit transfer, and matching pairs.
-Pieces and pictorial arrows are directly clickable; movement also uses the
-keyboard/D-pad. No letters, digits, selection command or execution opcode is
+Pieces are directly clickable; movement and transfers use native actions through
+the keyboard/D-pad. Rotation boards show the pieces and target outlines without
+decorative turn arrows. No letters, digits, selection command or execution opcode is
 required on a foundation board. HELP explains the active controls and suggests
 suitable later practice; those suggestions do not schedule or modify training.
 
