@@ -99,6 +99,29 @@ class OfflineSDKTests(unittest.TestCase):
         self.assertEqual(env._game.puzzle.steps,0)
         self.assertEqual(env._game.puzzle.state,(0,-1,-1))
 
+    def test_timing_wait_cross_loss_and_retry_use_native_actions(self):
+        for game in ('sy59-v1','sy60-v1'):
+            with self.subTest(game=game):
+                env=self.arcade.make(game,seed=42,scorecard_id=self.card)
+                initial=env.observation_space.frame[-1].copy()
+                self.assertEqual(env.observation_space.available_actions,[3,4,5,7])
+                result=env.step(GameAction.ACTION4)  # Closed: cannot skip across.
+                self.assertEqual(result.state,GameState.GAME_OVER)
+                self.assertEqual(result.levels_completed,0)
+                reset=env.reset()
+                np.testing.assert_array_equal(reset.frame[-1],initial)
+                result=env.step(GameAction.ACTION5)  # Level 1 opens every other tick.
+                p=env._game.puzzle
+                self.assertEqual(p.state,(0,1)); self.assertFalse(p.lost)
+                palette=env._game.palette
+                self.assertEqual(int(initial[34,9]),palette[p.palette[1]])
+                self.assertEqual(int(result.frame[-1][34,9]),palette[2])
+                result=env.step(GameAction.ACTION4)
+                self.assertEqual(result.levels_completed,1)
+                self.assertEqual(training_info(env)['level'],2)
+                self.assertEqual(training_info(env)['last_transition']['outcome'],
+                                 'level_complete')
+
     def test_native_budget_final_action_loss_retry_and_untouched_resets(self):
         env = self.arcade.make('sy04-v1',seed=42,scorecard_id=self.card)
         initial = env.observation_space.frame[-1].copy()

@@ -144,18 +144,25 @@ class PresentationTests(unittest.TestCase):
         np.testing.assert_array_equal(f[17:19,14:16],np.full((2,2),2))
         self.assertEqual([int(f[18,x]) for x in (32,35,50,53)],[7,2,8,8])
 
-    def test_hazard_track_matches_clock_after_not_before_action(self):
-        p=self.puzzle('sy60',3); p.period=3; p.phases={1:1,3:2}; p.state=(0,0)
+    def test_timing_gate_gap_matches_the_visible_opening_phase(self):
+        p=self.puzzle('sy60',2); p.period=3; p.open_phases={0:1,1:2}; p.state=(0,0)
         f=p.render()
-        self.assertEqual(int(f[10,10]),7)  # first hazard marked at middle phase
-        self.assertEqual(int(f[13,18]),7)  # second at last phase
-        self.assertEqual(int(f[7,57]),0)   # clock currently at top
-        self.assertNotEqual(int(f[30,11]),7)
+        self.assertEqual(int(f[11,8]),7)   # first gate's opening: middle phase
+        self.assertEqual(int(f[14,16]),7)  # second gate's opening: last phase
+        self.assertEqual(int(f[8,57]),0)   # clock currently at top
+        self.assertTrue(np.all(f[32:37,8:11]==7))  # closed across the lane
         self.assertIsNone(p.transition((0,0),0))
         p.state=(0,1); f=p.render()
-        self.assertEqual(int(f[10,57]),0); self.assertEqual(int(f[30,11]),7)
+        self.assertEqual(int(f[11,57]),0)
+        self.assertTrue(np.all(f[34,8:11]==2))  # continuous road through gap
+        self.assertTrue(np.all(f[32:37,8:11]!=7))
+        self.assertEqual(int(f[30,9]),7)  # visible ends of the open barrier
+        self.assertEqual(int(f[38,9]),7)
         self.assertEqual(p.transition((0,1),0),(1,2))
-        self.assertEqual(p.transition((0,2),1),(0,0))
+        p.input_action(4); f=p.render()
+        self.assertEqual(int(f[34,13]),8)  # player on next safe pad
+        self.assertEqual(int(f[34,9]),7)   # first barrier has closed behind it
+        self.assertEqual(int(f[34,17]),2)  # second is now visibly open
 
     def test_program_switch_dictionary_noop_emit_call_and_full_output(self):
         p=self.puzzle('sy53',6); p.state=((0,)*6,(),False)

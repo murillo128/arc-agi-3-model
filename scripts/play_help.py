@@ -34,7 +34,7 @@ CONTEXT_HELP = {
     'sigils': 'Tap cells to draw one of the shown sigils exactly. Completing it advances that attribute and clears the drawing. Match each upper target count with its lower current count.',
     'memory': 'Reveal pairs of cards with matching colours. A mismatch briefly shows both cards before hiding them. Matched pairs disappear; remember earlier reveals.',
     'ghost': 'Walk to a plate, then tap the character itself to save the path and return to the start. Space waits one step. Recorded helpers replay as you move or wait, then stay at their endpoints. All plates must be held while you enter the exit corridor.',
-    'timing': 'Use Right to advance, Space to wait or Left to retreat toward the exit. Every command advances the clock first; landing on an active hazard loses. Vertical tracks above each hazard align with the clock at the right. A coloured cell marks its dangerous phase, a white inset marks the current phase, and a filled hazard is active. The clock moves downward and wraps along its return edge.',
+    'timing': 'Reach the exit cross on the right. Left/Right cross one barrier to the next safe pad; Space waits. Cross only when the barrier has a visible gap: trying to cross a closed barrier loses, in either direction. The move uses the opening you can see, then advances the clock. Waiting on a pad is safe even when a barrier closes beside it. Each barrier opens for one tick per cycle. In its vertical schedule, the coloured cell marks the opening phase and the inset marks the current phase. The clock at the right moves downward and wraps. Later levels add barriers with different opening times.',
 }
 
 

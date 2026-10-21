@@ -230,13 +230,36 @@ class LiteralRulesTests(unittest.TestCase):
         q.act(1)
         self.assertEqual(q.state[0],(0,0)); self.assertFalse(q.won)
 
-    def test_new_phase_not_old_phase_determines_safety(self):
-        p = self.game('orden_de_eventos',2)
-        p.period=3; p.phases={1:1}
-        self.assertIsNone(p.transition((0,0),0))
-        self.assertEqual(p.transition((0,1),0),(1,2))
-        self.assertEqual(p.transition((1,2),0),(2,0))
-        self.assertIsNone(p.transition((1,0),1))
+    def test_timing_crosses_only_the_visibly_open_gate_before_ticking(self):
+        # Three safe pads separated by gates: first opens at 1, second at 2.
+        # These literal outcomes distinguish visible-time and destination-time
+        # checks, and verify the same edge when crossing in reverse.
+        for game in ('sy59','sy60'):
+            p = self.game(game,2)
+            p.m=2; p.period=3; p.open_phases={0:1,1:2}
+            for start,command,expected in (
+                ((0,0),0,None), ((0,1),0,(1,2)), ((0,2),0,None),
+                ((1,1),0,None), ((1,2),0,(2,0)),
+                ((1,0),2,None), ((1,1),2,(0,2)), ((1,2),2,None),
+                ((2,2),2,(1,0)),
+            ):
+                with self.subTest(game=game,start=start,command=command):
+                    self.assertEqual(p.transition(start,command),expected)
+
+    def test_timing_waits_safely_and_undo_restores_position_and_clock(self):
+        p = self.game('sy59',3)
+        p.m=3; p.period=3; p.open_phases={0:1,1:2,2:0}
+        for position in range(4):
+            for phase in range(3):
+                self.assertEqual(p.transition((position,phase),1),
+                                 (position,(phase+1)%3))
+        self.assertEqual(p.transition((0,2),2),(0,0))  # Left boundary waits.
+        self.assertEqual(p.transition((3,2),0),(3,0))  # Right boundary waits.
+        p.input_action(5)  # Space opens the first gate.
+        p.input_action(4)  # Right crosses before it closes.
+        self.assertEqual(p.state,(1,2)); self.assertFalse(p.lost)
+        p.input_action(7)
+        self.assertEqual(p.state,(0,1)); self.assertEqual(p.steps,3)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -297,6 +320,30 @@ class LifecycleTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def test_timing_requires_waiting_and_every_level_has_safe_crossings(self):
+        for game in ('sy59','sy60'):
+            for level in range(1,7):
+                for seed in range(64):
+                    p=make_puzzle(game,seed,level)
+                    with self.subTest(game=game,level=level,seed=seed):
+                        self.assertEqual(len(p.open_phases),level)
+                        self.assertIsNone(p.transition(p.state,0))
+                        self.assertEqual(p.available_actions(),[3,4,5,7])
+                        # Independently construct a schedule from the generated
+                        # opening times, not from the transition/search helper.
+                        phase=0
+                        for gate in range(level):
+                            opening=p.open_phases[gate]
+                            for _ in range((opening-phase)%p.period):
+                                p.input_action(5)
+                            p.input_action(4)
+                            phase=(opening+1)%p.period
+                            self.assertEqual(p.state,(gate+1,phase))
+                            self.assertFalse(p.lost)
+                        self.assertTrue(p.won)
+                        self.assertLessEqual(p.steps,level*p.period)
+                        self.assertLessEqual(p.steps,p.budget)
+
     def test_native_actions_replace_detached_panels(self):
         # The public contract is up to five general actions, plus clicks on
         # actual objects and Undo. Keep every semantic command reachable.

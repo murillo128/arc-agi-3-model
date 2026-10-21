@@ -46,11 +46,12 @@ while preserving the context and control meanings. Examples:
 | sy47: function composition | Translate one glyph | Six-glyph phrase through three dictionaries |
 | sy55: partial memory | Reveal one pair | Six shuffled pairs; failed guesses reveal both faces only transiently |
 | sy58: history as state | Record a one-move helper | Two recorded helpers must hold plates while the player exits |
+| sy59–sy60: timed crossings | One gate alternating closed/open | Six gates, each open for one tick in a five-tick cycle |
 
 Other contexts include equality/inequality, factored keys, geometry/reflections,
 layered paint, mirrored twins, centroids, key/bridge mazes, permutations, peg
 captures, contact/impulse, autonomous movers, capacity-limited tanks, gravity,
-exact-count merging, binary programs/calls, sigils and phase-dependent hazards.
+exact-count merging, binary programs/calls, sigils and timed barriers.
 Levels are independently constructible through the pure API; the SDK presents
 six levels sequentially.
 
@@ -101,6 +102,19 @@ used to be is a miss. No extra object-selection mode is introduced. Existing
 peg/block selection remains part of those board games. These changes deliberately
 alter affected action meanings and some generated targets; historical button-era
 replay fingerprints are not a compatibility requirement for those profiles.
+
+Timing profiles (`sy59` and `sy60`) use barriers **between safe pads**, not
+intermittently dangerous floor tiles. Left/Right crosses exactly one gate when
+it is visibly open; trying to cross a closed gate in either direction loses.
+The crossing is checked against the current observation, then the clock advances.
+Space waits safely on any pad. Gates open for one tick per cycle; the coloured
+cell in each vertical schedule marks its opening, and the inset marks the current
+phase. A physical gap across the lane shows an open gate. Level 1 has one gate
+and a two-tick cycle; level 6 has six gates and a five-tick cycle. The first gate
+starts closed, so holding Right cannot bypass the timing lesson. There is always
+a forward solution of at most `number_of_gates * period` actions, within budget.
+Undo restores position and clock without refunding actions. This replaces the
+old post-move, one-dangerous-phase collision rule in both timing profiles.
 
 For token panels, hollow upper tokens are goals and lower solid tokens are live
 values. Paint uses a left reference and right canvas. Crosses mark geometry or

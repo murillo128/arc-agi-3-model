@@ -400,40 +400,53 @@ class Ghost(Puzzle):
 class Timing(Puzzle):
     native_commands={3:2,4:0,5:1}
     def setup(self):
-        self.m=2*self.level-1
+        # Positions are safe pads. Gate i separates pads i and i+1; the player
+        # crosses it in one command and never stops inside a closing barrier.
+        self.m=self.level
         self.period=2+min(3,self.level-1)
-        self.phases={i:self.rng.randrange(self.period) for i in range(1,self.m,2)}
+        self.open_phases={i:self.rng.randrange(self.period) for i in range(self.m)}
+        # Every level teaches waiting, including the one-gate introduction.
+        self.open_phases[0]=self.rng.randrange(1,self.period)
         self.commands=('Advance','Wait','Retreat')
         self.state=(0,0)
         self.target=(self.m,)
         self.budget=2*self.m*self.period+8
 
     def transition(self,state,command):
-        p,t=state; t=(t+1)%self.period
+        p,t=state
         q=max(0,min(self.m,p+(1 if command==0 else -1 if command==2 else 0)))
-        if q in self.phases and t==self.phases[q]: return None
-        return q,t
+        # Check the crossed edge in the frame the player saw, in either
+        # direction. Only then tick the clock; waiting on any pad is safe.
+        if q!=p and t!=self.open_phases[min(p,q)]: return None
+        return q,(t+1)%self.period
 
     def projection(self,state): return (state[0],)
 
     def subgoals(self,state=None):
         p,_=self.state if state is None else state
-        return [condition(f'crossing-{i}',p>i,True) for i in self.phases] + [condition('exit',p,self.m)]
+        return [condition(f'crossing-{i}',p>i,True) for i in self.open_phases] + [condition('exit',p,self.m)]
 
     def draw(self,c):
-        c.line((7,30),(7+4*self.m,30),2)
-        for p,phase in self.phases.items():
-            x=7+4*p; c.token(x,30,1,hollow=self.state[1]!=phase,size=3)
+        c.line((5,34),(5+8*self.m,34),2)
+        for p in range(self.m+1): c.rect(3+8*p,32,5,5,2,True)
+        for gate,phase in self.open_phases.items():
+            x=9+8*gate
+            if self.state[1]==phase:
+                # The opening fits the largest player token (five pixels).
+                c.rect(x-1,29,3,3,c.color(1))
+                c.rect(x-1,37,3,3,c.color(1))
+            else:
+                c.rect(x-1,29,3,11,c.color(1))
             c.line((x,24),(x,27),2)
             for t in range(self.period):
-                c.rect(x-1,7+3*t,3,2,c.color(1) if t==phase else 2)
-                if t==self.state[1]: c.rect(x,7+3*t,1,1,0)
-        c.cross(7+4*self.m,30,0,2); c.token(7+4*self.state[0],30,2)
-        # All hazard tracks align with this common clock. Downward progression
+                c.rect(x-1,8+3*t,3,2,c.color(1) if t==phase else 2)
+                if t==self.state[1]: c.rect(x,8+3*t,1,1,0)
+        c.cross(5+8*self.m,34,0,2); c.token(5+8*self.state[0],34,2)
+        # Opening schedules align with this common clock. Downward progression
         # and the return edge expose order and wrap-around, without phase IDs.
-        for t in range(self.period): c.rect(56,7+3*t,3,2,0 if t==self.state[1] else 2)
-        last=7+3*(self.period-1)
-        c.line((61,7),(61,last),2); c.arrow(61,last,0,1,2,1)
+        for t in range(self.period): c.rect(56,8+3*t,3,2,0 if t==self.state[1] else 2)
+        last=8+3*(self.period-1)
+        c.line((61,8),(61,last),2); c.arrow(61,last,0,1,2,1)
         c.line((61,last+2),(54,last+2),2)
         c.line((54,last+2),(54,5),2); c.line((54,5),(58,5),2)
         c.arrow(58,6,0,1,2,1)
