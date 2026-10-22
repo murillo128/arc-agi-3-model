@@ -37,6 +37,74 @@ def local_config(**kwargs):
 
 
 class SequenceUpgradeTests(unittest.TestCase):
+    def test_fix_click_sigma_removes_only_width_and_preserves_surviving_adam_state(self):
+        old = WorldModel(local_config(rotation_adapter_width=2, learnable_click_sigma=True))
+        with torch.no_grad():
+            old.dynamics.rotation_adapter.output.weight.normal_(0, .1)
+            old.dynamics.rotation_adapter.click_width.log_scale.fill_(.4)
+        adam = optimizer(old.dynamics.parameters(), .001, False)
+        sum(p.square().sum() for p in old.dynamics.parameters()).backward()
+        adam.step()
+        saved = dict(network=asdict(old.config), weights=deepcopy(old.state_dict()),
+                     predictor_optimizer=adam.state_dict(), progress=dict(updates=1))
+        target = replace(old.config, learnable_click_sigma=False)
+        new = WorldModel(upgraded_network(saved, dict(network=asdict(target)), fix_click_sigma=True))
+        load_upgraded_weights(new, saved, fix_click_sigma=True)
+        removed = 'dynamics.rotation_adapter.click_width.log_scale'
+        self.assertEqual(set(saved['weights']) - set(new.state_dict()), {removed})
+        for name, value in new.state_dict().items():
+            torch.testing.assert_close(value, saved['weights'][name], rtol=0, atol=0)
+        migrated = optimizer(new.dynamics.parameters(), .1, False)
+        migrated.load_state_dict(upgraded_optimizer(saved, new.dynamics, fix_click_sigma=True))
+        old_parameters = dict(old.dynamics.named_parameters())
+        self.assertEqual(len(migrated.state), len(adam.state) - 1)
+        for name, parameter in new.dynamics.named_parameters():
+            for field, value in adam.state[old_parameters[name]].items():
+                torch.testing.assert_close(migrated.state[parameter][field], value, rtol=0, atol=0)
+        for left, right in zip(adam.param_groups, migrated.param_groups):
+            self.assertEqual({k:v for k,v in left.items() if k != 'params'},
+                             {k:v for k,v in right.items() if k != 'params'})
+        self.assertIsNone(new.dynamics.rotation_adapter.click_width)
+        self.assertEqual(new.dynamics.rotation_adapter.click_sigma(), 1.5)
+        # Independent behavioral oracle: original trained filters, with only its
+        # width reset to the analytically known sigma=1.5 at log_scale=0.
+        with torch.no_grad():
+            old.dynamics.rotation_adapter.click_width.log_scale.zero_()
+        z = torch.randn(2, 4, 64); memory = torch.randn(2, 32)
+        action = torch.tensor([Action(6, dict(x=3, y=2)).features(), Action(4).features()])
+        with torch.no_grad():
+            for left, right in zip(old.dynamics(z, memory, action, 5, 7),
+                                   new.dynamics(z, memory, action, 5, 7)):
+                torch.testing.assert_close(left, right, rtol=0, atol=0)
+        migrated.zero_grad(set_to_none=True)
+        new.dynamics(z, memory, action, 5, 7)[0].square().mean().backward()
+        migrated.step()
+        self.assertEqual(new.dynamics.rotation_adapter.click_sigma(), 1.5)
+        self.assertTrue(all(torch.isfinite(p).all() for p in new.parameters()))
+        broken = dict(saved, weights=dict(saved['weights']))
+        broken['weights'].pop('dynamics.rotation_adapter.output.weight')
+        with self.assertRaisesRegex(ValueError, 'every existing weight'):
+            load_upgraded_weights(WorldModel(target), broken, fix_click_sigma=True)
+
+    def test_fix_click_sigma_rejects_unrelated_network_and_plan_changes(self):
+        before = local_config(rotation_adapter_width=2, learnable_click_sigma=True)
+        after = replace(before, learnable_click_sigma=False)
+        previous = dict(initialization=dict(network=asdict(before)))
+        current = dict(initialization=dict(network=asdict(after)))
+        self.assertFalse(upgrade_plan_matches(previous, current))
+        self.assertFalse(upgrade_plan_matches(previous, current, upgrade_predictor=True))
+        self.assertTrue(upgrade_plan_matches(previous, current, fix_click_sigma=True))
+        self.assertTrue(upgrade_plan_matches(current, current, fix_click_sigma=True))
+        self.assertFalse(upgrade_plan_matches(previous, current, fix_click_sigma=True, upgrade_predictor=True))
+        for target in (before, replace(after, memory=64), replace(after, rotation_adapter_width=3)):
+            changed = dict(initialization=dict(network=asdict(target)))
+            self.assertFalse(upgrade_plan_matches(previous, changed, fix_click_sigma=True))
+            with self.assertRaisesRegex(ValueError, 'only disable'):
+                upgraded_network(dict(network=asdict(before)), changed['initialization'], fix_click_sigma=True)
+        no_adapter = dict(network=asdict(local_config()))
+        with self.assertRaisesRegex(ValueError, 'only disable'):
+            upgraded_network(no_adapter, no_adapter, fix_click_sigma=True)
+
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA required for scalar/tensor kernel regression')
     def test_initial_learned_width_matches_the_original_cuda_gaussian(self):
         action = torch.tensor([Action(6, dict(x=0, y=0)).features()], device='cuda')
@@ -398,6 +466,42 @@ class SequenceUpgradeTests(unittest.TestCase):
             self.assertTrue(report['predictor_adaptations'][-1]['learnable_click_sigma'])
             loaded = load_engine(load_plan(path), root/'run/latest.pt')
             self.assertEqual(float(loaded.model.dynamics.rotation_adapter.click_sigma()), report['click_map']['sigma_pixels'])
+
+            initial['network']['learnable_click_sigma'] = False
+            initial_path.write_text(json.dumps(initial))
+            plan = load_plan(path)
+            fixed_engine = load_engine(plan, root/'run/latest.pt', fix_click_sigma=True)
+            fixed_learner = SequenceLearner(fixed_engine, SequenceConfig(**plan.payload['sequence']))
+            fixed_rep = representation_for(fixed_engine, plan)
+            fixed_explorer = ChangeExplorer(SequenceExplorationConfig(**plan.payload['sequence_exploration']))
+            with self.assertRaisesRegex(ValueError, 'same sequence'):
+                restore_run(resumed, plan, fixed_learner, fixed_rep, explorer=fixed_explorer)
+            counters = restore_run(resumed, plan, fixed_learner, fixed_rep,
+                                   explorer=fixed_explorer, fix_click_sigma=True)
+            self.assertEqual(counters, (5, resumed['progress']['actions']))
+            torch.testing.assert_close(torch.get_rng_state(), resumed['torch_rng'], rtol=0, atol=0)
+            for field in ('step', 'exp_avg', 'exp_avg_sq'):
+                for identity, state in resumed['representation_optimizer']['state'].items():
+                    torch.testing.assert_close(fixed_rep.optimizer.state_dict()['state'][identity][field],
+                                               state[field], rtol=0, atol=0)
+            for key, value in resumed['exploration']['weights'].items():
+                torch.testing.assert_close(fixed_explorer.head.state_dict()[key], value, rtol=0, atol=0)
+            args.fix_click_sigma = True
+            run(args)
+            args.fix_click_sigma = False
+            run(args)
+            fixed = checkpoint.load(root/'run/latest.pt')
+            self.assertNotIn(name, fixed['weights'])
+            self.assertFalse(fixed['network']['learnable_click_sigma'])
+            self.assertGreater(fixed['progress']['updates'], resumed['progress']['updates'])
+            report = json.loads((root/'run/report.json').read_text())
+            self.assertEqual([r['batch'] for r in report['history']], [6, 7])
+            self.assertFalse(report['click_map']['learnable'])
+            self.assertEqual(report['click_map']['sigma_pixels'], 1.5)
+            self.assertTrue(all(r['click_sigma_pixels'] == 1.5 for r in report['history']))
+            self.assertEqual(report['predictor_adaptations'][-1]['batch'], 5)
+            self.assertTrue(report['predictor_adaptations'][-1]['fix_click_sigma'])
+            self.assertTrue((root/'run/report-before-predictor-adaptation-5.json').exists())
 
 
 if __name__ == '__main__':

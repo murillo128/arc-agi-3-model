@@ -80,23 +80,26 @@ def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exp
     return sessions
 
 
-def load_engine(plan, source=None, *, device='cpu', compile_model=False, upgrade_predictor=False):
+def load_engine(plan, source=None, *, device='cpu', compile_model=False, upgrade_predictor=False,
+                fix_click_sigma=False):
+    if upgrade_predictor and fix_click_sigma:
+        raise ValueError('Predictor upgrade and fixed click sigma cannot be combined')
     initial = plan.payload['initialization']
     saved = checkpoint.load(source) if source else None
     if saved and saved.get('format') == 'arc3-agent':
         saved = saved['world']
     network = NetworkConfig(**(saved['network'] if saved else initial['network']))
-    if upgrade_predictor:
+    if upgrade_predictor or fix_click_sigma:
         if not saved or saved.get('kind') != 'game_sequences':
             raise ValueError('Predictor upgrade requires a sequence checkpoint')
-        network = upgraded_network(saved, initial)
+        network = upgraded_network(saved, initial, fix_click_sigma=fix_click_sigma)
     training = TrainConfig(**(saved['training'] if saved else initial.get('training', {})))
     training = replace(training, learning_rate=plan.settings['learning_rate'],
                        prediction_delta_loss=plan.settings['prediction_delta_loss'])
     net = WorldModel(network).to(device)
     if saved:
-        if upgrade_predictor:
-            load_upgraded_weights(net, saved)
+        if upgrade_predictor or fix_click_sigma:
+            load_upgraded_weights(net, saved, fix_click_sigma=fix_click_sigma)
         else:
             net.load_state_dict(saved['weights'], strict=True)
     return Engine(net, training, compile_model=compile_model)
@@ -237,8 +240,11 @@ def restricted_plan_matches(previous, current):
 
 
 def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False, restrict=False,
-                adopt_exploration=False, explorer=None, disable_undo=False, upgrade_predictor=False):
-    adaptation = disable_undo or upgrade_predictor
+                adopt_exploration=False, explorer=None, disable_undo=False, upgrade_predictor=False,
+                fix_click_sigma=False):
+    if fix_click_sigma and (disable_undo or upgrade_predictor):
+        raise ValueError('Fixed click sigma cannot be combined with other adaptations')
+    adaptation = disable_undo or upgrade_predictor or fix_click_sigma
     if sum((adopt, extend, restrict, adopt_exploration, adaptation)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
     expected = normalized_plan(plan.payload)
@@ -260,7 +266,8 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
             (changed and not (extend and extended_plan_matches(previous_plan, expected)) and
              not (restrict and restricted_plan_matches(previous_plan, expected)) and
              not (adaptation and upgrade_plan_matches(previous_plan, expected,
-                  disable_undo=disable_undo, upgrade_predictor=upgrade_predictor))) or
+                  disable_undo=disable_undo, upgrade_predictor=upgrade_predictor,
+                  fix_click_sigma=fix_click_sigma))) or
             saved['sequence'] != asdict(learner.config)):
         raise ValueError('Resume requires the same sequence configuration and training plan')
     if control is not None and not adopt:
@@ -275,11 +282,12 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
             # Replay has no game labels: discard old examples, retaining the
             # learned head, Adam moments, counters and random generator.
             explorer.replay.clear()
-    if upgrade_predictor:
-        target = upgraded_network(saved, plan.payload['initialization'])
+    if upgrade_predictor or fix_click_sigma:
+        target = upgraded_network(saved, plan.payload['initialization'], fix_click_sigma=fix_click_sigma)
         if learner.engine.model.config != target:
             raise ValueError('Predictor upgrade must load the expanded model first')
-        learner.optimizer.load_state_dict(upgraded_optimizer(saved, learner.engine.model.dynamics))
+        learner.optimizer.load_state_dict(upgraded_optimizer(saved, learner.engine.model.dynamics,
+                                                            fix_click_sigma=fix_click_sigma))
     else:
         learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
@@ -332,7 +340,10 @@ def run(args):
     adopt_exploration = getattr(args, 'adopt_exploration', False)
     disable_undo = getattr(args, 'disable_undo', False)
     upgrade_predictor = getattr(args, 'upgrade_predictor', False)
-    adaptation = disable_undo or upgrade_predictor
+    fix_click_sigma = getattr(args, 'fix_click_sigma', False)
+    if fix_click_sigma and (disable_undo or upgrade_predictor):
+        raise ValueError('--fix-click-sigma cannot be combined with other adaptations')
+    adaptation = disable_undo or upgrade_predictor or fix_click_sigma
     if adaptation and (not args.resume or adopt or extend or restrict or adopt_exploration):
         raise ValueError('Predictor/Undo adaptation requires --resume without other adoptions')
     if disable_undo and exploration.allow_undo:
@@ -355,7 +366,7 @@ def run(args):
         source = output / 'latest.pt' if args.resume else args.source
         torch.manual_seed(plan.settings['seed'])
         engine = load_engine(plan, source, device=args.device, compile_model=args.compile,
-                             upgrade_predictor=upgrade_predictor)
+                             upgrade_predictor=upgrade_predictor, fix_click_sigma=fix_click_sigma)
         learner, representation = SequenceLearner(engine, config), representation_for(engine, plan)
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
@@ -373,7 +384,8 @@ def run(args):
             batches, actions = restore_run(saved, plan, learner, representation, control,
                                            adopt=adopt, extend=extend, restrict=restrict,
                                            adopt_exploration=adopt_exploration, explorer=explorer,
-                                           disable_undo=disable_undo, upgrade_predictor=upgrade_predictor)
+                                           disable_undo=disable_undo, upgrade_predictor=upgrade_predictor,
+                                           fix_click_sigma=fix_click_sigma)
             predictor_adaptations = list(saved.get('predictor_adaptations', []))
             adapted = adaptation and normalized_plan(saved['plan']) != normalized_plan(plan.payload)
             if adapted:
@@ -381,6 +393,7 @@ def run(args):
                     allow_undo=exploration.allow_undo,
                     rotation_adapter_width=engine.model.config.rotation_adapter_width,
                     learnable_click_sigma=engine.model.config.learnable_click_sigma,
+                    fix_click_sigma=fix_click_sigma,
                     previous_plan=digest(saved['plan']), plan=plan.identity))
             extensions = list(saved.get('curriculum_extensions', []))
             restrictions = list(saved.get('curriculum_restrictions', []))
@@ -581,6 +594,8 @@ def main():
     parser.add_argument('--adopt-exploration', action='store_true',
                         help='Adopt the first learned exploration head without resetting the world model')
     parser.add_argument('--exploration-source', type=Path, help='Auxiliary bootstrap checkpoint for a new head only')
+    parser.add_argument('--fix-click-sigma', action='store_true',
+                        help='Explicitly return an existing adapter to fixed sigma=1.5, preserving all other learned state')
     parser.add_argument('--unlimited', action='store_true',
                         help='Ignore the total action budget; run until interrupted or --max-batches is reached')
     parser.add_argument('--optimization', action='store_true', help='Record bounded optimizer diagnostics')
