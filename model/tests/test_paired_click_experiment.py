@@ -1,17 +1,25 @@
 """Real-prefix fidelity and numerical contracts for the bounded A/B probe."""
+from contextlib import redirect_stdout
+import copy
+from dataclasses import asdict, replace
+import io
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 import unittest
-from dataclasses import replace
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
+from model import checkpoint
 from model.config import NetworkConfig, SequenceConfig, TrainConfig
 from model.data import Action, Observation
 from model.game_sequences import GameSession, SequenceLearner, Transition
 from model.learning import Engine
 from model.networks import WorldModel
 from model.paired_click_experiment import (replay_branch, seed_sets, counts, summarize,
-    batches_for, encode_cache, cached_sessions, decision)
+    batches_for, encode_cache, cached_sessions, decision, run)
 
 
 def observation(frame, terminal=False):
@@ -135,6 +143,78 @@ class PairedClickTests(unittest.TestCase):
                 self.assertEqual(sum(np.count_nonzero(s.transitions[-1].after.final) > 0 for s in rows),4)
             for i in range(0,8,2):
                 self.assertIs(paired[i].transitions[-1].before,paired[i+1].transitions[-1].before)
+
+    def test_spatial_arm_preserves_adam_state_and_only_changes_all_adapter_rates(self):
+        torch.set_num_threads(2); torch.manual_seed(7)
+        config = replace(NetworkConfig.small(), patch=2, pixel_latent=True,
+                         local_dynamics=True, rotation_adapter_width=4)
+        engine = Engine(WorldModel(config), TrainConfig())
+        learner = SequenceLearner(engine)
+        # Distinct restored group rates catch accidental resets to constructor defaults.
+        learner.optimizer.param_groups[1]['lr'] = 2e-5
+        for parameter in engine.model.dynamics.parameters():
+            parameter.grad = torch.full_like(parameter, .125)
+        learner.optimizer.step()
+        expected = {}
+        names = {parameter: name for name, parameter in engine.model.dynamics.named_parameters()}
+        for group in learner.optimizer.param_groups:
+            options = {k: copy.deepcopy(v) for k, v in group.items() if k != 'params'}
+            for parameter in group['params']:
+                expected[names[parameter]] = (options, copy.deepcopy(learner.optimizer.state[parameter]))
+        adapter = {name for name in expected if name.startswith('rotation_adapter.')}
+        self.assertEqual(sum(name.endswith('.bias') for name in adapter), 4)
+        self.assertTrue(any(not name.endswith('.bias') for name in adapter))
+        self.assertTrue(all(state['step'].item() == 1 for _, state in expected.values()))
+        self.assertTrue(all(torch.count_nonzero(state['exp_avg']) for _, state in expected.values()))
+
+        source = fixture()
+        branches = [source] + [replay_branch(ClickFactory(), source, Action(6, dict(x=x, y=2)))
+                               for x in range(3)]
+        data = dict(normal=[fixture() for _ in range(4)], paired=[branches], validation=branches,
+                    ordinary=[source], guards=[source], counters={}, composition={})
+        observed = []
+        test = self
+
+        class ObservedLearner(SequenceLearner):
+            def update(self, *args, **kwargs):
+                spatial_arm = len(observed) == 2
+                current_names = {p: n for n, p in self.engine.model.dynamics.named_parameters()}
+                seen = []
+                for group in self.optimizer.param_groups:
+                    for parameter in group['params']:
+                        name = current_names[parameter]
+                        seen.append(name)
+                        options, state = expected[name]
+                        target = dict(options, lr=1e-4) if spatial_arm and name in adapter else options
+                        with test.subTest(arm=len(observed), parameter=name):
+                            test.assertEqual({k: v for k, v in group.items() if k != 'params'}, target)
+                            test.assertEqual(set(self.optimizer.state[parameter]), set(state))
+                            for key, value in state.items():
+                                torch.testing.assert_close(self.optimizer.state[parameter][key], value,
+                                                           rtol=0, atol=0)
+                test.assertCountEqual(seen, expected)  # No lost or duplicate parameters.
+                result = super().update(*args, **kwargs)
+                observed.append(result['examples'])
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root/'source.pt'
+            checkpoint.write(source_path, dict(network=asdict(config), training=asdict(engine.config),
+                weights=engine.model.state_dict(), predictor_optimizer=learner.optimizer.state_dict(),
+                progress=dict(updates=1)))
+            original_bytes = source_path.read_bytes()
+            args = SimpleNamespace(source=source_path, output=root/'probe', updates=1, cpu_threads=2,
+                train_scenes=1, validation_scenes=1, context=2, batch_size=4, device='cpu',
+                balanced=False, spatial_lr=True)
+            # Collection has separate real-prefix coverage; run the actual optimizer/update path.
+            with patch('model.paired_click_experiment.collect_data', return_value=data), \
+                 patch('model.paired_click_experiment.SequenceLearner', ObservedLearner), \
+                 redirect_stdout(io.StringIO()):
+                report = run(args)
+            self.assertEqual(source_path.read_bytes(), original_bytes)
+        self.assertEqual(observed, [4, 4, 4])
+        self.assertTrue(all(arm['frozen_representation'] for arm in report['trials'].values()))
 
     def test_adoption_gate_rejects_new_errors_outside_paired_examples(self):
         import copy

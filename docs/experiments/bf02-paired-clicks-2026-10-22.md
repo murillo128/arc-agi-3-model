@@ -4,7 +4,9 @@ Experiment for [issue #124](https://github.com/murillo128/arc-agi-3-model/issues
 2026-10-22. **No candidate was adopted.** The balanced paired examples improved
 the branch probe against equal-budget unpaired adaptation, but failed the
 invention gate and did not improve ordinary trajectories over the source model.
-Increasing the existing spatial adapter's LR did not resolve this.
+The original optional LR probe only raised adapter weights, missing biases in
+Adam's second group. Its rows below are historical weights-only evidence;
+corrected full-adapter comparisons are pending and must replace that conclusion.
 
 ## Setup and boundaries
 
@@ -154,3 +156,15 @@ The 29 existing sequence/exploration tests completed successfully with one
 optional Node-dependent dashboard check skipped because Node was unavailable.
 No browser or visual tests were run. The hosted executor-routing workflow's path
 filters do not include this experiment, its tests or this report.
+
+Audit correction validation targets the real CPU runner with a small spatial
+adapter and a checkpoint containing nonempty Adam state. Existing tests cover
+prefix fidelity, metrics and frozen representations but not optimizer-group
+partitioning. The added case checks every adapter weight and bias at `1e-4`,
+unchanged rates elsewhere, exact restored moments/steps and group options
+(including weight decay), and one update with four examples in each arm. Expected
+state comes from the source checkpoint before the runner changes any groups.
+The regression failed on the prior runner for exactly the four adapter biases,
+then passed after repair. The focused experiment, sequence, exploration and
+sequence-training suites completed 48 tests (47 passed; one optional Node check
+skipped). Corrected CUDA comparisons remain to be regenerated.

@@ -352,13 +352,16 @@ def run(args):
         learner = SequenceLearner(engine, config)
         learner.optimizer.load_state_dict(copy.deepcopy(saved['predictor_optimizer']))
         if variant.endswith('_spatial_lr'):
-            # Same Adam states; split the existing group rather than reset moments.
-            group = learner.optimizer.param_groups[0]
+            # Partition every restored group: adapter weights and biases have
+            # different decay settings. Parameter-keyed Adam moments stay intact.
             adapter = set(engine.model.dynamics.rotation_adapter.parameters())
-            local = [p for p in group['params'] if p in adapter]
-            group['params'] = [p for p in group['params'] if p not in adapter]
-            learner.optimizer.add_param_group({**{k:v for k,v in group.items() if k != 'params'},
-                                               'params':local, 'lr':1e-4})
+            for group in list(learner.optimizer.param_groups):
+                local = [p for p in group['params'] if p in adapter]
+                if not local:
+                    continue
+                group['params'] = [p for p in group['params'] if p not in adapter]
+                learner.optimizer.add_param_group({**{k:v for k,v in group.items() if k != 'params'},
+                                                   'params':local, 'lr':1e-4})
         torch.manual_seed(124)
         trace = []; begin = time.perf_counter()
         if engine.device.type == 'cuda': torch.cuda.reset_peak_memory_stats()
