@@ -1,0 +1,147 @@
+{
+  "base": "1a248a4202aab376d60f0bfa71f96c248e268eaa",
+  "issue": 118,
+  "tests": {
+    "command": "PYTHONPATH=src python -m unittest model.tests.test_sequence_upgrade model.tests.test_sequence_training model.tests.test_sequence_exploration model.tests.test_sequence_extension model.tests.test_sequence_restriction model.tests.test_sequence_control model.tests.test_training_config model.tests.test_model.NumericalTests model.tests.test_lmex_sync model.tests.test_training_recovery -q",
+    "ran": 123,
+    "passed": 122,
+    "skipped": 1,
+    "skip_reason": "Existing Node-dependent dashboard check; Node unavailable",
+    "cuda_map_regression": "Failed for the initial tensor-division implementation (maximum absolute error 7.45e-9); passes with the original scalar-division kernel and differentiable relative width."
+  },
+  "cpu_checkpoint_migration": {
+    "progress": {
+      "batches": 2459,
+      "actions": 9719296,
+      "updates": 48928
+    },
+    "preserved_weight_tensors": 501,
+    "preserved_adam_tensors": 1521,
+    "initial_max_prediction_difference": 0.0,
+    "real_samples": [
+      "dc22-fdcac232",
+      "bf01-v1"
+    ],
+    "new_parameters": 1,
+    "phase": "predictor",
+    "learning_rates": [
+      3e-05,
+      3e-05
+    ],
+    "representation_learning_rates": {
+      "encoder": 3e-07,
+      "decoder": 3e-07
+    },
+    "undo_replay_removed": 0
+  },
+  "gpu_initial_equality": {
+    "initial_gpu_map_difference": 0,
+    "initial_gpu_prediction_memory_decode_difference": 0.0,
+    "real_samples": [
+      "dc22-fdcac232",
+      "bf01-v1"
+    ]
+  },
+  "gpu_probe": {
+    "games": [
+      "bf02-v1",
+      "bf04-v1",
+      "bf08-v1",
+      "sc01-v1",
+      "si01-v1",
+      "mc01-v1",
+      "bf06-v1",
+      "ls20-9607627b"
+    ],
+    "transitions": 512,
+    "undo_actions": 0,
+    "trials": [
+      {
+        "update_seconds": [
+          1.3570984860125463,
+          1.0140066939929966,
+          1.0789807080000173,
+          1.034651993017178
+        ],
+        "steady_update_seconds": 1.0425464650033973,
+        "losses": [
+          2.467086374759674,
+          2.3271911963820457,
+          2.0224876701831818,
+          2.1220283806324005
+        ],
+        "peak_allocated_gib": 4.290388107299805,
+        "initial_delta_error": 0.6076431859808921,
+        "final_delta_error": 0.5393750608390928,
+        "initial_by_game": {
+          "bf02-v1": 0.9498249708284714,
+          "bf04-v1": 0.7637426900584795,
+          "bf08-v1": 1.0,
+          "sc01-v1": 0.7664179104477612,
+          "si01-v1": 1.0,
+          "mc01-v1": 0.983729662077597,
+          "bf06-v1": 0.3503203261502621,
+          "ls20-9607627b": 0.07325383304940375
+        },
+        "learnable_click_sigma": false
+      },
+      {
+        "update_seconds": [
+          0.9947938039840665,
+          1.0687889700056985,
+          1.025955487973988,
+          1.0922959430026822
+        ],
+        "steady_update_seconds": 1.0623468003274563,
+        "losses": [
+          2.467086374759674,
+          2.3271911963820457,
+          2.0224876701831818,
+          2.122050315141678
+        ],
+        "peak_allocated_gib": 4.281616687774658,
+        "initial_delta_error": 0.6076431859808921,
+        "final_delta_error": 0.5391541344235168,
+        "initial_by_game": {
+          "bf02-v1": 0.9498249708284714,
+          "bf04-v1": 0.7637426900584795,
+          "bf08-v1": 1.0,
+          "sc01-v1": 0.7664179104477612,
+          "si01-v1": 1.0,
+          "mc01-v1": 0.983729662077597,
+          "bf06-v1": 0.3503203261502621,
+          "ls20-9607627b": 0.07325383304940375
+        },
+        "adapter_output_nonzero": 4096,
+        "sigma_pixels": 1.500077486038208,
+        "sigma_log_scale": 3.72325157513842e-05,
+        "sigma_adam_step": 4.0,
+        "sigma_adam_first_moment": -2.3304154161962742e-09,
+        "learnable_click_sigma": true
+      }
+    ],
+    "update_cost_ratio": 1.0189922809090284
+  },
+  "probe_contract": {
+    "both_candidates": "Same batch-2459 weights and Adam; already-trained rotation adapter; only the second candidate learns Gaussian width. Same collected sessions, predictor LR 3e-5, 150 W GPU cap.",
+    "collection_seed_base": 92000000,
+    "session_steps": 64,
+    "block_steps": 16,
+    "context_steps": 16,
+    "optimizer_updates": 4
+  },
+  "lmex": {
+    "validation": "Installed model-directory validator",
+    "status": "valid",
+    "coverage": "partial",
+    "diagnostics": [
+      "author_declared_partial"
+    ],
+    "architecture_revision": "arc3-sequence-learned-click-width-v1"
+  },
+  "limitations": [
+    "The short GPU probe establishes compatibility, gradients and bounded cost, not a generalization improvement.",
+    "Unrelated SDK palette-marker fixture failure remains under the explicit validation decision in issue 118.",
+    "Live rollout and read-only checkpoint backups are retained outside Git in the run directory."
+  ]
+}

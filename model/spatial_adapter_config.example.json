@@ -16,7 +16,8 @@
     "pixel_latent": true,
     "broadcast_conditioning": true,
     "local_dynamics": true,
-    "rotation_adapter_width": 16
+    "rotation_adapter_width": 16,
+    "learnable_click_sigma": true
   },
   "training": {
     "sigreg_weight": 0.002,

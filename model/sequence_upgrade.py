@@ -9,11 +9,13 @@ from .networks import Dynamics
 
 
 ADAPTER_PREFIX = 'dynamics.rotation_adapter.'
+CLICK_SIGMA_KEY = ADAPTER_PREFIX + 'click_width.log_scale'
 
 
 def normalized_plan(payload):
     result = copy.deepcopy(payload)
     result['initialization']['network'].setdefault('rotation_adapter_width', 0)
+    result['initialization']['network'].setdefault('learnable_click_sigma', False)
     if 'sequence_exploration' in result:
         result['sequence_exploration'].setdefault('allow_undo', True)
     return result
@@ -36,7 +38,10 @@ def upgrade_plan_matches(previous, current, *, disable_undo=False, upgrade_predi
         width = after['rotation_adapter_width']
         if before['rotation_adapter_width'] not in (0, width) or not width:
             return False
+        if before['learnable_click_sigma'] and not after['learnable_click_sigma']:
+            return False
         before['rotation_adapter_width'] = width
+        before['learnable_click_sigma'] = after['learnable_click_sigma']
     return old == new
 
 
@@ -45,18 +50,20 @@ def upgraded_network(saved, initial):
     target = NetworkConfig(**initial['network'])
     if (not target.rotation_adapter_width or
             previous.rotation_adapter_width not in (0, target.rotation_adapter_width) or
-            replace(previous, rotation_adapter_width=target.rotation_adapter_width) != target):
-        raise ValueError('Predictor upgrade may only enable a new rotation adapter')
+            (previous.learnable_click_sigma and not target.learnable_click_sigma) or
+            replace(previous, rotation_adapter_width=target.rotation_adapter_width,
+                    learnable_click_sigma=target.learnable_click_sigma) != target):
+        raise ValueError('Predictor upgrade may only enable a rotation adapter or learnable click sigma')
     return target
 
 
 def load_upgraded_weights(model, saved):
     previous = NetworkConfig(**saved['network'])
-    if previous.rotation_adapter_width:
-        model.load_state_dict(saved['weights'], strict=True)
-        return
     weights = model.state_dict()
-    old_keys = {k for k in weights if not k.startswith(ADAPTER_PREFIX)}
+    added = ({k for k in weights if k.startswith(ADAPTER_PREFIX)} if not previous.rotation_adapter_width
+             else {CLICK_SIGMA_KEY} if not previous.learnable_click_sigma and model.config.learnable_click_sigma
+             else set())
+    old_keys = set(weights) - added
     if old_keys != set(saved['weights']):
         raise ValueError('Predictor upgrade must preserve every existing weight')
     weights.update(saved['weights'])
@@ -64,7 +71,7 @@ def load_upgraded_weights(model, saved):
 
 
 def upgraded_optimizer(saved, dynamics):
-    """Bind old Adam moments by parameter name, adding only the new residual."""
+    """Bind old Adam moments by name, adding only approved adapter parameters."""
     with torch.device('meta'):
         previous = Dynamics(NetworkConfig(**saved['network']))
     old_parameters = dict(previous.named_parameters())

@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import asdict, replace
 import io
 import json
+import math
 from pathlib import Path
 import random
 import tempfile
@@ -20,8 +21,8 @@ from model.learning import optimizer
 from model.networks import WorldModel
 from model.sequence_exploration import ChangeExplorer, ExplorationSession, SequenceExplorationConfig
 from model.sequence_training import load_engine, representation_for, restore_run, run
-from model.sequence_upgrade import load_upgraded_weights, upgraded_network, upgraded_optimizer
-from model.spatial_adapter import RotationAdapter, click_maps
+from model.sequence_upgrade import load_upgraded_weights, upgraded_network, upgraded_optimizer, upgrade_plan_matches
+from model.spatial_adapter import GaussianClickWidth, RotationAdapter, click_maps
 from model.tests.test_sequence_exploration import board
 from model.tests.test_training_config import config
 from model.training_config import load_plan
@@ -36,6 +37,108 @@ def local_config(**kwargs):
 
 
 class SequenceUpgradeTests(unittest.TestCase):
+    @unittest.skipUnless(torch.cuda.is_available(), 'CUDA required for scalar/tensor kernel regression')
+    def test_initial_learned_width_matches_the_original_cuda_gaussian(self):
+        action = torch.tensor([Action(6, dict(x=0, y=0)).features()], device='cuda')
+        width = GaussianClickWidth().cuda()
+        actual = click_maps(action, 8, 8, 8, 8, width())[0, 0]
+        # Original fixed-width kernel at squared distances 0, 4**2+1, 5**2.
+        # CUDA's tensor division can round differently from scalar division.
+        expected = torch.exp(-torch.tensor([0., 17., 25.], device='cuda') / 4.5)
+        torch.testing.assert_close(torch.stack((actual[0, 0], actual[1, 4], actual[0, 5])),
+                                   expected, rtol=0, atol=0)
+
+    def test_learned_gaussian_width_preserves_center_masks_and_has_finite_gradients(self):
+        width = GaussianClickWidth()
+        self.assertEqual(float(width()), 1.5)
+        actions = torch.tensor([Action(6, dict(x=3, y=1)).features(),
+                                Action(6, dict(x=5, y=1)).features(),
+                                Action(6, dict(x=3)).features(), Action(4).features()])
+        fixed = click_maps(actions, 3, 5, 4, 8)
+        learned = click_maps(actions, 3, 5, 4, 8, width())
+        torch.testing.assert_close(fixed, learned, atol=0, rtol=0)
+        self.assertAlmostEqual(float(learned[0, 0, 1, 2]), math.exp(-1/4.5), places=7)
+        self.assertAlmostEqual(float(learned[0, 0, 1, 1]), math.exp(-4/4.5), places=7)
+        center_gradient = torch.autograd.grad(learned[0, 0, 1, 3], width.log_scale, retain_graph=True)[0]
+        self.assertEqual(float(center_gradient), 0)
+        learned[0, 0, 1, 2].backward()
+        self.assertGreater(float(width.log_scale.grad), 0)
+        self.assertTrue(torch.isfinite(width.log_scale.grad).all())
+        with torch.no_grad():
+            width.log_scale.fill_(math.atanh(.5))  # Doubles sigma to 3 pixels.
+        wider = click_maps(actions, 3, 5, 4, 8, width())
+        self.assertAlmostEqual(float(wider[0, 0, 1, 1]), math.exp(-4/18), places=7)
+        self.assertEqual(float(wider[0, 0, 1, 3]), 1)
+        self.assertEqual(int(wider[0, 0].argmax()), 11)
+        torch.testing.assert_close(wider[:, 1:], fixed[:, 1:], atol=0, rtol=0)
+        self.assertEqual(int(torch.count_nonzero(wider[1:])), 0)
+        self.assertEqual(int(torch.count_nonzero(wider[:, :, 3:, :])), 0)
+        self.assertEqual(int(torch.count_nonzero(wider[:, :, :, 5:])), 0)
+        for raw, expected in ((-100., .375), (100., 6.)):
+            with torch.no_grad():
+                width.log_scale.fill_(raw)
+            self.assertAlmostEqual(float(width()), expected, places=6)
+            self.assertTrue(torch.isfinite(click_maps(actions, 3, 5, 4, 8, width())).all())
+        with self.assertRaisesRegex(ValueError, 'requires a rotation adapter'):
+            local_config(learnable_click_sigma=True)
+        with self.assertRaisesRegex(ValueError, 'booleans'):
+            local_config(rotation_adapter_width=2, learnable_click_sigma=1)
+
+    def test_click_width_upgrade_preserves_trained_adapter_and_adam_then_learns(self):
+        old = WorldModel(local_config(rotation_adapter_width=2))
+        with torch.no_grad():
+            old.dynamics.rotation_adapter.output.weight.normal_(0, .1)
+        adam = optimizer(old.dynamics.parameters(), .001, False)
+        sum(p.square().sum() for p in old.dynamics.parameters()).backward()
+        adam.step()
+        saved = dict(network=asdict(old.config), weights=deepcopy(old.state_dict()),
+                     predictor_optimizer=adam.state_dict(), progress=dict(updates=1))
+        saved['network'].pop('learnable_click_sigma')  # Legacy fixed-width model.
+        target = replace(old.config, learnable_click_sigma=True)
+        self.assertEqual(upgraded_network(saved, dict(network=asdict(target))), target)
+        previous = dict(initialization=dict(network=saved['network']))
+        current = dict(initialization=dict(network=asdict(target)))
+        self.assertFalse(upgrade_plan_matches(previous, current))
+        self.assertTrue(upgrade_plan_matches(previous, current, upgrade_predictor=True))
+        self.assertFalse(upgrade_plan_matches(current, previous, upgrade_predictor=True))
+        for invalid in (replace(target, memory=64), replace(target, rotation_adapter_width=3)):
+            with self.assertRaisesRegex(ValueError, 'only enable'):
+                upgraded_network(saved, dict(network=asdict(invalid)))
+        new = WorldModel(target)
+        load_upgraded_weights(new, saved)
+        for name, value in saved['weights'].items():
+            torch.testing.assert_close(new.state_dict()[name], value, rtol=0, atol=0)
+        migrated = optimizer(new.dynamics.parameters(), .001, False)
+        migrated.load_state_dict(upgraded_optimizer(saved, new.dynamics))
+        parameters = dict(new.dynamics.named_parameters())
+        for name, parameter in old.dynamics.named_parameters():
+            for field, value in adam.state[parameter].items():
+                torch.testing.assert_close(migrated.state[parameters[name]][field], value, rtol=0, atol=0)
+        scalar = new.dynamics.rotation_adapter.click_width.log_scale
+        self.assertNotIn(scalar, migrated.state)
+        group = next(g for g in migrated.param_groups if any(p is scalar for p in g['params']))
+        self.assertEqual(group['weight_decay'], 0.)
+        self.assertEqual(group['lr'], .001)
+        z = torch.randn(2, 4, 64); memory = torch.randn(2, 32)
+        action = torch.tensor([Action(6, dict(x=3, y=2)).features(), Action(4).features()])
+        for training in (False, True):
+            old.train(training); new.train(training)
+            with torch.no_grad():
+                for left, right in zip(old.dynamics(z, memory, action, 5, 7),
+                                       new.dynamics(z, memory, action, 5, 7)):
+                    torch.testing.assert_close(left, right, atol=0, rtol=0)
+        migrated.zero_grad(set_to_none=True)
+        new.dynamics(z, memory, action, 5, 7)[0].square().mean().backward()
+        self.assertGreater(float(scalar.grad.abs().sum()), 0.)
+        self.assertTrue(torch.isfinite(scalar.grad).all())
+        migrated.step()
+        self.assertNotEqual(float(scalar), 0.)
+        self.assertNotEqual(float(new.dynamics.rotation_adapter.click_sigma()), 1.5)
+        broken = dict(saved, weights=dict(saved['weights']))
+        broken['weights'].pop('dynamics.rotation_adapter.output.weight')
+        with self.assertRaisesRegex(ValueError, 'every existing weight'):
+            load_upgraded_weights(WorldModel(target), broken)
+
     def test_undo_is_excluded_before_every_policy_without_mutating_available_actions(self):
         before = board(actions=(1, 6, 7))
         for policy in ('uniform', 'mixed', 'learned'):
@@ -203,7 +306,9 @@ class SequenceUpgradeTests(unittest.TestCase):
             self.assertTrue(saved['representation_optimizer']['state'])
             # An actual legacy checkpoint lacks both new default-valued fields.
             saved['network'].pop('rotation_adapter_width')
+            saved['network'].pop('learnable_click_sigma')
             saved['plan']['initialization']['network'].pop('rotation_adapter_width')
+            saved['plan']['initialization']['network'].pop('learnable_click_sigma')
             saved['plan']['sequence_exploration'].pop('allow_undo')
             saved['exploration']['config'].pop('allow_undo')
             checkpoint.write(root/'run/latest.pt', saved)
@@ -268,6 +373,31 @@ class SequenceUpgradeTests(unittest.TestCase):
             self.assertEqual(len(report['predictor_adaptations']), 1)
             self.assertEqual(report['network']['rotation_adapter_width'], 2)
             self.assertTrue((root/'run/report-before-predictor-adaptation-1.json').exists())
+
+            initial['network']['learnable_click_sigma'] = True
+            initial_path.write_text(json.dumps(initial))
+            args.upgrade_predictor = True
+            run(args)
+            with_width = checkpoint.load(root/'run/latest.pt')
+            name = 'dynamics.rotation_adapter.click_width.log_scale'
+            self.assertNotEqual(float(with_width['weights'][name]), 0.)
+            loaded = load_engine(load_plan(path), root/'run/latest.pt')
+            torch.testing.assert_close(loaded.model.state_dict()[name], with_width['weights'][name], atol=0, rtol=0)
+            state = with_width['predictor_optimizer']
+            scalar_id = state['param_groups'][1]['params'][-1]
+            previous_step = float(state['state'][scalar_id]['step'])
+            args.upgrade_predictor = False
+            run(args)
+            resumed = checkpoint.load(root/'run/latest.pt')
+            self.assertGreater(float(resumed['predictor_optimizer']['state'][scalar_id]['step']), previous_step)
+            report = json.loads((root/'run/report.json').read_text())
+            self.assertEqual([r['batch'] for r in report['history']], [4, 5])
+            self.assertTrue(report['click_map']['learnable'])
+            self.assertEqual(report['history'][-1]['click_sigma_pixels'], report['click_map']['sigma_pixels'])
+            self.assertEqual(report['predictor_adaptations'][-1]['batch'], 3)
+            self.assertTrue(report['predictor_adaptations'][-1]['learnable_click_sigma'])
+            loaded = load_engine(load_plan(path), root/'run/latest.pt')
+            self.assertEqual(float(loaded.model.dynamics.rotation_adapter.click_sigma()), report['click_map']['sigma_pixels'])
 
 
 if __name__ == '__main__':

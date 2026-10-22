@@ -41,6 +41,23 @@ changes fail closed. A trained predictor must retain every old AdamW entry and i
 required fields; empty optimizer state is allowed only before its first update.
 Click maps recover integer SDK coordinates before checking native frame bounds.
 Once saved, ordinary `--resume` restores the expanded model.
+
+The adapter's native Gaussian click map has unit peak and a default fixed width
+of 1.5 pixels. Set `network.learnable_click_sigma: true` in the initialization
+configuration to learn one shared width from the predictor loss. It requires an
+enabled rotation adapter. The parameterization
+`sigma = 1.5 * exp(log(4) * tanh(log_scale))` starts with `log_scale=0`, preserving
+the exact old map, and smoothly bounds sigma to 0.375–6 pixels. Click coordinates,
+relative-coordinate channels, padding masks and peak intensity stay unchanged.
+The scalar joins the predictor's existing no-decay AdamW group at its current LR.
+
+For an existing fixed-width checkpoint, copy its configuration, enable only that
+switch, and resume once with `--upgrade-predictor`. Existing weights and AdamW
+states are retained, including an already-trained rotation adapter; only the new
+scalar starts without optimizer history. Subsequent resumes use ordinary
+`--resume`. The dashboard reports sigma in native pixels and fixed/learned status;
+each batch records `click_sigma_pixels` after its weight updates. This adds one
+parameter and does not itself establish better prediction accuracy.
 The old report is archived at the adaptation boundary; new charts start with the
 new action population. The dashboard reports adapter width and actual Undo counts.
 `architecture.json` describes the width-16 example and includes its tensor bindings.

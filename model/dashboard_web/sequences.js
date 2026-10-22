@@ -119,6 +119,7 @@ function render(data) {
   $('configuration').textContent = `${shuffled?'Up to ':''}${c.batch_games || '—'} independent sessions · ${c.session_steps || '—'} actions per session · Block: ${c.block_steps || '—'} steps + ${c.context_steps ?? 0} context steps with gradients · Initial loss weight: ${number(c.loss_start_weight)} → 1 over ${c.loss_warmup_steps || '—'} actions · ${shuffled?'Games shuffled without repeats':c.game_schedule === 'blocked' ? 'One game per batch' : 'Alternating games'}`;
   $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
   if(data.network?.rotation_adapter_width) $('learning-rates').textContent+=` · Rotation adapter: ${data.network.rotation_adapter_width} filters × 4 orientations`;
+  if(data.click_map) $('learning-rates').textContent+=` · Gaussian click σ: ${number(data.click_map.sigma_pixels,4)} px (${data.click_map.learnable?'learned':'fixed'})`;
   const budgetLabel=data.budget===null?' · Unlimited actions':data.budget?` · budget ${number(data.budget,0)}`:'';
   $('actions').textContent = number(data.progress?.actions, 0); $('batches').textContent = `${number(data.progress?.batches, 0)} completed batches${budgetLabel}`;
   $('tps').textContent = `${number(last.recent_tps)} actions/s`; $('examples').textContent = `${number(last.examples_per_second)} transitions/s`; $('memory').textContent = `${number(last.peak_gpu_gib)} GiB`;
