@@ -124,8 +124,8 @@ function render(data) {
   for(const row of exposureRows) for(const session of row.sessions||[]){
     const total=exposure.get(session.game)||[0,0]; total[0]++; total[1]+=session.steps||0; exposure.set(session.game,total);
   }
-  const adoption=(data.game_weight_adoptions||[]).at(-1);
-  $('sampling-info').textContent=`${sessionsPerRound} independent sessions per round. Weights change collection frequency; per-session loss weighting is unchanged.${adoption?` Current frequencies apply from batch ${number(adoption.batch+1,0)}; earlier chart history uses the previous mix.`:''} Collected counts cover ${exposureRows.length} retained batches${exposureRows.length?` (${exposureRows[0].batch}–${exposureRows.at(-1).batch})`:''} and may include partial rounds. Repeated games start with separate seeds and memory.`;
+  const weightAdoption=(data.game_weight_adoptions||[]).at(-1);
+  $('sampling-info').textContent=`${sessionsPerRound} independent sessions per round. Weights change collection frequency; per-session loss weighting is unchanged.${weightAdoption?` Current frequencies apply from batch ${number(weightAdoption.batch+1,0)}; earlier chart history uses the previous mix.`:''} Collected counts cover ${exposureRows.length} retained batches${exposureRows.length?` (${exposureRows[0].batch}–${exposureRows.at(-1).batch})`:''} and may include partial rounds. Repeated games start with separate seeds and memory.`;
   table('sampling-games',(data.games||[]).map(game=>[game,`${weights[game]??1}×`,`${number(100*(weights[game]??1)/sessionsPerRound,2)} %`,
     number(exposure.get(game)?.[0]??0,0),number(exposure.get(game)?.[1]??0,0)]));
   $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
