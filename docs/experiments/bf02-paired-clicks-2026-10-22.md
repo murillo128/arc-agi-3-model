@@ -168,3 +168,11 @@ The regression failed on the prior runner for exactly the four adapter biases,
 then passed after repair. The focused experiment, sequence, exploration and
 sequence-training suites completed 48 tests (47 passed; one optional Node check
 skipped). Corrected CUDA comparisons remain to be regenerated.
+
+Two attempts alongside the live trainer exhausted GPU memory during the first
+update, including an activation-offload attempt. The resulting memory plan moves
+the frozen encoder to CPU after its complete latent cache is built: subsequent
+updates and evaluations use only that cache, and every arm restores identical
+encoder weights. This changes residency, not model arithmetic, examples or
+optimizer budgets. The CPU fallback was interrupted before any optimizer update
+to use this smaller CUDA footprint; production was not stopped or reconfigured.

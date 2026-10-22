@@ -331,6 +331,11 @@ def run(args):
                     TrainConfig(**saved['training']))
     engine.model.load_state_dict(saved['weights'])
     cache = encode_cache(engine, data)
+    # Every later arm restores the same frozen encoder and reads cached latents.
+    # Its weights need no GPU residency during predictor updates or evaluation.
+    if engine.device.type == 'cuda':
+        engine.model.encoder.cpu()
+        torch.cuda.empty_cache()
     config = SequenceConfig(batch_games=args.batch_size, session_steps=args.context+1,
         block_steps=1, context_steps=args.context, loss_start_weight=1.)
     report = dict(source=str(args.source.resolve()), source_progress=saved['progress'],
