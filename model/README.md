@@ -1,5 +1,47 @@
 # Modelo residual latente
 
+## Optional spatial predictor growth and Undo exclusion
+
+Sequence exploration accepts `"allow_undo": false` inside `sequence_exploration`.
+It removes ACTION7 before uniform, mixed or learned collection samples an action.
+The SDK observation, manual controls and game rules retain their original actions.
+An observation with no remaining ordinary action raises an explicit error; the
+collector never silently re-enables Undo. The default remains `true` for old runs.
+
+`spatial_adapter_config.example.json` enables `network.rotation_adapter_width: 16`.
+The default network value is zero (disabled); a positive width requires local
+dynamics and pixel latents. A small predictor branch shares 5×5 filters across four
+quarter-turn orientations, retains all four feature sets, and adds native click
+and relative-coordinate maps plus action/history conditioning. A dilated depthwise
+convolution and learned orientation mixing produce an additive latent correction.
+This does not assume that arbitrary game rules or pretrained latents are equivariant.
+
+Only the final correction projection starts at zero. Thus
+`new_delta = existing_delta + residual_scale * correction` initially returns the
+existing prediction exactly. The inner filters initialize normally: the output
+projection can learn on the first update and propagate gradients inside thereafter.
+A matrix of ones would not preserve the prediction, and zeroing the entire branch
+would prevent useful feature learning. This preserves the initial function, not a
+guarantee that subsequent optimization improves every game.
+
+For a sequence checkpoint, copy its exact initialization configuration and set
+only `rotation_adapter_width`; keep all other network/training settings unchanged.
+Set `allow_undo: false` in its training configuration and resume once with:
+
+```sh
+python -m model.sequence_training --training-config CONFIG --output RUN \
+  --resume --disable-undo --upgrade-predictor
+```
+
+Either migration flag may also be used separately. Existing weights, named AdamW
+moments and effective learning rates, representation/exploration optimizers, phase,
+counters and RNG survive. Only new adapter parameters start without AdamW history;
+Undo examples are filtered from auxiliary exploration replay. Unrelated configuration
+changes fail closed. Once saved, ordinary `--resume` restores the expanded model.
+The old report is archived at the adaptation boundary; new charts start with the
+new action population. The dashboard reports adapter width and actual Undo counts.
+`architecture.json` describes the width-16 example and includes its tensor bindings.
+
 ## Secuencias con memoria entre niveles
 
 El modo optativo `model.sequence_training` entrena el predictor con **sesiones

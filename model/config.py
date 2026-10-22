@@ -49,10 +49,11 @@ class NetworkConfig:
     pixel_latent: bool = False
     broadcast_conditioning: bool = False
     local_dynamics: bool = False
+    rotation_adapter_width: int = 0
 
     def __post_init__(self):
         if any(type(v) is not int or v <= 0 for k, v in asdict(self).items()
-               if k not in {'residual_scale', 'position_scale', 'pixel_latent', 'broadcast_conditioning', 'local_dynamics'}):
+               if k not in {'residual_scale', 'position_scale', 'pixel_latent', 'broadcast_conditioning', 'local_dynamics', 'rotation_adapter_width'}):
             raise ValueError('Network sizes must be positive integers')
         if any(not math.isfinite(v) or not 0 < v <= 1 for v in (self.residual_scale, self.position_scale)):
             raise ValueError('Residual and position scales must lie in (0, 1]')
@@ -60,6 +61,10 @@ class NetworkConfig:
             raise ValueError('Network feature switches must be booleans')
         if self.local_dynamics and not self.pixel_latent:
             raise ValueError('Local dynamics requires pixel-structured latents')
+        if type(self.rotation_adapter_width) is not int or not 0 <= self.rotation_adapter_width <= 64:
+            raise ValueError('rotation_adapter_width must be an integer in 0..64')
+        if self.rotation_adapter_width and not self.local_dynamics:
+            raise ValueError('Rotation adapter requires local dynamics')
         if self.pixel_latent and (self.latent % self.patch ** 2 or self.latent // self.patch ** 2 < 2):
             raise ValueError('Pixel latents require at least two channels per native pixel')
         if self.width % self.heads or self.width % 4:

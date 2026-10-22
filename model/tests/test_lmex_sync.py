@@ -119,7 +119,7 @@ class LMEXSyncTests(unittest.TestCase):
         missing = [n['id'] for n in document['nodes']
                    if n['kind'] == 'operation' and not n.get('operation')]
         self.assertEqual(missing, [])
-        network = json.loads(Path('model/subgoal_config.json').read_text())['network']
+        network = json.loads(Path('model/spatial_adapter_config.example.json').read_text())['network']
         with torch.device('meta'):
             expected = dict(WorldModel(NetworkConfig(**network)).state_dict())
             expected.update({f'exploration.{k}': v for k, v in ChangeHead().state_dict().items()})

@@ -157,6 +157,10 @@ class Dynamics(nn.Module):
         self.delta = nn.Linear(c.width, c.latent)
         if c.local_dynamics:
             self.local = SpatialDynamics(c)
+        if c.rotation_adapter_width:
+            from .spatial_adapter import RotationAdapter
+            # Append parameters so existing optimizer order remains unchanged.
+            self.rotation_adapter = RotationAdapter(c)
 
     def advance(self, z, h, action):
         a = F.gelu(self.action_norm(self.action_embedding(action)))
@@ -185,6 +189,11 @@ class Dynamics(nn.Module):
         delta = self.delta(self.norm(x[:, :z.shape[1]])).float()
         if self.config.local_dynamics:
             delta = self.local(z, h_next, a, height, width) + self.config.residual_scale * delta
+        if self.config.rotation_adapter_width:
+            args = (z, h_next, a, action, height, width)
+            correction = (checkpoint(self.rotation_adapter, *args, use_reentrant=False)
+                          if self.training else self.rotation_adapter(*args))
+            delta = delta + self.config.residual_scale * correction
         return z.float() + delta, h_next.float(), delta
 
 
@@ -236,6 +245,9 @@ class WorldModel(nn.Module):
         if config.local_dynamics:
             nn.init.zeros_(self.dynamics.local.output.weight)
             nn.init.zeros_(self.dynamics.local.output.bias)
+        if config.rotation_adapter_width:
+            nn.init.zeros_(self.dynamics.rotation_adapter.output.weight)
+            nn.init.zeros_(self.dynamics.rotation_adapter.output.bias)
 
     @staticmethod
     def _init(module):
