@@ -4,17 +4,17 @@ Experiment for [issue #124](https://github.com/murillo128/arc-agi-3-model/issues
 2026-10-22. **No candidate was adopted.** The balanced paired examples improved
 the branch probe against equal-budget unpaired adaptation, but failed the
 invention gate and did not improve ordinary trajectories over the source model.
-The original optional LR probe only raised adapter weights, missing biases in
-Adam's second group. Its rows below are historical weights-only evidence;
-corrected full-adapter comparisons are pending and must replace that conclusion.
+Raising the full spatial adapter's LR did not resolve this.
 
 ## Setup and boundaries
 
 - Source: batch 2995, 11,849,728 environment actions, 66,080 predictor updates.
   Checkpoint SHA-256:
   `35e5f01d74ad9b58580cbd92128a972be0f67331c8714a8be5c7d3142537317a`.
+  Corrected experiment source: `8457711811eacae44eb989618f37eb2df4a6089a`.
 - Every arm started from the same weights **and Adam state**. Predictor LR was
-  `3e-5`; the optional arm used `1e-4` only for `rotation_adapter`. Encoder and
+  `3e-5`; the optional arm used `1e-4` for every `rotation_adapter` weight and
+  bias, retaining each restored group's weight decay and Adam moments. Encoder and
   decoder tensors were checked for exact equality with the source after every
   arm. Architecture, Gaussian click map (fixed sigma 1.5) and loss were unchanged.
 - Synthetic bf02 levels 1–6. Each example had 16 real context transitions and
@@ -51,6 +51,14 @@ training outcomes, never validation labels. It changes the sampled population,
 so these are results for this particular data recipe, not proof about pairing
 alone. The 48-update run restarted from the source and extended the same schedule.
 
+The initial implementation raised LR only in Adam's matrix/kernel group, missing
+four adapter biases in its second group. The correction partitions every restored
+group. **All three comparisons below were regenerated**, including their ordinary
+and paired controls; the original weights-only LR rows are superseded. Initial
+metrics and data composition reproduce exactly. The balanced 24-update ordinary
+control changed slightly (branch error 91.42% → 91.41%; ordinary error
+86.14% → 86.07%); all gates use the rerun controls, not mixed historical results.
+
 ## Metrics and results
 
 Recall is `correctly predicted changed pixels / actually changed pixels`.
@@ -64,13 +72,13 @@ inventions are better; higher recall is better.
 | Untouched source | 0 | 22.43 | 89.02 | 5.81 | 86.81 | 67.79 |
 | Ordinary, raw sampling | 24 | 15.51 | 90.24 | 3.28 | 84.94 | 66.17 |
 | Paired, raw sampling | 24 | 8.22 | 93.35 | 1.32 | 91.97 | 65.76 |
-| Paired, raw + adapter LR | 24 | 8.41 | 93.19 | 1.31 | 92.05 | 65.77 |
-| Ordinary, balanced | 24 | 14.95 | 91.42 | 4.14 | 86.14 | 66.06 |
+| Paired, raw + adapter LR | 24 | 8.41 | 93.20 | 1.32 | 91.94 | 65.76 |
+| Ordinary, balanced | 24 | 14.95 | 91.41 | 4.12 | 86.07 | 66.08 |
 | Paired, balanced | 24 | 22.99 | 88.17 | 5.26 | 87.60 | 66.92 |
-| Paired, balanced + adapter LR | 24 | 23.55 | 87.93 | 5.30 | 87.61 | 66.91 |
+| Paired, balanced + adapter LR | 24 | 23.36 | 88.00 | 5.28 | 87.60 | 66.90 |
 | Ordinary, balanced | 48 | 12.34 | 91.77 | 2.78 | 86.54 | 66.33 |
 | Paired, balanced | 48 | 20.93 | 87.57 | 3.81 | 87.27 | 66.58 |
-| Paired, balanced + adapter LR | 48 | 20.56 | 87.82 | 3.83 | 87.38 | 66.56 |
+| Paired, balanced + adapter LR | 48 | 20.93 | 87.60 | 3.83 | 87.32 | 66.56 |
 
 Final branch-probe counts (535 actual changed pixels in every row):
 
@@ -79,43 +87,67 @@ Final branch-probe counts (535 actual changed pixels in every row):
 | Untouched source | 120 | 359 | 56 | 558 | 1093 |
 | Ordinary, balanced, 48 updates | 66 | 439 | 30 | 267 | 802 |
 | Paired, balanced, 48 updates | 112 | 381 | 42 | 366 | 901 |
-| Paired, balanced + adapter LR, 48 updates | 110 | 383 | 42 | 368 | 903 |
+| Paired, balanced + adapter LR, 48 updates | 112 | 381 | 42 | 368 | 903 |
 
 Branch delta error by level, at 48 updates:
 
 | Level | Actual changed pixels | Source % | Ordinary balanced % | Paired balanced % | Paired + adapter LR % |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 | 109 | 81.42 | 81.28 | 75.69 | 75.69 |
-| 2 | 65 | 90.57 | 96.88 | 91.91 | 92.05 |
-| 3 | 197 | 83.67 | 93.07 | 82.59 | 82.96 |
-| 4 | 8 | 99.10 | 93.48 | 98.33 | 98.31 |
+| 1 | 109 | 81.42 | 81.28 | 75.69 | 75.82 |
+| 2 | 65 | 90.57 | 96.88 | 91.91 | 91.48 |
+| 3 | 197 | 83.67 | 93.07 | 82.59 | 82.53 |
+| 4 | 8 | 99.10 | 93.48 | 98.33 | 98.33 |
 | 5 | 34 | 98.44 | 100.00 | 100.00 | 100.00 |
-| 6 | 122 | 98.69 | 100.00 | 95.97 | 96.64 |
+| 6 | 122 | 98.69 | 100.00 | 95.97 | 96.62 |
+
+No-op errors at 48 updates (an erroneous action invents at least one pixel):
+
+| Arm | Erroneous branch no-ops / 64 | Invented branch pixels | Erroneous ordinary no-ops / 188 | Invented ordinary pixels |
+| --- | ---: | ---: | ---: | ---: |
+| Untouched source | 38 | 385 | 89 | 670 |
+| Ordinary, balanced | 25 | 169 | 56 | 179 |
+| Paired, balanced | 34 | 251 | 87 | 397 |
+| Paired, balanced + adapter LR | 34 | 253 | 87 | 396 |
 
 The predeclared gates compared each paired candidate with its equal-budget
 ordinary control: recall +5 percentage points, delta error −3 points, improvement
 in at least four of six levels, ordinary delta error within +1 point, inventions
 within `max(20%, 0.5 px/action)` above control, and retained-game error within
 +2 points. **Every candidate failed those original gates.** Balanced 24-update
-candidates failed ordinary error and inventions. At 48 updates, inventions were
-3.81 versus 2.78 per action (+37%), above the allowed 3.34.
+candidates failed ordinary error and inventions. At 48 updates, both candidates
+improved branch error in four levels but invented 3.81/3.83 pixels per action
+versus 2.78 in the control, above the allowed 3.34. The full-adapter LR arm had
+the same recall as pairing alone and slightly worse union error.
 
 Comparing against the untouched source also matters: final paired recall was
 20.93% versus 22.43%, and ordinary error was 87.27% versus 86.81%. After seeing
 the control's degradation, the reusable runner received an additional safety
 guard: no recall regression against the source, ordinary error within source
 +1 point and retained-game error within source +2 points. This is a **post-probe
-tightening**, not a predeclared test; it changes no adoption outcome. Raw result
-files retain their original six gate checks.
+tightening**, not a predeclared test; it changes no adoption outcome. Original
+result files retain six gate checks; corrected results include all nine.
 
 ## Cost, limitations and deployment
 
-On an RTX 4070 Ti at the existing 150 W limit, CUDA AMP and four CPU threads:
-collection/replay took 9.87–9.92 seconds per run. The 48-update training loops
-took 5.72 s (ordinary), 4.94 s (paired) and 4.89 s (paired + adapter LR); peak
-allocated CUDA memory was 2.26, 2.17 and 2.17 GiB respectively. Loop timings omit
-encoding and evaluation, use a fixed arm order and reuse frozen latents. They
-are **not production TPS or a reliable speed comparison**.
+Corrected runs used the RTX 4070 Ti, CUDA AMP and four CPU threads alongside the
+live trainer, with an 18% per-process CUDA allocation cap. After encoding, the
+frozen encoder moves to CPU; learning and evaluation use its cached latents.
+Weights, model arithmetic, data and optimizer budgets are unchanged.
+Collection/replay took 10.33–10.60 s per run. Whole-process wall times were
+64.20 s (raw 24), 77.01 s (balanced 24), and 84.87 s (balanced 48), with peak
+resident CPU memory 10.08–10.09 GiB. The 48-update loops took 7.70 s (ordinary),
+10.41 s (paired) and 8.43 s (paired + adapter LR); peak allocated CUDA memory
+after cache construction was 1.92, 1.83 and 1.84 GiB respectively. Loop timings
+omit encoding/evaluation, share the GPU, use a fixed arm order and reuse frozen
+latents. They are **not production TPS or a reliable speed comparison**.
+
+Before moving the encoder, two shared-GPU attempts exhausted memory during the
+first backward pass (50.61/44.77 s, including an activation-offload attempt).
+A CPU fallback was interrupted during encoding after 445.02 s. These completed
+no optimizer updates but each collected/replayed 7,920 actions. The corrected
+comparisons add 23,760 real calls and 2,304 supervised presentations across 288
+updates; failed/interrupted attempts add 23,760 calls, and the original three
+trials added 23,760. These regenerate the same seeded data, not independent trials.
 
 Only four held-out scenes per level were used, and level 4 contained eight
 changed pixels. The same validation set informed the 24→48 extension. The probe
@@ -123,11 +155,14 @@ used one supervised endpoint after a short context, not the full 512-action
 production session. It supports rejecting this deployment, not concluding that
 paired learning can never work or that extra model capacity is necessary.
 
-Production resumed from the unchanged checkpoint and optimizer with all 30
-retained games and bf08 excluded. Predictor LR remains `3e-5`; encoder/decoder
-LRs remain `3e-7`. Local and public dashboard state both confirmed batch 2997,
-11,857,920 actions and 66,144 updates, status `running`, 30 games and no bf08.
-No candidate checkpoint was exported or loaded into production.
+The original experiment resumed production from its unchanged checkpoint and
+optimizer; local/public state then confirmed batch 2997. During correction,
+production was never stopped or reconfigured. The final local report confirmed
+batch 3016, 11,927,552 actions, 66,752 updates, status `running`, 30 games and no
+bf08. Predictor LR remains `3e-5`, encoder/decoder LRs `3e-7`, and fixed click sigma
+1.5. The source checkpoint SHA-256 was verified unchanged after the reruns.
+No candidate checkpoint was exported or loaded into production. Retain production
+unchanged; these results do not justify this sampling or LR change.
 
 ## Re-run and evidence
 
@@ -142,37 +177,37 @@ PYTHONPATH=.:src python -m model.paired_click_experiment \
 Use 24 updates and omit `--balanced` to reproduce the first probe. CPU is also
 supported. Each invocation requires a new output directory; it never writes the
 source checkpoint. No automatic production adoption is implemented.
+To reproduce the shared-GPU cap, replace `python -m model.paired_click_experiment`
+with `python -c 'import runpy, torch; torch.cuda.set_per_process_memory_fraction(.18); runpy.run_module("model.paired_click_experiment", run_name="__main__")'`
+and keep the same arguments. The encoder residency change is automatic on CUDA.
 
 Local evidence is in the ignored run directory
 `model/runs/sequences-all-20261020/bf02-paired-20261022/`:
 `source-report.json`, `{trial-24,balanced-24,balanced-48}/results.json`, their logs,
-`deployment-decision.json`, and `live-verification.json`. Weights and large traces
-are deliberately not committed. The tables above retain compact numerical evidence.
+`deployment-decision.json`, and `live-verification.json`. Corrected evidence is
+retained beside that original run in `correction-8457711/` (outside the disposable
+issue worktree):
+`{trial-24,balanced-24,balanced-48}-corrected/results.json`, matching `.log`/`.time`
+files, `source-revision.txt`, `verified-comparisons.json`, `tests.log`, and
+`live-after-reruns.json`. Original and unsuccessful runs are retained. Weights
+and large traces are not committed; these tables retain compact numerical evidence.
 
-Validation: seven focused tests passed, covering replay/reset fidelity, sibling
-isolation, metric counts, seed separation, equal budgets and balanced schedules,
-native CPU sequence updates with frozen representation, and rejection gates.
-The 29 existing sequence/exploration tests completed successfully with one
-optional Node-dependent dashboard check skipped because Node was unavailable.
-No browser or visual tests were run. The hosted executor-routing workflow's path
-filters do not include this experiment, its tests or this report.
+Validation at the corrected source: `model.tests.test_paired_click_experiment`,
+`model.tests.test_sequence`, `model.tests.test_sequence_exploration`, and
+`model.tests.test_sequence_training` completed **48 tests: 47 passed, one optional
+Node-dependent dashboard test skipped**. Eight focused cases cover replay/reset
+fidelity, sibling isolation, metrics, seed separation, equal/balanced budgets,
+native CPU updates with frozen representation, optimizer restoration and gates.
+The new real CPU-runner regression failed against `f0a2264` for exactly the four
+missed adapter biases, then passed after repair. It checks all adapter rates,
+unchanged rates elsewhere, exact nonempty Adam moments/step counters and all group
+options (including weight decay), unique parameter coverage, frozen representation,
+an unchanged source checkpoint, and four examples in each of three actual updates.
+Expected state is captured before the runner partitions groups.
 
-Audit correction validation targets the real CPU runner with a small spatial
-adapter and a checkpoint containing nonempty Adam state. Existing tests cover
-prefix fidelity, metrics and frozen representations but not optimizer-group
-partitioning. The added case checks every adapter weight and bias at `1e-4`,
-unchanged rates elsewhere, exact restored moments/steps and group options
-(including weight decay), and one update with four examples in each arm. Expected
-state comes from the source checkpoint before the runner changes any groups.
-The regression failed on the prior runner for exactly the four adapter biases,
-then passed after repair. The focused experiment, sequence, exploration and
-sequence-training suites completed 48 tests (47 passed; one optional Node check
-skipped). Corrected CUDA comparisons remain to be regenerated.
-
-Two attempts alongside the live trainer exhausted GPU memory during the first
-update, including an activation-offload attempt. The resulting memory plan moves
-the frozen encoder to CPU after its complete latent cache is built: subsequent
-updates and evaluations use only that cache, and every arm restores identical
-encoder weights. This changes residency, not model arithmetic, examples or
-optimizer budgets. The CPU fallback was interrupted before any optimizer update
-to use this smaller CUDA footprint; production was not stopped or reconfigured.
+All nine corrected CUDA arms passed the frozen-representation check; independent
+aggregation of scene counts reproduced every metric, and traces confirmed actual
+update/example budgets and matched effect/no-op counts. `git diff --check` passed.
+No browser or visual tests ran. The unchanged hosted executor-routing workflow's
+path filters exclude these three files; the other workflows are issue dispatchers
+or reusable launchers, so no hosted CI workflow applies to this diff.
