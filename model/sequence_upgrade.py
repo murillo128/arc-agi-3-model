@@ -1,6 +1,6 @@
 """Narrow, explicit sequence migrations; never restart learned optimizer state."""
 import copy
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import torch
 
@@ -21,8 +21,16 @@ def normalized_plan(payload):
     return result
 
 
-def upgrade_plan_matches(previous, current, *, disable_undo=False, upgrade_predictor=False):
+def upgrade_plan_matches(previous, current, *, disable_undo=False, upgrade_predictor=False,
+                         fix_click_sigma=False):
     old, new = normalized_plan(previous), normalized_plan(current)
+    if fix_click_sigma:
+        if disable_undo or upgrade_predictor:
+            return False
+        before, after = old['initialization']['network'], new['initialization']['network']
+        if not before['rotation_adapter_width'] or after['learnable_click_sigma']:
+            return False
+        before['learnable_click_sigma'] = False
     if disable_undo:
         # Also supports legacy uniform collection without an explicit section.
         from .sequence_exploration import SequenceExplorationConfig
@@ -45,9 +53,13 @@ def upgrade_plan_matches(previous, current, *, disable_undo=False, upgrade_predi
     return old == new
 
 
-def upgraded_network(saved, initial):
+def upgraded_network(saved, initial, *, fix_click_sigma=False):
     previous = NetworkConfig(**saved['network'])
     target = NetworkConfig(**initial['network'])
+    if fix_click_sigma:
+        if not previous.rotation_adapter_width or replace(previous, learnable_click_sigma=False) != target:
+            raise ValueError('Fixing click sigma may only disable learnable click sigma on an existing adapter')
+        return target
     if (not target.rotation_adapter_width or
             previous.rotation_adapter_width not in (0, target.rotation_adapter_width) or
             (previous.learnable_click_sigma and not target.learnable_click_sigma) or
@@ -57,29 +69,36 @@ def upgraded_network(saved, initial):
     return target
 
 
-def load_upgraded_weights(model, saved):
+def load_upgraded_weights(model, saved, *, fix_click_sigma=False):
     previous = NetworkConfig(**saved['network'])
+    if fix_click_sigma:
+        upgraded_network(saved, dict(network=asdict(model.config)), fix_click_sigma=True)
     weights = model.state_dict()
     added = ({k for k in weights if k.startswith(ADAPTER_PREFIX)} if not previous.rotation_adapter_width
              else {CLICK_SIGMA_KEY} if not previous.learnable_click_sigma and model.config.learnable_click_sigma
              else set())
-    old_keys = set(weights) - added
+    removed = {CLICK_SIGMA_KEY} if fix_click_sigma and previous.learnable_click_sigma else set()
+    old_keys = (set(weights) - added) | removed
     if old_keys != set(saved['weights']):
         raise ValueError('Predictor upgrade must preserve every existing weight')
-    weights.update(saved['weights'])
+    weights.update({k: v for k, v in saved['weights'].items() if k not in removed})
     model.load_state_dict(weights, strict=True)
 
 
-def upgraded_optimizer(saved, dynamics):
-    """Bind old Adam moments by name, adding only approved adapter parameters."""
+def upgraded_optimizer(saved, dynamics, *, fix_click_sigma=False):
+    """Bind Adam by name; only add adapter parameters or remove the width scalar."""
     with torch.device('meta'):
         previous = Dynamics(NetworkConfig(**saved['network']))
     old_parameters = dict(previous.named_parameters())
     old_names = list(old_parameters)
     current = dict(dynamics.named_parameters())
     new_names = list(current)
-    if (new_names[:len(old_names)] != old_names or
-            any(not n.startswith('rotation_adapter.') for n in new_names[len(old_names):])):
+    if fix_click_sigma:
+        valid = new_names == [n for n in old_names if n != 'rotation_adapter.click_width.log_scale']
+    else:
+        valid = (new_names[:len(old_names)] == old_names and
+                 all(n.startswith('rotation_adapter.') for n in new_names[len(old_names):]))
+    if not valid:
         raise ValueError('Predictor optimizer migration found an unexpected parameter layout')
     state = saved['predictor_optimizer']
     if len(state['param_groups']) != 2:
@@ -113,10 +132,12 @@ def upgraded_optimizer(saved, dynamics):
             step = values['step']
             if not isinstance(step, torch.Tensor) or step.numel() != 1 or not torch.isfinite(step).all():
                 raise ValueError(f'Predictor optimizer step must be a finite scalar for {name}')
-            if any(not isinstance(v, torch.Tensor) or v.shape != current[name].shape
+            parameter = current[name] if name in current else old_parameters[name]
+            if any(not isinstance(v, torch.Tensor) or v.shape != parameter.shape
                    for k, v in values.items() if k != 'step'):
                 raise ValueError(f'Predictor optimizer shape mismatch for {name}')
-            migrated[indices[name]] = values
+            if name in indices:
+                migrated[indices[name]] = values
         groups.append(dict(group, params=list(indices.values())))
         offset += len(after)
     return dict(state=migrated, param_groups=groups)

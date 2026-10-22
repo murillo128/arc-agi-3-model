@@ -58,6 +58,17 @@ scalar starts without optimizer history. Subsequent resumes use ordinary
 `--resume`. The dashboard reports sigma in native pixels and fixed/learned status;
 each batch records `click_sigma_pixels` after its weight updates. This adds one
 parameter and does not itself establish better prediction accuracy.
+
+To return a learned-width run to **fixed sigma=1.5**, copy its initialization
+configuration, change only `network.learnable_click_sigma` to `false`, and resume
+once with `--fix-click-sigma`. This removes only the width scalar and its AdamW
+state. All other weights (including trained spatial filters), optimizer moments,
+learning rates, counters, phase and RNG are retained. It cannot be combined with
+other migrations. After saving, use ordinary `--resume`. The fixed-width map no
+longer backpropagates through a width parameter; predictions may change because
+the learned width is deliberately replaced with 1.5, rather than frozen at its
+last value. Dashboard metadata reports the fixed width.
+
 The old report is archived at the adaptation boundary; new charts start with the
 new action population. The dashboard reports adapter width and actual Undo counts.
 `architecture.json` describes the width-16 example and includes its tensor bindings.
