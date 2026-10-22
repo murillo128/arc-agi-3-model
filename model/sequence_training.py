@@ -305,6 +305,15 @@ def write_report(path, report):
     temporary.replace(path)
 
 
+def click_map_report(engine):
+    if not engine.model.config.rotation_adapter_width:
+        return None
+    sigma = engine.model.dynamics.rotation_adapter.click_sigma()
+    return dict(sigma_pixels=float(sigma.detach().cpu()) if isinstance(sigma, torch.Tensor) else sigma,
+                learnable=engine.model.config.learnable_click_sigma, peak=1.,
+                minimum_sigma_pixels=.375, maximum_sigma_pixels=6.)
+
+
 def run(args):
     rate = getattr(args, 'predictor_learning_rate', None)
     if rate is not None and (not math.isfinite(rate) or not 0 < rate < 1):
@@ -371,6 +380,7 @@ def run(args):
                 predictor_adaptations.append(dict(batch=batches, actions=actions,
                     allow_undo=exploration.allow_undo,
                     rotation_adapter_width=engine.model.config.rotation_adapter_width,
+                    learnable_click_sigma=engine.model.config.learnable_click_sigma,
                     previous_plan=digest(saved['plan']), plan=plan.identity))
             extensions = list(saved.get('curriculum_extensions', []))
             restrictions = list(saved.get('curriculum_restrictions', []))
@@ -416,6 +426,7 @@ def run(args):
         report['exploration_adoptions'] = exploration_adoptions
         report['predictor_adaptations'] = predictor_adaptations
         report['network'] = asdict(engine.model.config)
+        report['click_map'] = click_map_report(engine)
         report['budget'] = action_budget
         report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
         if control:
@@ -525,6 +536,9 @@ def run(args):
                 game_errors = [quality[g]['delta_error'] for g in factories
                                if g in quality and quality[g]['delta_error'] is not None]
                 row['macro_delta_error'] = sum(game_errors)/len(game_errors) if game_errors else None
+                report['click_map'] = click_map_report(engine)
+                if report['click_map'] is not None:
+                    row['click_sigma_pixels'] = report['click_map']['sigma_pixels']
                 if engine.device.type == 'cuda':
                     row['peak_gpu_gib'] = torch.cuda.max_memory_allocated(engine.device)/1024**3
                 report['history'] = (report['history'] + [row])[-200:]
@@ -555,7 +569,7 @@ def main():
     parser.add_argument('--disable-undo', action='store_true',
                         help='Explicitly adopt allow_undo=false while preserving learned state')
     parser.add_argument('--upgrade-predictor', action='store_true',
-                        help='Enable a zero-output rotation adapter, preserving old weights and AdamW moments')
+                        help='Enable the rotation adapter or learnable click width, preserving weights and AdamW moments')
     parser.add_argument('--predictor-learning-rate', type=float,
                         help='Explicitly override only the predictor LR, preserving optimizer state on resume')
     parser.add_argument('--extend-curriculum', action='store_true',

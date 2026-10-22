@@ -3,12 +3,14 @@
 Orientation channels remain separate. Learned mixing, directional actions and
 pre-existing latents do not imply equivariance of the complete world model.
 """
+import math
+
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def click_maps(action, height, width, padded_height, padded_width):
+def click_maps(action, height, width, padded_height, padded_width, sigma=1.5):
     """Native SDK coordinates, with zero maps for absent/out-of-frame clicks."""
     # Recover integer SDK coordinates before bounds checks: float32 inversion
     # can otherwise turn x == width into a seemingly valid x just below width.
@@ -20,9 +22,23 @@ def click_maps(action, height, width, padded_height, padded_width):
     yy = torch.arange(padded_height, device=action.device, dtype=action.dtype)[None, :, None]
     dx = (xx - x[:, :, None]).expand(-1, padded_height, -1)
     dy = (yy - y[:, :, None]).expand(-1, -1, padded_width)
-    heat = torch.exp(-(dx.square() + dy.square()) / 4.5)
+    # Retain the original scalar division: CUDA tensor division rounds slightly
+    # differently even at sigma=1.5. The learned scale is exactly 1 initially.
+    distance = -(dx.square() + dy.square()) / 4.5
+    heat = torch.exp(distance * (1.5 / sigma) ** 2)
     mask = valid[:, :, None] & (xx < width) & (yy < height)
     return torch.stack((heat, dx / 63, dy / 63), 1) * mask[:, None]
+
+
+class GaussianClickWidth(nn.Module):
+    """One shared width in native pixels; unit peak and exact click stay fixed."""
+    def __init__(self):
+        super().__init__()
+        self.log_scale = nn.Parameter(torch.zeros(1))
+
+    def forward(self):
+        # Smooth bounds 0.375..6 px; zero gives exactly the old 1.5 px map.
+        return 1.5 * torch.exp(math.log(4) * torch.tanh(self.log_scale))
 
 
 class RotationAdapter(nn.Module):
@@ -36,9 +52,14 @@ class RotationAdapter(nn.Module):
         self.spatial = nn.Conv2d(4 * width, 4 * width, 3, padding=4, dilation=4, groups=4 * width)
         self.mix = nn.Conv2d(4 * width, 4 * width, 1)
         self.output = nn.Conv2d(4 * width, channels, 1)
+        # Append a child so every existing parameter keeps its relative order.
+        self.click_width = GaussianClickWidth() if config.learnable_click_sigma else None
         # WorldModel initializes the inner layers, then zeros this projection again.
         nn.init.zeros_(self.output.weight)
         nn.init.zeros_(self.output.bias)
+
+    def click_sigma(self):
+        return self.click_width() if self.click_width is not None else 1.5
 
     def oriented_features(self, grid):
         kernels = torch.cat([torch.rot90(self.filters.weight, k, (-2, -1)) for k in range(4)])
@@ -49,7 +70,7 @@ class RotationAdapter(nn.Module):
         rows, columns = (height + p - 1) // p, (width + p - 1) // p
         grid = z.reshape(batch, rows, columns, p, p, -1).permute(0, 5, 1, 3, 2, 4)
         grid = grid.reshape(batch, -1, rows * p, columns * p)
-        maps = click_maps(action, height, width, rows * p, columns * p)
+        maps = click_maps(action, height, width, rows * p, columns * p, self.click_sigma())
         condition = self.condition(torch.cat((memory, embedded_action), -1))[:, :, None, None]
         x = F.silu(self.oriented_features(grid) + self.click(maps) + condition)
         x = F.silu(self.mix(x + self.spatial(x)))

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-sequence-rotation-residual-v1",
-  "name": "ARC-AGI-3 \u00b7 Spatial residual world model",
+  "architecture_revision": "arc3-sequence-learned-click-width-v1",
+  "name": "ARC-AGI-3 · Spatial residual with learned click width",
   "scope": "sequence_world_model_and_exploration",
   "coverage": "partial",
   "symbols": [
@@ -44780,7 +44780,7 @@
     },
     {
       "id": "exploration.linear0",
-      "label": "Linear 48 \u2192 32",
+      "label": "Linear 48 → 32",
       "kind": "operation",
       "ports": [
         {
@@ -44869,7 +44869,7 @@
     },
     {
       "id": "exploration.linear2",
-      "label": "Linear 32 \u2192 32",
+      "label": "Linear 32 → 32",
       "kind": "operation",
       "ports": [
         {
@@ -44958,7 +44958,7 @@
     },
     {
       "id": "exploration.linear4",
-      "label": "Linear 32 \u2192 1",
+      "label": "Linear 32 → 1",
       "kind": "operation",
       "ports": [
         {
@@ -45225,6 +45225,10 @@
             180,
             270
           ]
+        },
+        {
+          "name": "learnable_click_sigma",
+          "value": true
         }
       ],
       "children": [
@@ -45237,7 +45241,8 @@
         "predictor.latent.real.rotation_adapter.spatial",
         "predictor.latent.real.rotation_adapter.mix",
         "predictor.latent.real.rotation_adapter.output",
-        "predictor.latent.real.rotation_adapter.pack"
+        "predictor.latent.real.rotation_adapter.pack",
+        "predictor.latent.real.rotation_adapter.click_width"
       ],
       "description": "Optional predictor residual. Shared quarter-turn filters preserve orientation channels; native click maps localize the action. Learned action/history conditioning and orientation mixing do not impose symmetry on game dynamics. The final projection starts at zero when growing an existing checkpoint."
     },
@@ -45398,6 +45403,17 @@
           ]
         },
         {
+          "id": "sigma",
+          "label": "sigma (pixels)",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
           "id": "metadata",
           "label": "metadata",
           "direction": "input",
@@ -45431,8 +45447,8 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "formula": "out = masked_click_gaussian_and_relative_xy(action, metadata)",
-      "description": "Recover integer 0..63 SDK coordinates by rounding before native frame bounds checks. Use Gaussian sigma 1.5 pixels and relative coordinates divided by 63. Zero for non-click, absent/out-of-frame coordinates and padding."
+      "formula": "out = masked_click_gaussian_and_relative_xy(action, metadata, sigma)",
+      "description": "Recover integer 0..63 SDK coordinates before native bounds checks. Unit-peak Gaussian with learned width in native pixels; relative x/y are divided by 63. Non-click, absent/out-of-frame coordinates and padding produce zero maps."
     },
     {
       "id": "predictor.latent.real.rotation_adapter.click",
@@ -45948,6 +45964,50 @@
         }
       ],
       "formula": "out = pack_native_pixel_grid(x, patch_size)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.click_width",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Learned Gaussian click width",
+      "operation": "bounded_gaussian_sigma",
+      "ports": [
+        {
+          "id": "sigma",
+          "label": "sigma (pixels)",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.click_width.log_scale"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "initial_sigma_pixels",
+          "value": 1.5
+        },
+        {
+          "name": "minimum_sigma_pixels",
+          "value": 0.375
+        },
+        {
+          "name": "maximum_sigma_pixels",
+          "value": 6.0
+        },
+        {
+          "name": "initial_log_scale",
+          "value": 0
+        }
+      ],
+      "formula": "sigma = 1.5 * exp(log(4) * tanh(log_scale))",
+      "description": "One shared scalar learned by the predictor optimizer without weight decay. Initial zero log_scale exactly preserves the fixed-width Gaussian of an existing trained adapter."
     }
   ],
   "edges": [
@@ -57950,6 +58010,18 @@
         "port_id": "adapter"
       },
       "kind": "data"
+    },
+    {
+      "id": "rotation.learned_click_width",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.click_width",
+        "port_id": "sigma"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.maps",
+        "port_id": "sigma"
+      },
+      "kind": "data"
     }
   ],
   "parameters": [
@@ -63884,6 +63956,16 @@
         {
           "kind": "constant",
           "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.click_width.log_scale",
+      "name": "dynamics.rotation_adapter.click_width.log_scale",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1
         }
       ]
     }
