@@ -29,6 +29,7 @@ from .sequence_control import SequenceControlConfig, SequencePhaseControl, Train
 from .sequence_exploration import SequenceExplorationConfig, ChangeExplorer, interaction_counts, sum_counts
 from .sequence_upgrade import (normalized_plan, upgrade_plan_matches, upgraded_network,
                                load_upgraded_weights, upgraded_optimizer)
+from .sequence_sampling import reweighted_plan_matches
 
 
 def synchronize(engine):
@@ -65,8 +66,10 @@ def close_factories(factories):
         factory.arcade.close_scorecard()
 
 
-def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exploration=None, explorer=None):
-    games = schedule_games(list(factories), batch_index, config, seed=seed)
+def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exploration=None, explorer=None,
+                  game_weights=None, sampling_start_batch=0):
+    games = schedule_games(list(factories), batch_index - sampling_start_batch, config,
+                           seed=seed, weights=game_weights)
     sessions = []
     for i, game in enumerate(games):
         # Even training / odd evaluation seeds, including intra-session resets.
@@ -193,7 +196,8 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
 
 
 def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(),
-             restrictions=(), explorer=None, exploration_adoptions=(), predictor_adaptations=()):
+             restrictions=(), explorer=None, exploration_adoptions=(), predictor_adaptations=(),
+             game_weight_adoptions=()):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
@@ -203,6 +207,7 @@ def save_run(path, plan, learner, representation, batches, actions, control=None
         curriculum_extensions=list(extensions), curriculum_restrictions=list(restrictions),
         exploration_adoptions=list(exploration_adoptions),
         predictor_adaptations=list(predictor_adaptations),
+        game_weight_adoptions=list(game_weight_adoptions),
         **(dict(exploration=explorer.snapshot()) if explorer is not None else {}),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
@@ -241,11 +246,11 @@ def restricted_plan_matches(previous, current):
 
 def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False, restrict=False,
                 adopt_exploration=False, explorer=None, disable_undo=False, upgrade_predictor=False,
-                fix_click_sigma=False):
+                fix_click_sigma=False, adopt_game_weights=False):
     if fix_click_sigma and (disable_undo or upgrade_predictor):
         raise ValueError('Fixed click sigma cannot be combined with other adaptations')
     adaptation = disable_undo or upgrade_predictor or fix_click_sigma
-    if sum((adopt, extend, restrict, adopt_exploration, adaptation)) > 1:
+    if sum((adopt, extend, restrict, adopt_exploration, adaptation, adopt_game_weights)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
     expected = normalized_plan(plan.payload)
     if adopt:
@@ -265,6 +270,7 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
             (changed and not (extend and extended_plan_matches(previous_plan, expected)) and
              not (restrict and restricted_plan_matches(previous_plan, expected)) and
+             not (adopt_game_weights and reweighted_plan_matches(previous_plan, expected)) and
              not (adaptation and upgrade_plan_matches(previous_plan, expected,
                   disable_undo=disable_undo, upgrade_predictor=upgrade_predictor,
                   fix_click_sigma=fix_click_sigma))) or
@@ -341,9 +347,13 @@ def run(args):
     disable_undo = getattr(args, 'disable_undo', False)
     upgrade_predictor = getattr(args, 'upgrade_predictor', False)
     fix_click_sigma = getattr(args, 'fix_click_sigma', False)
+    adopt_game_weights = getattr(args, 'adopt_game_weights', False)
     if fix_click_sigma and (disable_undo or upgrade_predictor):
         raise ValueError('--fix-click-sigma cannot be combined with other adaptations')
     adaptation = disable_undo or upgrade_predictor or fix_click_sigma
+    if adopt_game_weights and (not args.resume or adopt or extend or restrict or
+                              adopt_exploration or adaptation or rate is not None):
+        raise ValueError('--adopt-game-weights requires --resume without other adoptions or LR override')
     if adaptation and (not args.resume or adopt or extend or restrict or adopt_exploration):
         raise ValueError('Predictor/Undo adaptation requires --resume without other adoptions')
     if disable_undo and exploration.allow_undo:
@@ -379,13 +389,19 @@ def run(args):
         batches, actions, extensions, exploration_adoptions = 0, 0, [], []
         restrictions, restricted = [], False
         predictor_adaptations, adapted = [], False
+        game_weight_adoptions = []
         if args.resume:
             saved = checkpoint.load(source)
             batches, actions = restore_run(saved, plan, learner, representation, control,
                                            adopt=adopt, extend=extend, restrict=restrict,
                                            adopt_exploration=adopt_exploration, explorer=explorer,
                                            disable_undo=disable_undo, upgrade_predictor=upgrade_predictor,
-                                           fix_click_sigma=fix_click_sigma)
+                                           fix_click_sigma=fix_click_sigma, adopt_game_weights=adopt_game_weights)
+            game_weight_adoptions = list(saved.get('game_weight_adoptions', []))
+            if adopt_game_weights and saved['plan'].get('sequence_game_weights', {}) != plan.payload.get('sequence_game_weights', {}):
+                game_weight_adoptions.append(dict(batch=batches, actions=actions,
+                    before=saved['plan'].get('sequence_game_weights', {}),
+                    after=plan.payload.get('sequence_game_weights', {})))
             predictor_adaptations = list(saved.get('predictor_adaptations', []))
             adapted = adaptation and normalized_plan(saved['plan']) != normalized_plan(plan.payload)
             if adapted:
@@ -414,6 +430,7 @@ def run(args):
                     games_after=list(dict.fromkeys(s['game'] for s in plan.stages)),
                     removed_stages=[s for s in saved['plan']['stages'] if s not in plan.stages]))
             del saved
+        sampling_start_batch = game_weight_adoptions[-1]['batch'] if game_weight_adoptions else 0
         predictor_learning_rate(learner, rate)
         if control:
             control.apply(representation)
@@ -422,7 +439,7 @@ def run(args):
             from .optimization_telemetry import OptimizationTelemetry
             telemetry = OptimizationTelemetry(engine.model, output, every=args.optimization_every,
                 restored_batch=batches, identity=json.dumps(
-                    {k:v for k,v in plan.payload.items() if k != 'sequence_exploration'}, sort_keys=True))
+                    {k:v for k,v in plan.payload.items() if k not in ('sequence_exploration', 'sequence_game_weights')}, sort_keys=True))
         stop = False
         def interrupt(signum, frame):
             nonlocal stop
@@ -433,6 +450,9 @@ def run(args):
         report = dict(kind='game_sequences', status='running', config=asdict(config), history=[],
                       progress=dict(batches=batches, actions=actions), games=list(dict.fromkeys(s['game'] for s in plan.stages)))
         report['schedule'] = list(plan.stages)
+        report['game_weights'] = plan.payload.get('sequence_game_weights', {})
+        report['game_weight_adoptions'] = game_weight_adoptions
+        report['sampling_start_batch'] = sampling_start_batch
         report['curriculum_extensions'] = extensions
         report['curriculum_restrictions'] = restrictions
         report['exploration_config'] = asdict(exploration)
@@ -479,7 +499,8 @@ def run(args):
                 if telemetry:
                     telemetry.start_batch(batches + 1)
                 sessions = collect_batch(factories, config, batches, plan.settings['seed'],
-                                         exploration=exploration, explorer=explorer)
+                                         exploration=exploration, explorer=explorer,
+                                         game_weights=report['game_weights'], sampling_start_batch=sampling_start_batch)
                 collection_seconds = time.perf_counter() - begin
                 if control:
                     phase = control.phase
@@ -533,7 +554,7 @@ def run(args):
                 save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
                          extensions=extensions, restrictions=restrictions,
                          explorer=explorer, exploration_adoptions=exploration_adoptions,
-                         predictor_adaptations=predictor_adaptations)
+                         predictor_adaptations=predictor_adaptations, game_weight_adoptions=game_weight_adoptions)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -544,7 +565,7 @@ def run(args):
                 seconds = time.perf_counter() - begin
                 row = dict(batch=batches, actions=actions, recent_tps=real_actions/seconds,
                            collection_seconds=collection_seconds, total_seconds=seconds,
-                           quality=quality, sessions=[dict(game=s.game, steps=len(s.transitions),
+                           quality=quality, sessions=[dict(game=s.game, seed=s.seed, steps=len(s.transitions),
                                boundaries=sum(t.reset_before for t in s.transitions), end=s.end_reason) for s in sessions], **measured)
                 game_errors = [quality[g]['delta_error'] for g in factories
                                if g in quality and quality[g]['delta_error'] is not None]
@@ -593,6 +614,8 @@ def main():
                         help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
     parser.add_argument('--adopt-exploration', action='store_true',
                         help='Adopt the first learned exploration head without resetting the world model')
+    parser.add_argument('--adopt-game-weights', action='store_true',
+                        help='Change only shuffled game frequencies on resume, preserving all learned state')
     parser.add_argument('--exploration-source', type=Path, help='Auxiliary bootstrap checkpoint for a new head only')
     parser.add_argument('--fix-click-sigma', action='store_true',
                         help='Explicitly return an existing adapter to fixed sigma=1.5, preserving all other learned state')

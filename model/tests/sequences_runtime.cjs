@@ -85,6 +85,17 @@ const text = id => nodes.get(id).textContent;
   assert.match(text('configuration'), /shuffled without repeats/);
   assert.match(text('schedule-info'), /Each game once per round/);
   assert.match(text('schedule-info'), /last batch may be smaller/);
+  report.game_weights={'<game>':3}; report.game_weight_adoptions=[{batch:0}]; report.sampling_start_batch=0;
+  await vm.runInContext('refresh()',context);
+  assert.match(text('configuration'), /Weighted shuffled rounds · 3 sessions per round/);
+  assert.match(text('sampling-info'), /Current frequencies apply from batch 1/);
+  assert.deepEqual(nodes.get('sampling-games').children[0].children.map(n=>n.textContent),
+    ['<game>','3×','100 %','1','512']);
+  report.sampling_start_batch=1;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('sampling-games').children[0].children[3].textContent,'0','old sessions do not count toward a new weighting');
+  delete report.game_weights; delete report.game_weight_adoptions; delete report.sampling_start_batch;
+  await vm.runInContext('refresh()',context);
   assert.equal(nodes.get('quality-legend').children[0].textContent, 'Early %: 0');
   assert.equal(nodes.get('loss-legend').children[0].textContent, 'Loss: 0');
   assert.equal(text('macro-error'), 'Average across games: 25 %');

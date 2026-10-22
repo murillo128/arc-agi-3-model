@@ -103,16 +103,20 @@ def collect_session(factory, levels, seed, config, *, exploration=None, explorer
     return session
 
 
-def schedule_games(games, batch_index, config, *, seed=0):
+def schedule_games(games, batch_index, config, *, seed=0, weights=None):
     """Choose sessions; shuffled rounds are reproducible from the saved batch count."""
     if not games or len(set(games)) != len(games):
         raise ValueError('Expected distinct configured games')
     if type(batch_index) is not int or batch_index < 0 or type(seed) is not int or seed < 0:
         raise ValueError('Batch index and seed must be nonnegative integers')
+    from .sequence_sampling import game_weights
+    weights = game_weights({} if weights is None else weights, games)
+    if weights and config.game_schedule != 'shuffled':
+        raise ValueError('Game weights require shuffled sequence training')
     if config.game_schedule == 'shuffled':
-        batches_per_round = (len(games) + config.batch_games - 1) // config.batch_games
+        order = [game for game in games for _ in range(weights.get(game, 1))]
+        batches_per_round = (len(order) + config.batch_games - 1) // config.batch_games
         round_index, slot = divmod(batch_index, batches_per_round)
-        order = list(games)
         random.Random(f'sequence-games:{seed}:{round_index}').shuffle(order)
         start = slot * config.batch_games
         return order[start:start + config.batch_games]

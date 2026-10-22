@@ -116,7 +116,18 @@ function render(data) {
   $('freshness').textContent = Number.isFinite(data.age_seconds) ? `Updated ${number(data.age_seconds,0)} s ago` : '';
   $('curriculum-games').textContent=(data.games||[]).join(' · ');
   const shuffled=c.game_schedule==='shuffled';
-  $('configuration').textContent = `${shuffled?'Up to ':''}${c.batch_games || '—'} independent sessions · ${c.session_steps || '—'} actions per session · Block: ${c.block_steps || '—'} steps + ${c.context_steps ?? 0} context steps with gradients · Initial loss weight: ${number(c.loss_start_weight)} → 1 over ${c.loss_warmup_steps || '—'} actions · ${shuffled?'Games shuffled without repeats':c.game_schedule === 'blocked' ? 'One game per batch' : 'Alternating games'}`;
+  const weights=data.game_weights||{}, weighted=Object.values(weights).some(w=>w>1);
+  const sessionsPerRound=(data.games||[]).reduce((total,game)=>total+(weights[game]??1),0);
+  $('configuration').textContent = `${shuffled?'Up to ':''}${c.batch_games || '—'} independent sessions · ${c.session_steps || '—'} actions per session · Block: ${c.block_steps || '—'} steps + ${c.context_steps ?? 0} context steps with gradients · Initial loss weight: ${number(c.loss_start_weight)} → 1 over ${c.loss_warmup_steps || '—'} actions · ${shuffled?(weighted?`Weighted shuffled rounds · ${sessionsPerRound} sessions per round`:'Games shuffled without repeats'):c.game_schedule === 'blocked' ? 'One game per batch' : 'Alternating games'}`;
+  $('sampling-card').hidden=!shuffled;
+  const exposureRows=rows.filter(r=>r.batch>(data.sampling_start_batch??0)), exposure=new Map();
+  for(const row of exposureRows) for(const session of row.sessions||[]){
+    const total=exposure.get(session.game)||[0,0]; total[0]++; total[1]+=session.steps||0; exposure.set(session.game,total);
+  }
+  const adoption=(data.game_weight_adoptions||[]).at(-1);
+  $('sampling-info').textContent=`${sessionsPerRound} independent sessions per round. Weights change collection frequency; per-session loss weighting is unchanged.${adoption?` Current frequencies apply from batch ${number(adoption.batch+1,0)}; earlier chart history uses the previous mix.`:''} Collected counts cover ${exposureRows.length} retained batches${exposureRows.length?` (${exposureRows[0].batch}–${exposureRows.at(-1).batch})`:''} and may include partial rounds. Repeated games start with separate seeds and memory.`;
+  table('sampling-games',(data.games||[]).map(game=>[game,`${weights[game]??1}×`,`${number(100*(weights[game]??1)/sessionsPerRound,2)} %`,
+    number(exposure.get(game)?.[0]??0,0),number(exposure.get(game)?.[1]??0,0)]));
   $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
   if(data.network?.rotation_adapter_width) $('learning-rates').textContent+=` · Rotation adapter: ${data.network.rotation_adapter_width} filters × 4 orientations`;
   if(data.click_map) $('learning-rates').textContent+=` · Gaussian click σ: ${number(data.click_map.sigma_pixels,4)} px (${data.click_map.learnable?'learned':'fixed'})`;
@@ -184,7 +195,7 @@ function render(data) {
     `${number(pct(r.diagnostics?.reconstruction_error))} %`,`${number(pct(r.diagnostics?.rollout_error))} %`,
     number(r.quality?.all?.transitions,0),number(r.diagnostics?.sampled_transitions,0)]));
   table('schedule',(data.schedule||[]).map((s,i)=>[i+1,s.game,s.level,s.source,control?.phase==='representation'?'Encoder · decoder':'Encoder · decoder · predictor']));
-  $('schedule-info').textContent=`${shuffled?'Each game once per round in shuffled order; the last batch may be smaller':c.game_schedule==='blocked'?'One game per batch':'Games interleaved in each batch'} · rotation every ${c.level_steps??'—'} moves in synthetic games; SDK games progress natively. Memory is preserved across levels within a session. This mode does not use thresholds to activate the planner.`;
+  $('schedule-info').textContent=`${shuffled?(weighted?'Weighted sessions per shuffled round; the last batch may be smaller':'Each game once per round in shuffled order; the last batch may be smaller'):c.game_schedule==='blocked'?'One game per batch':'Games interleaved in each batch'} · rotation every ${c.level_steps??'—'} moves in synthetic games; SDK games progress natively. Memory is preserved across levels within a session. This mode does not use thresholds to activate the planner.`;
   renderPreview(data);
 }
 function draw(id, grid) {
