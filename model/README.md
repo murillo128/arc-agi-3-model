@@ -291,6 +291,35 @@ el contador de batches del checkpoint determina exactamente la continuación.
 Las acciones mantienen su orden causal y los niveles conservan el orden configurado.
 Los modos anteriores y sus checkpoints siguen usando su reparto original.
 
+Optional `sequence_game_weights` changes the number of independent sessions per
+game in a shuffled round. For example, alongside `sequence`:
+
+```json
+"sequence_game_weights": {
+  "bf02-v1": 3,
+  "bf04-v1": 3,
+  "bf08-v1": 3,
+  "mc01-v1": 3
+}
+```
+
+Omitted games keep one session. Values must be integers in 1..16 and refer to
+configured games; only `game_schedule: "shuffled"` supports this option. A catalog
+of 31 games with these four weights has 39 sessions per round, split into batches
+of 8/8/8/8/7. Repeated games can share a batch but have different seeds and separate
+memory. The per-session loss formula does not change. These are session quotas,
+not guaranteed transition shares: an SDK session can end early at its access boundary.
+
+To change an existing run, back up its checkpoint and configuration, then resume
+once with `--adopt-game-weights`. This allows only the frequency change, retaining
+weights, optimizers, exploration replay, phase and counters. It cannot combine with
+other migrations or an LR override. A new shuffled round starts at the saved batch
+boundary; later ordinary `--resume` uses the persisted boundary. Default unweighted
+plans retain their previous order. The dashboard's Curriculum → Game exposure table
+shows planned frequencies and actual session/transition counts since adoption;
+earlier chart history is retained. Compare per-game errors across the boundary,
+since changing the game mix also changes aggregate metrics.
+
 Las ocho actualizaciones de representación incluyen cada sesión del batch, también
 en el batch corto (una sesión recibe una actualización adicional). Las 384 muestras
 de diagnóstico permiten al menos ocho por juego/nivel presente si hay suficientes

@@ -79,7 +79,7 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration', 'sequence_game_weights'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
@@ -176,6 +176,13 @@ def load_plan(path):
     if 'sequence' in value:
         payload['sequence'] = asdict(SequenceConfig(**object_keys(
             value['sequence'], SequenceConfig.__dataclass_fields__, 'sequence')))
+    if 'sequence_game_weights' in value:
+        from .sequence_sampling import game_weights
+        if payload.get('sequence', {}).get('game_schedule') != 'shuffled':
+            raise ValueError('sequence_game_weights requires shuffled sequence training')
+        weights = game_weights(value['sequence_game_weights'], dict.fromkeys(s['game'] for s in stages))
+        if weights:
+            payload['sequence_game_weights'] = weights
     if 'sequence_exploration' in value:
         from .sequence_exploration import SequenceExplorationConfig
         if 'sequence' not in value:
