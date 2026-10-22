@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-sequence-world-model-change-head-v1",
-  "name": "ARC-AGI-3 · Recurrent world model and learned exploration",
+  "architecture_revision": "arc3-sequence-rotation-residual-v1",
+  "name": "ARC-AGI-3 \u00b7 Spatial residual world model",
   "scope": "sequence_world_model_and_exploration",
   "coverage": "partial",
   "symbols": [
@@ -7194,6 +7194,21 @@
           "direction": "output",
           "shape": null,
           "value_type": "RecurrentContext {z: float32[P,1024], h: float32[2048], action_embedding: float32[128], episode_context}"
+        },
+        {
+          "id": "raw_action",
+          "label": "raw_action",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
         }
       ],
       "parameter_ids": [],
@@ -8363,12 +8378,27 @@
           "direction": "output",
           "shape": null,
           "value_type": "LatentDelta {d_hat: float32[P,1024], ids, mask}"
+        },
+        {
+          "id": "raw_action",
+          "label": "raw_action",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
         }
       ],
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Dynamics.forward: six attention blocks combine spatial tokens, advanced recurrent memory and action. A separately conditioned local convolution branch supplies the spatial residual. The next latent is the current latent plus the predicted delta.",
+      "description": "Dynamics.forward: six attention blocks combine spatial tokens, advanced recurrent memory and action. A separately conditioned local convolution branch supplies the spatial residual. The next latent is the current latent plus the predicted delta. An optional action-localized quarter-turn filter adapter adds a zero-initialized correction without changing existing weights.",
       "children": [
         "predictor.latent.real.unpack",
         "predictor.latent.real.state_token",
@@ -8387,7 +8417,8 @@
         "predictor.latent.real.output",
         "predictor.latent.real.position",
         "predictor.latent.real.local",
-        "predictor.latent.real.delta_merge"
+        "predictor.latent.real.delta_merge",
+        "predictor.latent.real.rotation_adapter"
       ]
     },
     {
@@ -44312,7 +44343,7 @@
       "id": "predictor.latent.real.delta_merge",
       "parent_id": "predictor.latent.real",
       "kind": "operation",
-      "label": "Local and Global Delta",
+      "label": "Local, global and adapter delta",
       "ports": [
         {
           "id": "local",
@@ -44336,6 +44367,25 @@
         {
           "id": "global",
           "label": "global",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "adapter",
+          "label": "adapter",
           "direction": "input",
           "shape": [
             {
@@ -44381,7 +44431,7 @@
         }
       ],
       "operation": "delta_merge",
-      "formula": "out = local + residual_scale * global",
+      "formula": "out = local + residual_scale * global + residual_scale * adapter",
       "description": "FP32 combined residual, then the existing output adds it to z with coefficient one."
     },
     {
@@ -44638,7 +44688,7 @@
       "attributes": [],
       "operation": "visible_and_uniform_candidates",
       "formula": "candidates = allowed_candidates(records)",
-      "description": "Only allowed native actions. The click pool mixes palette-balanced visible pixels and uniform coordinates; it does not read game identity, target locations or hidden rules."
+      "description": "Only allowed native actions. The click pool mixes palette-balanced visible pixels and uniform coordinates; it does not read game identity, target locations or hidden rules. Training collection may exclude ACTION7 with allow_undo=false before sampling action IDs; SDK observations and manual play remain unchanged."
     },
     {
       "id": "exploration.head",
@@ -44730,7 +44780,7 @@
     },
     {
       "id": "exploration.linear0",
-      "label": "Linear 48 → 32",
+      "label": "Linear 48 \u2192 32",
       "kind": "operation",
       "ports": [
         {
@@ -44819,7 +44869,7 @@
     },
     {
       "id": "exploration.linear2",
-      "label": "Linear 32 → 32",
+      "label": "Linear 32 \u2192 32",
       "kind": "operation",
       "ports": [
         {
@@ -44908,7 +44958,7 @@
     },
     {
       "id": "exploration.linear4",
-      "label": "Linear 32 → 1",
+      "label": "Linear 32 \u2192 1",
       "kind": "operation",
       "ports": [
         {
@@ -45034,7 +45084,7 @@
       "attributes": [],
       "operation": "mixed_click_sampling",
       "formula": "action = sample_click_or_uniform(records, candidates, probability)",
-      "description": "Preserve uniformly sampled ordinary actions. Only when that draw selects CLICK, mix a uniform click with learned candidate sampling; learned weights are (0.05 + p)^4 with a temporary penalty for repeated no-op clicks. This collector is not the goal planner and does not optimize win probability."
+      "description": "Preserve uniformly sampled ordinary actions. Only when that draw selects CLICK, mix a uniform click with learned candidate sampling; learned weights are (0.05 + p)^4 with a temporary penalty for repeated no-op clicks. This collector is not the goal planner and does not optimize win probability. Training collection may exclude ACTION7 with allow_undo=false before sampling action IDs; SDK observations and manual play remain unchanged."
     },
     {
       "id": "exploration.action",
@@ -45062,6 +45112,842 @@
       "references": [],
       "attributes": [],
       "description": "Independent game sessions are batched together. Memory survives levels within each session. Representation updates run first; the predictor then trains on fixed encoded observations in truncated blocks with a differentiable context suffix. Readiness comes from ordinary training batches, not fixed evaluation games. Encoder/decoder use their configured lower rates after predictor admission. Real resets and cross-level boundaries carry context but are excluded from next-frame targets. Optimizer/backpropagation details are outside this static neural view."
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter",
+      "parent_id": "predictor.latent.real",
+      "kind": "group",
+      "label": "Rotation and click residual",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "raw_action",
+          "label": "raw_action",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
+        },
+        {
+          "id": "metadata",
+          "label": "metadata",
+          "direction": "input",
+          "shape": null,
+          "value_type": "ObservationMetadata {ids, episode boundaries, frame order, geometry, masks}"
+        },
+        {
+          "id": "delta",
+          "label": "delta",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "rotation_adapter_width",
+          "value": 16
+        },
+        {
+          "name": "orientations",
+          "value": [
+            0,
+            90,
+            180,
+            270
+          ]
+        }
+      ],
+      "children": [
+        "predictor.latent.real.rotation_adapter.grid",
+        "predictor.latent.real.rotation_adapter.filters",
+        "predictor.latent.real.rotation_adapter.maps",
+        "predictor.latent.real.rotation_adapter.click",
+        "predictor.latent.real.rotation_adapter.condition",
+        "predictor.latent.real.rotation_adapter.conditioned",
+        "predictor.latent.real.rotation_adapter.spatial",
+        "predictor.latent.real.rotation_adapter.mix",
+        "predictor.latent.real.rotation_adapter.output",
+        "predictor.latent.real.rotation_adapter.pack"
+      ],
+      "description": "Optional predictor residual. Shared quarter-turn filters preserve orientation channels; native click maps localize the action. Learned action/history conditioning and orientation mixing do not impose symmetry on game dynamics. The final projection starts at zero when growing an existing checkpoint."
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.grid",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Native latent grid",
+      "operation": "grid",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_size",
+          "value": 4
+        }
+      ],
+      "formula": "out = unpack_native_pixel_grid(z, patch_size)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.filters",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Four shared filter orientations",
+      "operation": "filters",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.filters.weight"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel_size",
+          "value": 5
+        },
+        {
+          "name": "padding",
+          "value": 2
+        },
+        {
+          "name": "orientation_count",
+          "value": 4
+        }
+      ],
+      "formula": "out = conv2d(x, concat(rot90(weight, k) for k in [0,1,2,3]), padding=2)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.maps",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Native click and relative coordinates",
+      "operation": "maps",
+      "ports": [
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 12
+            }
+          ]
+        },
+        {
+          "id": "metadata",
+          "label": "metadata",
+          "direction": "input",
+          "shape": null,
+          "value_type": "ObservationMetadata {ids, episode boundaries, frame order, geometry, masks}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 3
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "formula": "out = masked_click_gaussian_and_relative_xy(action, metadata)",
+      "description": "Recover integer 0..63 SDK coordinates by rounding before native frame bounds checks. Use Gaussian sigma 1.5 pixels and relative coordinates divided by 63. Zero for non-click, absent/out-of-frame coordinates and padding."
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.click",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Click feature projection",
+      "operation": "click",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 3
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.click.weight"
+      ],
+      "references": [],
+      "attributes": [],
+      "formula": "out = conv2d(x, weight, kernel_size=1)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.condition",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Action and history projection",
+      "operation": "condition",
+      "ports": [
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.condition.weight",
+        "weights.dynamics.rotation_adapter.condition.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "formula": "out = linear(concat(h, action), weight, bias)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.conditioned",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Conditioned orientations",
+      "operation": "conditioned",
+      "ports": [
+        {
+          "id": "features",
+          "label": "features",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "click",
+          "label": "click",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "condition",
+          "label": "condition",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "formula": "out = silu(features + click + broadcast(condition))"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.spatial",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Dilated spatial convolution",
+      "operation": "spatial",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.spatial.weight",
+        "weights.dynamics.rotation_adapter.spatial.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel_size",
+          "value": 3
+        },
+        {
+          "name": "groups",
+          "value": 64
+        },
+        {
+          "name": "dilation",
+          "value": 4
+        },
+        {
+          "name": "padding",
+          "value": 4
+        }
+      ],
+      "formula": "out = conv2d(x, weight, bias, groups=64, dilation=4, padding=4)"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.mix",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Learned orientation mixing",
+      "operation": "mix",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "spatial",
+          "label": "spatial",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.mix.weight",
+        "weights.dynamics.rotation_adapter.mix.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "formula": "out = silu(conv2d(x + spatial, weight, bias, kernel_size=1))"
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.output",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Zero-initialized correction projection",
+      "operation": "output",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.dynamics.rotation_adapter.output.weight",
+        "weights.dynamics.rotation_adapter.output.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "weight_init",
+          "value": 0
+        },
+        {
+          "name": "bias_init",
+          "value": 0
+        }
+      ],
+      "formula": "out = conv2d(x, weight, bias, kernel_size=1)",
+      "description": "Only this final projection starts at zero; inner features initialize normally. Initial correction and its input Jacobian are zero, preserving the old prediction while allowing output weights to learn."
+    },
+    {
+      "id": "predictor.latent.real.rotation_adapter.pack",
+      "parent_id": "predictor.latent.real.rotation_adapter",
+      "kind": "operation",
+      "label": "Pack residual",
+      "operation": "pack",
+      "ports": [
+        {
+          "id": "x",
+          "label": "x",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "patch_size",
+          "value": 4
+        }
+      ],
+      "formula": "out = pack_native_pixel_grid(x, patch_size)"
     }
   ],
   "edges": [
@@ -56776,6 +57662,294 @@
         "port_id": "action"
       },
       "kind": "data"
+    },
+    {
+      "id": "rotation.976",
+      "source": {
+        "node_id": "predictor.recurrent.real.action_features",
+        "port_id": "features"
+      },
+      "target": {
+        "node_id": "predictor.recurrent.real",
+        "port_id": "raw_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.977",
+      "source": {
+        "node_id": "predictor.recurrent.real",
+        "port_id": "raw_action"
+      },
+      "target": {
+        "node_id": "predictor.latent.real",
+        "port_id": "raw_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.978",
+      "source": {
+        "node_id": "predictor.latent.real",
+        "port_id": "raw_action"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "raw_action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.979",
+      "source": {
+        "node_id": "predictor.latent.real.unpack",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.980",
+      "source": {
+        "node_id": "predictor.latent.real.unpack",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "h"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.981",
+      "source": {
+        "node_id": "predictor.latent.real.unpack",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.982",
+      "source": {
+        "node_id": "predictor.latent.real.unpack",
+        "port_id": "metadata"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "metadata"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.983",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.grid",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.984",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.grid",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.filters",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.985",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "raw_action"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.maps",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.986",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "metadata"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.maps",
+        "port_id": "metadata"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.987",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.maps",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.click",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.988",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.condition",
+        "port_id": "h"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.989",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.condition",
+        "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.990",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.filters",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.conditioned",
+        "port_id": "features"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.991",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.click",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.conditioned",
+        "port_id": "click"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.992",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.condition",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.conditioned",
+        "port_id": "condition"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.993",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.conditioned",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.spatial",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.994",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.conditioned",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.mix",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.995",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.spatial",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.mix",
+        "port_id": "spatial"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.996",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.mix",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.output",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.997",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.output",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter.pack",
+        "port_id": "x"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.998",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter.pack",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "delta"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "rotation.999",
+      "source": {
+        "node_id": "predictor.latent.real.rotation_adapter",
+        "port_id": "delta"
+      },
+      "target": {
+        "node_id": "predictor.latent.real.delta_merge",
+        "port_id": "adapter"
+      },
+      "kind": "data"
     }
   ],
   "parameters": [
@@ -62546,6 +63720,170 @@
         {
           "kind": "constant",
           "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.filters.weight",
+      "name": "dynamics.rotation_adapter.filters.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 16
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 5
+        },
+        {
+          "kind": "constant",
+          "value": 5
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.click.weight",
+      "name": "dynamics.rotation_adapter.click.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.condition.weight",
+      "name": "dynamics.rotation_adapter.condition.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 2176
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.condition.bias",
+      "name": "dynamics.rotation_adapter.condition.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.spatial.weight",
+      "name": "dynamics.rotation_adapter.spatial.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.spatial.bias",
+      "name": "dynamics.rotation_adapter.spatial.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.mix.weight",
+      "name": "dynamics.rotation_adapter.mix.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.mix.bias",
+      "name": "dynamics.rotation_adapter.mix.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.output.weight",
+      "name": "dynamics.rotation_adapter.output.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.dynamics.rotation_adapter.output.bias",
+      "name": "dynamics.rotation_adapter.output.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
         }
       ]
     }

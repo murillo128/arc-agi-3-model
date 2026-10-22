@@ -4,7 +4,7 @@ This is not a success value or a world-model loss. Uniform exploration and all
 real no-op transitions remain available. The head never updates the world model.
 """
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import math
 import random
 
@@ -26,8 +26,11 @@ class SequenceExplorationConfig:
     batch_size: int = 256
     replay_size: int = 8192
     noop_cooldown: int = 8
+    allow_undo: bool = True
 
     def __post_init__(self):
+        if type(self.allow_undo) is not bool:
+            raise ValueError('allow_undo must be boolean')
         if self.policy not in ('uniform', 'mixed', 'learned'):
             raise ValueError('Exploration policy must be uniform, mixed or learned')
         for key in ('uniform_probability', 'learning_rate'):
@@ -178,8 +181,10 @@ class ChangeExplorer:
             replay_features=torch.from_numpy(np.stack([r[0] for r in self.replay])) if self.replay else torch.empty(0, 48),
             replay_targets=torch.tensor([r[1] for r in self.replay], dtype=torch.float32))
 
-    def restore(self, saved):
-        if saved.get('version') != 1 or saved.get('config') != asdict(self.config):
+    def restore(self, saved, *, disable_undo=False):
+        previous = SequenceExplorationConfig(**saved.get('config', {}))
+        expected = replace(previous, allow_undo=False) if disable_undo else previous
+        if saved.get('version') != 1 or expected != self.config:
             raise ValueError('Change-head checkpoint configuration mismatch')
         self.head.load_state_dict(saved['weights'], strict=True)
         self.optimizer.load_state_dict(saved['optimizer'])
@@ -187,6 +192,8 @@ class ChangeExplorer:
         self.updates, self.examples = saved['updates'], saved['examples']
         self.replay = deque(zip(saved['replay_features'].numpy(), saved['replay_targets'].tolist()),
                             maxlen=self.config.replay_size)
+        if disable_undo:
+            self.replay = deque((row for row in self.replay if not row[0][40]), maxlen=self.config.replay_size)
 
     def candidates(self, observation, rng, clicks=16):
         """Optional planner prior: ordinary actions and uniform clicks survive."""
@@ -237,8 +244,15 @@ class ExplorationSession:
         self.previous, self.noops, self.tick = None, {}, 0
 
     def action(self, observation, rng):
-        # Always consume exactly the legacy ID/coordinate draws on this stream.
-        action = random_action(observation, rng)
+        # Keep the legacy stream exactly when the exclusion is disabled. The
+        # environment observation itself continues to expose the SDK's actions.
+        sampled = observation
+        if not self.config.allow_undo:
+            sampled = replace(observation, available_actions=tuple(
+                i for i in observation.available_actions if i != 7))
+            if not any(1 <= i <= 6 for i in sampled.available_actions):
+                raise ValueError('No exploration actions remain after excluding Undo')
+        action = random_action(sampled, rng)
         if (action.id != 6 or self.config.policy == 'uniform' or
                 self.rng.random() < self.config.uniform_probability):
             return action
@@ -264,7 +278,7 @@ class ExplorationSession:
 
 
 COUNT_FIELDS = (
-    'transitions', 'eligible_transitions', 'changed_actions', 'unchanged_actions',
+    'transitions', 'eligible_transitions', 'changed_actions', 'unchanged_actions', 'undo_actions',
     'eligible_clicks', 'changed_clicks', 'unchanged_clicks',
     'progress_actions', 'levels_gained', 'terminal_actions', 'wins', 'game_overs',
 )
@@ -275,6 +289,7 @@ def interaction_counts(session):
     counts = dict.fromkeys(COUNT_FIELDS, 0)
     counts['transitions'] = len(session.transitions)
     for step in session.transitions:
+        counts['undo_actions'] += int(step.action.id == 7)
         progress = max(0, step.after.levels_completed - step.before.levels_completed)
         counts['progress_actions'] += int(progress > 0)
         counts['levels_gained'] += progress

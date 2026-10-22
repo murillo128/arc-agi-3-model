@@ -27,6 +27,8 @@ from .online_learning import OnlineRepresentation
 from .training_config import digest, load_plan, run_owner
 from .sequence_control import SequenceControlConfig, SequencePhaseControl, TrainingBatchDiagnostics
 from .sequence_exploration import SequenceExplorationConfig, ChangeExplorer, interaction_counts, sum_counts
+from .sequence_upgrade import (normalized_plan, upgrade_plan_matches, upgraded_network,
+                               load_upgraded_weights, upgraded_optimizer)
 
 
 def synchronize(engine):
@@ -78,18 +80,25 @@ def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exp
     return sessions
 
 
-def load_engine(plan, source=None, *, device='cpu', compile_model=False):
+def load_engine(plan, source=None, *, device='cpu', compile_model=False, upgrade_predictor=False):
     initial = plan.payload['initialization']
     saved = checkpoint.load(source) if source else None
     if saved and saved.get('format') == 'arc3-agent':
         saved = saved['world']
     network = NetworkConfig(**(saved['network'] if saved else initial['network']))
+    if upgrade_predictor:
+        if not saved or saved.get('kind') != 'game_sequences':
+            raise ValueError('Predictor upgrade requires a sequence checkpoint')
+        network = upgraded_network(saved, initial)
     training = TrainConfig(**(saved['training'] if saved else initial.get('training', {})))
     training = replace(training, learning_rate=plan.settings['learning_rate'],
                        prediction_delta_loss=plan.settings['prediction_delta_loss'])
     net = WorldModel(network).to(device)
     if saved:
-        net.load_state_dict(saved['weights'], strict=True)
+        if upgrade_predictor:
+            load_upgraded_weights(net, saved)
+        else:
+            net.load_state_dict(saved['weights'], strict=True)
     return Engine(net, training, compile_model=compile_model)
 
 
@@ -181,7 +190,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
 
 
 def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(),
-             restrictions=(), explorer=None, exploration_adoptions=()):
+             restrictions=(), explorer=None, exploration_adoptions=(), predictor_adaptations=()):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
@@ -190,6 +199,7 @@ def save_run(path, plan, learner, representation, batches, actions, control=None
         progress=dict(batches=batches, actions=actions, updates=learner.updates),
         curriculum_extensions=list(extensions), curriculum_restrictions=list(restrictions),
         exploration_adoptions=list(exploration_adoptions),
+        predictor_adaptations=list(predictor_adaptations),
         **(dict(exploration=explorer.snapshot()) if explorer is not None else {}),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
@@ -227,16 +237,17 @@ def restricted_plan_matches(previous, current):
 
 
 def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False, restrict=False,
-                adopt_exploration=False, explorer=None):
-    if sum((adopt, extend, restrict, adopt_exploration)) > 1:
+                adopt_exploration=False, explorer=None, disable_undo=False, upgrade_predictor=False):
+    adaptation = disable_undo or upgrade_predictor
+    if sum((adopt, extend, restrict, adopt_exploration, adaptation)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
-    expected = copy.deepcopy(plan.payload)
+    expected = normalized_plan(plan.payload)
     if adopt:
         if control is None or 'sequence_control' in saved or 'sequence_control' in saved['plan']:
             raise ValueError('Phase adoption requires a legacy sequence checkpoint and a controlled plan')
         expected.pop('sequence_control')
         expected['settings']['encoder_learning_rate_after_predictor'] = saved['plan']['settings']['encoder_learning_rate_after_predictor']
-    previous_plan = saved['plan']
+    previous_plan = normalized_plan(saved['plan'])
     if adopt_exploration:
         # Initial adoption only: never silently reinitialize an existing head.
         if saved.get('exploration') is not None or explorer is None:
@@ -246,8 +257,10 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
         expected.pop('sequence_exploration', None)
     changed = previous_plan != expected
     if (saved.get('kind') != 'game_sequences' or saved.get('version') != 1 or
-            (changed and not (extend and extended_plan_matches(saved['plan'], expected)) and
-             not (restrict and restricted_plan_matches(saved['plan'], expected))) or
+            (changed and not (extend and extended_plan_matches(previous_plan, expected)) and
+             not (restrict and restricted_plan_matches(previous_plan, expected)) and
+             not (adaptation and upgrade_plan_matches(previous_plan, expected,
+                  disable_undo=disable_undo, upgrade_predictor=upgrade_predictor))) or
             saved['sequence'] != asdict(learner.config)):
         raise ValueError('Resume requires the same sequence configuration and training plan')
     if control is not None and not adopt:
@@ -257,12 +270,18 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
     if explorer is not None and not adopt_exploration:
         if 'exploration' not in saved:
             raise ValueError('Missing change-head state; use --adopt-exploration for initial adoption')
-        explorer.restore(saved['exploration'])
+        explorer.restore(saved['exploration'], disable_undo=disable_undo)
         if restrict and changed:
             # Replay has no game labels: discard old examples, retaining the
             # learned head, Adam moments, counters and random generator.
             explorer.replay.clear()
-    learner.optimizer.load_state_dict(saved['predictor_optimizer'])
+    if upgrade_predictor:
+        target = upgraded_network(saved, plan.payload['initialization'])
+        if learner.engine.model.config != target:
+            raise ValueError('Predictor upgrade must load the expanded model first')
+        learner.optimizer.load_state_dict(upgraded_optimizer(saved, learner.engine.model.dynamics))
+    else:
+        learner.optimizer.load_state_dict(saved['predictor_optimizer'])
     representation.optimizer.load_state_dict(saved['representation_optimizer'])
     learner.updates = saved['progress']['updates']
     if control is not None:
@@ -302,6 +321,13 @@ def run(args):
     extend = getattr(args, 'extend_curriculum', False)
     restrict = getattr(args, 'restrict_curriculum', False)
     adopt_exploration = getattr(args, 'adopt_exploration', False)
+    disable_undo = getattr(args, 'disable_undo', False)
+    upgrade_predictor = getattr(args, 'upgrade_predictor', False)
+    adaptation = disable_undo or upgrade_predictor
+    if adaptation and (not args.resume or adopt or extend or restrict or adopt_exploration):
+        raise ValueError('Predictor/Undo adaptation requires --resume without other adoptions')
+    if disable_undo and exploration.allow_undo:
+        raise ValueError('--disable-undo requires sequence_exploration.allow_undo=false')
     exploration_source = getattr(args, 'exploration_source', None)
     if adopt_exploration and (not args.resume or adopt or extend or exploration.policy != 'learned'):
         raise ValueError('--adopt-exploration requires a learned policy and --resume without other adoptions')
@@ -319,7 +345,8 @@ def run(args):
     with run_owner(output, args.resume):
         source = output / 'latest.pt' if args.resume else args.source
         torch.manual_seed(plan.settings['seed'])
-        engine = load_engine(plan, source, device=args.device, compile_model=args.compile)
+        engine = load_engine(plan, source, device=args.device, compile_model=args.compile,
+                             upgrade_predictor=upgrade_predictor)
         learner, representation = SequenceLearner(engine, config), representation_for(engine, plan)
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
@@ -331,11 +358,20 @@ def run(args):
             explorer.restore(bootstrap['exploration'])
         batches, actions, extensions, exploration_adoptions = 0, 0, [], []
         restrictions, restricted = [], False
+        predictor_adaptations, adapted = [], False
         if args.resume:
             saved = checkpoint.load(source)
             batches, actions = restore_run(saved, plan, learner, representation, control,
                                            adopt=adopt, extend=extend, restrict=restrict,
-                                           adopt_exploration=adopt_exploration, explorer=explorer)
+                                           adopt_exploration=adopt_exploration, explorer=explorer,
+                                           disable_undo=disable_undo, upgrade_predictor=upgrade_predictor)
+            predictor_adaptations = list(saved.get('predictor_adaptations', []))
+            adapted = adaptation and normalized_plan(saved['plan']) != normalized_plan(plan.payload)
+            if adapted:
+                predictor_adaptations.append(dict(batch=batches, actions=actions,
+                    allow_undo=exploration.allow_undo,
+                    rotation_adapter_width=engine.model.config.rotation_adapter_width,
+                    previous_plan=digest(saved['plan']), plan=plan.identity))
             extensions = list(saved.get('curriculum_extensions', []))
             restrictions = list(saved.get('curriculum_restrictions', []))
             exploration_adoptions = list(saved.get('exploration_adoptions', []))
@@ -378,6 +414,8 @@ def run(args):
         report['curriculum_restrictions'] = restrictions
         report['exploration_config'] = asdict(exploration)
         report['exploration_adoptions'] = exploration_adoptions
+        report['predictor_adaptations'] = predictor_adaptations
+        report['network'] = asdict(engine.model.config)
         report['budget'] = action_budget
         report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
         if control:
@@ -388,9 +426,9 @@ def run(args):
             report['optimization_identity'] = telemetry.identity
         if args.resume and report_path.exists():
             previous = json.loads(report_path.read_text())
-            if adopt or restricted:
+            if adopt or restricted or adapted:
                 # Do not join different metric sources or game populations.
-                boundary = 'training-phases' if adopt else 'curriculum-restriction'
+                boundary = 'predictor-adaptation' if adapted else ('training-phases' if adopt else 'curriculum-restriction')
                 archive = output / f'report-before-{boundary}-{batches}.json'
                 if not archive.exists():
                     archive.write_text(json.dumps(previous, allow_nan=False) + '\n')
@@ -470,7 +508,8 @@ def run(args):
                 save_start = time.perf_counter()
                 save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
                          extensions=extensions, restrictions=restrictions,
-                         explorer=explorer, exploration_adoptions=exploration_adoptions)
+                         explorer=explorer, exploration_adoptions=exploration_adoptions,
+                         predictor_adaptations=predictor_adaptations)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -513,6 +552,10 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--disable-undo', action='store_true',
+                        help='Explicitly adopt allow_undo=false while preserving learned state')
+    parser.add_argument('--upgrade-predictor', action='store_true',
+                        help='Enable a zero-output rotation adapter, preserving old weights and AdamW moments')
     parser.add_argument('--predictor-learning-rate', type=float,
                         help='Explicitly override only the predictor LR, preserving optimizer state on resume')
     parser.add_argument('--extend-curriculum', action='store_true',

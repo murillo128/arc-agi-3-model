@@ -1,0 +1,208 @@
+{
+  "baseline_revision": "59e51fe705d0266add45f6e2c00765fe8a8acbc4",
+  "preflight": {
+    "progress": {
+      "batches": 2421,
+      "actions": 9568256,
+      "updates": 47712
+    },
+    "preserved_weight_tensors": 491,
+    "preserved_adam_tensors": 1491,
+    "initial_max_prediction_difference": 0.0,
+    "real_samples": [
+      "tu93-0768757b",
+      "si01-v1"
+    ],
+    "new_parameters": 174080,
+    "phase": "predictor",
+    "learning_rates": [
+      3e-05,
+      3e-05
+    ],
+    "representation_learning_rates": {
+      "encoder": 3e-07,
+      "decoder": 3e-07
+    },
+    "undo_replay_removed": 1022
+  },
+  "gpu_microbenchmark": {
+    "games": [
+      "bf02-v1",
+      "bf04-v1",
+      "bf08-v1",
+      "sc01-v1",
+      "si01-v1",
+      "mc01-v1",
+      "bf06-v1",
+      "ls20-9607627b"
+    ],
+    "transitions": 512,
+    "undo_actions": 0,
+    "trials": [
+      {
+        "adapter": false,
+        "update_seconds": [
+          1.3551394639944192,
+          0.9854557419894263,
+          1.0546090079878923,
+          1.00530300301034
+        ],
+        "steady_update_seconds": 1.0151225843292195,
+        "losses": [
+          2.4692679792642593,
+          2.456825852394104,
+          2.0433896332979202,
+          2.186168923974037
+        ],
+        "peak_allocated_gib": 4.293240070343018,
+        "initial_delta_error": 0.6391462779802186,
+        "final_delta_error": 0.5734806056834681,
+        "initial_by_game": {
+          "bf02-v1": 0.9732988802756245,
+          "bf04-v1": 0.9200670765790945,
+          "bf08-v1": 0.999347045380346,
+          "sc01-v1": 0.7257035647279549,
+          "si01-v1": 0.9496402877697842,
+          "mc01-v1": 0.9707317073170731,
+          "bf06-v1": 0.44359912216532554,
+          "ls20-9607627b": 0.03725055432372506
+        }
+      },
+      {
+        "adapter": true,
+        "update_seconds": [
+          0.9982392320234794,
+          1.071242343983613,
+          1.0290013019985054,
+          1.091849581018323
+        ],
+        "steady_update_seconds": 1.0640310756668139,
+        "losses": [
+          2.4692679792642593,
+          2.4568987861275673,
+          2.043911561369896,
+          2.1860040202736855
+        ],
+        "peak_allocated_gib": 4.272764205932617,
+        "initial_delta_error": 0.6391462779802186,
+        "final_delta_error": 0.5735698355894404,
+        "initial_by_game": {
+          "bf02-v1": 0.9732988802756245,
+          "bf04-v1": 0.9200670765790945,
+          "bf08-v1": 0.999347045380346,
+          "sc01-v1": 0.7257035647279549,
+          "si01-v1": 0.9496402877697842,
+          "mc01-v1": 0.9707317073170731,
+          "bf06-v1": 0.44359912216532554,
+          "ls20-9607627b": 0.03725055432372506
+        },
+        "adapter_output_nonzero": 4096,
+        "adapter_filter_moment_l1": 0.00019822161993943155
+      }
+    ],
+    "update_cost_ratio": 1.0481798869344559
+  },
+  "collection": {
+    "games": 31,
+    "transitions": 15872,
+    "undo_actions": 0
+  },
+  "checks": {
+    "focused_unittest_cases": 117,
+    "skipped": 1,
+    "skip_reason": "Node unavailable for existing dashboard runtime check",
+    "lmex_model_directory": "valid",
+    "known_baseline_failure": "SDKTests.test_isolated_click_wins_keep_visible_markers_and_training_targets fails both level subcases on unchanged main too: hardcoded marker color 0 versus rendered 14."
+  },
+  "interpretation": "Initial functional equality and retained optimizer state are verified. Four updates on the same training trajectories are a compatibility/cost probe, not evidence of generalization improvement. GPU timings are a short sequential measurement at the existing 150 W cap.",
+  "repair_validation": {
+    "regression_parent_revision": "14b37fe9f485546fc37f1371461afaa4f706c803",
+    "regressions": {
+      "optimizer": "Real AdamW entries/fields must survive migration; missing entries and required fields fail, while a never-updated predictor may retain empty state.",
+      "click_coordinates": "Integer SDK coordinates at x=width and y=height are masked for native sizes 1..63; the neighboring valid pixel has exact unit heat and zero relative coordinates.",
+      "before": "All three added tests failed against the unmodified parent implementation (56 failing assertions/subcases).",
+      "after": "All three regression tests pass; the real train/save/ordinary-resume integration also passes."
+    },
+    "checks": {
+      "total_unittest_cases": 120,
+      "passed": 119,
+      "skipped": 1,
+      "skip_reason": "Node unavailable for the existing sequence-control dashboard runtime check",
+      "commands": [
+        "PYTHONPATH=src:tests CUDA_VISIBLE_DEVICES='' python -m unittest model.tests.test_sequence_upgrade -v",
+        "PYTHONPATH=src:tests CUDA_VISIBLE_DEVICES='' python -m unittest model.tests.test_model.NumericalTests model.tests.test_sequence_training model.tests.test_sequence_exploration model.tests.test_sequence_control model.tests.test_sequence_extension model.tests.test_sequence_restriction model.tests.test_training_config model.tests.test_training_recovery model.tests.test_lmex_sync -v"
+      ],
+      "python": "3.12.14",
+      "pytorch": "2.6.0+cu124",
+      "lmex_model_directory": "valid; existing author-declared partial coverage advisory",
+      "hosted_ci": "No applicable path-triggered workflow for the model-only diff; local issue-required checks above."
+    },
+    "actual_checkpoint_preflight": {
+      "missing_adam_entry_rejected": true,
+      "progress": {
+        "batches": 2421,
+        "actions": 9568256,
+        "updates": 47712
+      },
+      "preserved_weight_tensors": 491,
+      "preserved_adam_tensors": 1491,
+      "initial_max_prediction_difference": 0.0,
+      "real_samples": [
+        "tu93-0768757b",
+        "si01-v1"
+      ],
+      "new_parameters": 174080,
+      "phase": "predictor",
+      "learning_rates": [
+        3e-05,
+        3e-05
+      ],
+      "representation_learning_rates": {
+        "encoder": 3e-07,
+        "decoder": 3e-07
+      },
+      "undo_replay_removed": 1022
+    },
+    "ordinary_resume_before_deployment": {
+      "progress": {
+        "batches": 2429,
+        "actions": 9600000,
+        "updates": 47968
+      },
+      "ordinary_resume": true,
+      "exact_weight_tensors": 501,
+      "exact_predictor_representation_state_tensors": 1503,
+      "adapter_output_nonzero": 4096
+    },
+    "gpu_probe": {
+      "device": "NVIDIA GeForce RTX 4070 Ti",
+      "power_cap_watts": 150,
+      "transitions": 512,
+      "games": [
+        "bf02-v1",
+        "bf04-v1",
+        "bf08-v1",
+        "sc01-v1",
+        "si01-v1",
+        "mc01-v1",
+        "bf06-v1",
+        "ls20-9607627b"
+      ],
+      "undo_actions": 0,
+      "updates_per_trial": 4,
+      "all_parameters_finite": true,
+      "initial_predictions_equal": true,
+      "steady_update_seconds": [
+        1.0184527976865259,
+        1.0727853940043133
+      ],
+      "update_cost_ratio": 1.0533481732694996,
+      "peak_allocated_gib": [
+        4.293240070343018,
+        4.272764205932617
+      ],
+      "adapter_output_nonzero": 4096,
+      "adapter_filter_moment_l1": 0.00019822161993943155
+    }
+  }
+}
