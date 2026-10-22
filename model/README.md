@@ -37,7 +37,10 @@ Either migration flag may also be used separately. Existing weights, named AdamW
 moments and effective learning rates, representation/exploration optimizers, phase,
 counters and RNG survive. Only new adapter parameters start without AdamW history;
 Undo examples are filtered from auxiliary exploration replay. Unrelated configuration
-changes fail closed. Once saved, ordinary `--resume` restores the expanded model.
+changes fail closed. A trained predictor must retain every old AdamW entry and its
+required fields; empty optimizer state is allowed only before its first update.
+Click maps recover integer SDK coordinates before checking native frame bounds.
+Once saved, ordinary `--resume` restores the expanded model.
 The old report is archived at the adaptation boundary; new charts start with the
 new action population. The dashboard reports adapter width and actual Undo counts.
 `architecture.json` describes the width-16 example and includes its tensor bindings.

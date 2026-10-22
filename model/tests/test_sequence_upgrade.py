@@ -16,6 +16,7 @@ from model import checkpoint
 from model.config import NetworkConfig, SequenceConfig
 from model.data import Action
 from model.game_sequences import SequenceLearner
+from model.learning import optimizer
 from model.networks import WorldModel
 from model.sequence_exploration import ChangeExplorer, ExplorationSession, SequenceExplorationConfig
 from model.sequence_training import load_engine, representation_for, restore_run, run
@@ -60,6 +61,20 @@ class SequenceUpgradeTests(unittest.TestCase):
         self.assertEqual(int(torch.count_nonzero(maps[1:])), 0)
         self.assertEqual(int(torch.count_nonzero(maps[:, :, 3:, :])), 0)
         self.assertEqual(int(torch.count_nonzero(maps[:, :, :, 5:])), 0)
+
+    def test_native_click_maps_reject_the_first_pixel_outside_each_frame_edge(self):
+        # SDK clicks use integer 0..63 coordinates even on smaller native frames.
+        for size in range(1, 64):
+            for axis in ('x', 'y'):
+                with self.subTest(size=size, axis=axis):
+                    height, width = (3, size) if axis == 'x' else (size, 3)
+                    outside = dict(x=0, y=0); outside[axis] = size
+                    inside = dict(x=0, y=0); inside[axis] = size - 1
+                    actions = torch.tensor([Action(6, outside).features(), Action(6, inside).features()])
+                    maps = click_maps(actions, height, width, height + 1, width + 1)
+                    self.assertEqual(int(torch.count_nonzero(maps[0])), 0)
+                    torch.testing.assert_close(maps[1, :, inside['y'], inside['x']],
+                                               torch.tensor([1., 0., 0.]), rtol=0, atol=0)
 
     def test_filter_bank_has_four_distinct_shared_orientations(self):
         adapter = RotationAdapter(local_config(rotation_adapter_width=1))
@@ -120,6 +135,54 @@ class SequenceUpgradeTests(unittest.TestCase):
                 replace(old.config, rotation_adapter_width=width)
         with self.assertRaisesRegex(ValueError, 'local dynamics'):
             replace(NetworkConfig.small(), rotation_adapter_width=2)
+
+    def test_optimizer_upgrade_rejects_incomplete_trained_adam_state(self):
+        old = WorldModel(local_config())
+        adam = optimizer(old.dynamics.parameters(), .001, False)
+        # Populate every old parameter's real Adam state with one known update.
+        sum(p.square().sum() for p in old.dynamics.parameters()).backward()
+        adam.step()
+        saved = dict(network=asdict(old.config), predictor_optimizer=adam.state_dict(),
+                     progress=dict(updates=1))
+        target = WorldModel(replace(old.config, rotation_adapter_width=2)).dynamics
+        identity = saved['predictor_optimizer']['param_groups'][0]['params'][0]
+        for missing in ('entry', 'all_entries', 'step', 'exp_avg', 'exp_avg_sq'):
+            with self.subTest(missing=missing):
+                broken = deepcopy(saved)
+                states = broken['predictor_optimizer']['state']
+                if missing == 'entry':
+                    del states[identity]
+                elif missing == 'all_entries':
+                    states.clear()
+                else:
+                    del states[identity][missing]
+                with self.assertRaisesRegex(ValueError, 'Missing predictor (optimizer state|AdamW fields)'):
+                    upgraded_optimizer(broken, target)
+        for field in ('step', 'exp_avg', 'exp_avg_sq'):
+            with self.subTest(malformed=field):
+                broken = deepcopy(saved)
+                broken['predictor_optimizer']['state'][identity][field] = torch.zeros(2)
+                with self.assertRaisesRegex(ValueError, 'Predictor optimizer (step|shape)'):
+                    upgraded_optimizer(broken, target)
+        broken = deepcopy(saved)
+        broken['predictor_optimizer']['param_groups'][0]['amsgrad'] = True
+        with self.assertRaisesRegex(ValueError, 'Missing predictor AdamW fields'):
+            upgraded_optimizer(broken, target)
+
+    def test_optimizer_upgrade_allows_empty_state_only_before_the_first_update(self):
+        old = WorldModel(local_config())
+        saved = dict(network=asdict(old.config),
+                     predictor_optimizer=optimizer(old.dynamics.parameters(), .001, False).state_dict(),
+                     progress=dict(updates=0))
+        target = WorldModel(replace(old.config, rotation_adapter_width=2)).dynamics
+        migrated = optimizer(target.parameters(), .001, False)
+        migrated.load_state_dict(upgraded_optimizer(saved, target))
+        self.assertFalse(migrated.state)
+        self.assertEqual({id(p) for group in migrated.param_groups for p in group['params']},
+                         {id(p) for p in target.parameters()})
+        saved['progress']['updates'] = 1
+        with self.assertRaisesRegex(ValueError, 'Missing predictor optimizer state'):
+            upgraded_optimizer(saved, target)
 
     def test_real_checkpoint_upgrade_preserves_adam_then_saves_and_resumes(self):
         with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):

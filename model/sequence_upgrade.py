@@ -80,6 +80,9 @@ def upgraded_optimizer(saved, dynamics):
     ids = [i for group in state['param_groups'] for i in group['params']]
     if len(set(ids)) != len(ids) or set(state['state']) - set(ids):
         raise ValueError('Invalid predictor optimizer parameter IDs')
+    # Adam initializes lazily, so a never-updated predictor legitimately has no
+    # state. Once training starts, every old mapping must retain its moments.
+    fresh = saved['progress']['updates'] == 0 and not state['state']
     migrated, groups, offset = {}, [], 0
     for group, decay in zip(state['param_groups'], (True, False)):
         before = [n for n, p in old_parameters.items() if (p.ndim >= 2) == decay]
@@ -90,10 +93,21 @@ def upgraded_optimizer(saved, dynamics):
         for name, identity in zip(before, group['params']):
             values = state['state'].get(identity)
             if values is None:
-                continue
+                if fresh:
+                    continue
+                raise ValueError(f'Missing predictor optimizer state for {name}')
+            required = {'step', 'exp_avg', 'exp_avg_sq'}
+            if group.get('amsgrad', False):
+                required.add('max_exp_avg_sq')
+            if not required <= set(values):
+                raise ValueError(f'Missing predictor AdamW fields for {name}: {sorted(required - set(values))}')
             if set(values) - {'step', 'exp_avg', 'exp_avg_sq', 'max_exp_avg_sq'}:
                 raise ValueError('Predictor upgrade supports standard AdamW state only')
-            if any(v.shape != current[name].shape for k, v in values.items() if k != 'step'):
+            step = values['step']
+            if not isinstance(step, torch.Tensor) or step.numel() != 1 or not torch.isfinite(step).all():
+                raise ValueError(f'Predictor optimizer step must be a finite scalar for {name}')
+            if any(not isinstance(v, torch.Tensor) or v.shape != current[name].shape
+                   for k, v in values.items() if k != 'step'):
                 raise ValueError(f'Predictor optimizer shape mismatch for {name}')
             migrated[indices[name]] = values
         groups.append(dict(group, params=list(indices.values())))

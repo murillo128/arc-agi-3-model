@@ -45432,7 +45432,7 @@
       "references": [],
       "attributes": [],
       "formula": "out = masked_click_gaussian_and_relative_xy(action, metadata)",
-      "description": "Use original 0..63 SDK coordinates, Gaussian sigma 1.5 pixels, and relative coordinates divided by 63. Zero for non-click, absent/out-of-frame coordinates and padding."
+      "description": "Recover integer 0..63 SDK coordinates by rounding before native frame bounds checks. Use Gaussian sigma 1.5 pixels and relative coordinates divided by 63. Zero for non-click, absent/out-of-frame coordinates and padding."
     },
     {
       "id": "predictor.latent.real.rotation_adapter.click",

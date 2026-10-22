@@ -10,7 +10,10 @@ from torch.nn import functional as F
 
 def click_maps(action, height, width, padded_height, padded_width):
     """Native SDK coordinates, with zero maps for absent/out-of-frame clicks."""
-    x, y = (action[:, 8:9] + 1) * 31.5, (action[:, 9:10] + 1) * 31.5
+    # Recover integer SDK coordinates before bounds checks: float32 inversion
+    # can otherwise turn x == width into a seemingly valid x just below width.
+    x = ((action[:, 8:9] + 1) * 31.5).round()
+    y = ((action[:, 9:10] + 1) * 31.5).round()
     valid = ((action[:, 6:7] > 0) & (action[:, 10:11] > 0) & (action[:, 11:12] > 0)
              & (x >= 0) & (x < min(width, 64)) & (y >= 0) & (y < min(height, 64)))
     xx = torch.arange(padded_width, device=action.device, dtype=action.dtype)[None, None, :]
