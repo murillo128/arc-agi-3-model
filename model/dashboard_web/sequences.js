@@ -6,16 +6,21 @@ const colors = ['#8fd8bf', '#e9b86c', '#bcaafa', '#94a7aa', '#ec91b9', '#83bdea'
 const palette = ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31','#1e93ff','#88d8f1','#ffdc00','#ff851b','#921231','#4fcc30','#a356d6'];
 const kinds = [['invented','Invented'],['missed','Missed'],['color','Wrong color'],['correct','Correct']];
 let displayedReport = null;
+let retainedHistory = {history:[], revision:null, run:null}, historyMetadata = null, historyError = '';
+let renderedRevision = null;
 function element(tag, attrs, text='') {
   const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
   node.textContent = text; return node;
 }
-function chart(id, rows, series, ceiling=null, limits=[]) {
+function chart(id, rows, series, ceiling=null, limits=[], zoom=false) {
   const svg = $(id), legend = $(`${id}-legend`); svg.replaceChildren();
   const data=series.map((s,index)=>{
-    const points=[]; let previousGroup, last=null;
+    const points=[]; let previousGroup, previousRow, last=null;
     for(const r of rows) {
+      const gap=previousRow && !SequenceTrends.connected(previousRow,r);
+      previousRow=r;
+      if(gap)points.push([r.batch,null]);
       if(s.skip?.(r))continue;
       const collection=r.exploration?.policy==='uniform'?'uniform':r.exploration?.identity??'uniform';
       const group=`${s.group?.(r)??r.measurement_source??'fixed_evaluation'}:${collection}`;
@@ -29,30 +34,37 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
   let updateGuide=()=>{};
   ChartTools.legend(legend,id,[...data.map(({s,last,color})=>({key:s.label,
     text:`${s.label}: ${number(last?.value, s.digits??4)}`,color,disabled:!last,
+    hint:s.mean?'Window mean; select to focus this series and mark its latest value.':undefined,
     title:last?`Latest measurement: batch ${last.row.batch} · action ${number(last.row.actions,0)}`:'No measurements'})),
     ...limits.map(l=>({key:`limit:${l.label}`,text:`┄ ${l.label}: ${number(l.value,4)} %`,color:l.color,passive:true}))],()=>updateGuide());
   const values=data.flatMap(d=>d.points.map(p=>p[1])).filter(Number.isFinite);
   if (!values.length) { svg.append(element('text', {x: 35, y: 65, fill: '#a9bcb7'}, 'No measurements yet')); return; }
-  const max = Math.max(ceiling || 0, 1e-6, ...values, ...limits.map(l=>l.value)) * (ceiling ? 1 : 1.1);
+  let max = Math.max(ceiling || 0, 1e-6, ...values, ...limits.map(l=>l.value)) * (ceiling ? 1 : 1.1), min=0;
+  if(zoom){
+    const low=Math.min(...values), high=Math.max(...values), padding=Math.max(1,(high-low)*.15);
+    min=Math.max(0,low-padding);max=Math.min(100,high+padding);
+  }
   const start=rows[0].batch, end=Math.max(start+1, rows.at(-1).batch);
-  const x=v=>50+(v-start)*630/(end-start), y=v=>220-188*v/max;
+  const x=v=>50+(v-start)*630/(end-start), y=v=>220-188*(v-min)/(max-min);
   for (let i = 0; i <= 4; i++) {
     const py = 220 - i * 47;
     svg.append(element('line', {x1: 50, x2: 680, y1: py, y2: py, stroke: '#30443e'}));
-    svg.append(element('text', {x: 42, y: py + 4, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, number(max*i/4, max<.1?4:1)));
+    svg.append(element('text', {x: 42, y: py + 4, fill: '#a9bcb7', 'text-anchor': 'end', 'font-size': 11}, number(min+(max-min)*i/4, max<.1?4:1)));
   }
   const layers=data.map(()=>[]);
   data.forEach(({s,points,color},i)=>{
     const append=(node,ema=false)=>{layers[i].push({node,ema});svg.append(node);};
     let segment=[];
-    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color}));segment=[];};
-    for(const p of points) {
+    const flush=()=>{if(segment.length)append(element('polyline',{points:segment.join(' '),fill:'none',stroke:color}),s.mean===true);segment=[];};
+    const stride=Math.max(1,Math.ceil(points.length/350));
+    for(const [index,p] of points.entries()) {
       if(!ChartTools.valid(p)){flush();continue;}
       segment.push(`${x(p[0])},${y(p[1])}`);
+      if(index%stride!==0&&index!==points.length-1)continue;
       const dot=element('circle',{cx:x(p[0]),cy:y(p[1]),r:2.5,fill:color});
       dot.append(element('title',{},`${s.label}: ${number(p[1],4)} · batch ${p[0]} · action ${number(p[2]?.actions,0)}`));append(dot);
     }
-    flush();ChartTools.svgEMA(points,x,y,color).forEach(node=>append(node,true));
+    flush();if(!s.mean)ChartTools.svgEMA(points,x,y,color).forEach(node=>append(node,true));
   });
   limits.forEach(({value,label,color})=>{
     const line=element('line',{x1:50,x2:680,y1:y(value),y2:y(value),stroke:color,'stroke-width':1.5,'stroke-dasharray':'5 5'});
@@ -64,7 +76,7 @@ function chart(id, rows, series, ceiling=null, limits=[]) {
   updateGuide=()=>{
     const selected=data.find(d=>d.s.label===ChartTools.selected(id));guide.replaceChildren();
     ChartTools.svgFocus(layers,data.indexOf(selected));
-    const last=selected&&ChartTools.latestEMA(selected.points);
+    const last=selected&&(selected.s.mean?selected.points.findLast(ChartTools.valid):ChartTools.latestEMA(selected.points));
     if(last)ChartTools.svgGuide(guide,{left:50,right:680,y:y(last[1]),lastX:x(last[0]),
       color:selected.color,text:number(last[1],selected.s.digits??4)});
   };
@@ -89,9 +101,54 @@ function phaseThresholds(data, key, label, color) {
 }
 const timingLabels = {collection_seconds:'Game',representation_seconds:'Representation',encode_seconds:'Encoding',
   predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',save_seconds:'Saving'};
+function availableHistory(data) {
+  const live=data.history||[], latest=live.at(-1)?.batch;
+  if(!Number.isFinite(latest))return [];
+  const archived=data.history_run&&retainedHistory.run===data.history_run?retainedHistory.history:[];
+  const merged=new Map(archived.filter(r=>r.batch<=latest).map(r=>[r.batch,r]));
+  live.forEach(r=>merged.set(r.batch,r));
+  return [...merged.values()].sort((a,b)=>a.batch-b.batch);
+}
+function historyRange(rows) {
+  const range=$('history-range').value||'1000';
+  return range==='all'?rows:rows.slice(-Number(range));
+}
+const errorText=value=>Number.isFinite(value)?`${number(value,2)} %`:'—';
+const changeText=value=>Number.isFinite(value)?`${value>0?'+':''}${number(value,2)} pp`:'—';
+function renderTrend(data, all, visible) {
+  const games=data.games||[], size=Number($('trend-window').value||100);
+  const comparison=SequenceTrends.compare(all,games,size), {current,previous}=comparison;
+  const change=Number.isFinite(current?.balanced)&&Number.isFinite(previous?.balanced)?current.balanced-previous.balanced:null;
+  $('trend-balanced').textContent=errorText(current?.balanced);
+  $('trend-change').textContent=changeText(change);
+  $('trend-change').className=change<0?'trend-down':change>0?'trend-up':'';
+  $('trend-coverage').textContent=`${current?.coverage??'—'} / ${games.length}`;
+  const range=w=>`batches ${number(w.start,0)}–${number(w.end,0)}`;
+  $('trend-comparison').textContent=current
+    ?`${range(current)}${previous?` vs ${range(previous)}`:` · Need ${2*size} consecutive, compatible batches for comparison (${comparison.available} available)`}. ${current.coverage<games.length?'Incomplete game coverage; aggregate unavailable. ':''}Negative change means lower error; new scenes can still affect the comparison.${$('trend-zoom').checked?' Y-axis zoomed to the observed range.':''}`
+    :`Collecting a full ${size}-batch window (${comparison.available} consecutive, compatible batches available). Gaps and training-regime changes restart the window.`;
+  const points=SequenceTrends.rolling(all,games,size).filter(r=>r.batch>=(visible[0]?.batch??Infinity));
+  chart('prediction-trend',points,[series(`Equal game weight · ${size} batches`,r=>r.balanced,{mean:true}),
+    series(`Pooled pixels · ${size} batches`,r=>r.pooled,{mean:true,color:colors[2]})],100,[],$('trend-zoom').checked===true);
+  const before=new Map((previous?.games||[]).map(g=>[g.game,g]));
+  const perGame=(current?.games||games.map(game=>({game,error:null}))).map(g=>({current:g,previous:before.get(g.game)}))
+    .sort((a,b)=>(b.current.error??-1)-(a.current.error??-1));
+  table('trend-games',perGame.map(({current:c,previous:p})=>[c.game,errorText(p?.error),errorText(c.error),
+    changeText(Number.isFinite(c.error)&&Number.isFinite(p?.error)?c.error-p.error:null),
+    `${number(p?.transitions,0)} / ${number(c.transitions,0)}`]));
+  perGame.forEach(({current:c,previous:p},i)=>{
+    const cell=$('trend-games').children[i].children[3];
+    if(Number.isFinite(c.error)&&Number.isFinite(p?.error))cell.className=c.error<p.error?'trend-down':c.error>p.error?'trend-up':'';
+  });
+}
 function render(data) {
   displayedReport=data;
-  const c = data.config || {}, rows = data.history || [], last = rows.at(-1) || {};
+  const c = data.config || {}, all=availableHistory(data), rows=historyRange(all), last = (data.history||[]).at(-1) || {};
+  const gaps=all.reduce((n,r,i)=>n+(i>0&&r.batch!==all[i-1].batch+1?1:0),0);
+  $('history-scope').textContent=all.length
+    ?`Showing ${number(rows[0].batch,0)}–${number(rows.at(-1).batch,0)} · ${number(all.length,0)} retained batches, starting at ${number(all[0].batch,0)}${gaps?` · ${gaps} gaps`:''}. ${historyMetadata?.enabled?`Archive limit: ${number(historyMetadata.limit,0)}; older discarded batches cannot be recovered.`:'Only the trainer’s retained history is available; persistence is not enabled.'}${historyError||historyMetadata?.error?` ${historyError||historyMetadata.error}`:''}`
+    :'Waiting for recorded batches.';
+  renderTrend(data,all,rows);
   const training=data.measurement_source==='training_pre_update', control=data.phase_control;
   $('phase-status').textContent=control?`Phase: ${control.phase==='predictor'?'Predictor · reduced representation LR':'Representation · predictor waiting'}${last.phase&&last.phase!==control.phase?' · Change takes effect next batch':''}`:'';
   $('quality-source').textContent=$('early-source').textContent=training?'% · batch before training':'% · fixed evaluation';
@@ -145,7 +202,9 @@ function render(data) {
   chart('changes',rows,kinds.map(([key,label])=>series(label,r=>{
     const q=r.quality?.all;return q?.transitions>0&&Number.isFinite(q[key])?q[key]/q.transitions:null;
   })));
-  const measured=rows.filter(r=>r.diagnostics), diagnostic=measured.at(-1)?.diagnostics;
+  const diagnostic=rows.findLast(r=>r.diagnostics)?.diagnostics;
+  // Keep every batch for gap/regime detection, but skip intentionally unsampled diagnostics.
+  const diagnosticSeries=(label,value,extra={})=>series(label,value,{...extra,skip:r=>!r.diagnostics});
   chart('fixed-quality',rows,[series('1-step prediction %',r=>pct(r.quality?.all?.delta_error)),
     series('Global reconstruction %',r=>pct(r.diagnostics?.reconstruction_error),{skip:r=>!r.diagnostics}),
     series('3-step prediction %',r=>pct(r.diagnostics?.rollout_error),{skip:r=>!r.diagnostics}),
@@ -156,12 +215,12 @@ function render(data) {
     :diagnostic
     ?`Fixed evaluation every batch. Additional diagnostics every ${diagnostic.every} batches · latest measurement: batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transitions and ${diagnostic.latent?.sample_count??0} real states. Rollout: ${diagnostic.rollouts} three-step routes. Drift: process reference at batch ${diagnostic.drift_reference_batch}.`
     :'Fixed evaluation every batch. Additional diagnostics appear after a new measurement; historical gaps are not filled with zeros.';
-  chart('latent-drift',measured,[series('Drift %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})],
+  chart('latent-drift',rows,[diagnosticSeries('Drift %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})],
     null,phaseThresholds(data,'latent_drift','Drift threshold',colors[0]));
-  chart('latent-diversity',measured,[series('Across observations',r=>r.diagnostics.latent?.std_mean),series('Within each episode',r=>r.diagnostics.latent?.within_episode_std)]);
-  chart('latent-rank',measured,[series('Effective rank',r=>r.diagnostics.latent?.effective_rank),series('Observable maximum',r=>r.diagnostics.latent?.max_rank)]);
-  chart('latent-inactive',measured,[series('Nearly constant %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
-  chart('latent-sensitivity',measured,[series('Changed blocks',r=>r.diagnostics.latent?.changed_rms),series('Unchanged blocks',r=>r.diagnostics.latent?.unchanged_rms)]);
+  chart('latent-diversity',rows,[diagnosticSeries('Across observations',r=>r.diagnostics.latent?.std_mean),diagnosticSeries('Within each episode',r=>r.diagnostics.latent?.within_episode_std)]);
+  chart('latent-rank',rows,[diagnosticSeries('Effective rank',r=>r.diagnostics.latent?.effective_rank),diagnosticSeries('Observable maximum',r=>r.diagnostics.latent?.max_rank)]);
+  chart('latent-inactive',rows,[diagnosticSeries('Nearly constant %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
+  chart('latent-sensitivity',rows,[diagnosticSeries('Changed blocks',r=>r.diagnostics.latent?.changed_rms),diagnosticSeries('Unchanged blocks',r=>r.diagnostics.latent?.unchanged_rms)]);
   const exploration=data.exploration_config||{policy:'uniform'}, interaction=last.exploration;
   const policyLabel={uniform:'Uniform exploration',mixed:'Visible-element clicks',learned:'Learned change prior'}[exploration.policy]||exploration.policy;
   const adoption=data.exploration_adoptions?.at(-1);
@@ -250,13 +309,40 @@ tabs.forEach((name,i)=>{
   });
 });
 selectTab(globalThis.location?.hash?.slice(1)||'world');
+for(const id of ['history-range','trend-window','trend-zoom'])$(id).addEventListener('change',()=>{
+  if(displayedReport)render(displayedReport);
+});
 async function refresh() {
   try { const response = await fetch('api/state', {cache: 'no-store'}); if (!response.ok) throw Error(response.status);
-    const state=await response.json();render(state.sequences||{status:'waiting'});
+    const state=await response.json();historyMetadata=state.sequence_history;
+    const data=state.sequences||{status:'waiting'};
+    const compatible=historyMetadata?.enabled&&data.history_run&&historyMetadata.run===data.history_run;
+    if(!compatible||retainedHistory.run!==data.history_run||
+       (retainedHistory.history.at(-1)?.batch??0)>(data.history?.at(-1)?.batch??Infinity))
+      retainedHistory={history:[],revision:null,run:null};
+    historyError=historyMetadata?.enabled&&!compatible?'History is waiting for the current run; latest measurements remain live.':'';
+    if(compatible&&historyMetadata.revision&&historyMetadata.revision!==retainedHistory.revision){
+      try{
+        const result=await fetch('api/sequence-history',{cache:'no-store',headers:retainedHistory.revision?{'If-None-Match':retainedHistory.revision}:{}});
+        if(result.status!==304){
+          if(!result.ok)throw Error(result.status);
+          const saved=await result.json();
+          if(saved.run!==data.history_run||!Array.isArray(saved.history))throw Error('History changed');
+          retainedHistory={...saved,revision:result.headers.get('ETag')};
+        }
+      }catch{historyError='History temporarily unavailable; latest measurements remain live.';}
+    }
+    const revision=Number.isFinite(data.updated_at)?JSON.stringify([data.updated_at,data.status,
+      data.history_run,historyMetadata?.revision,historyMetadata?.error,historyError]):null;
+    if(revision===null||revision!==renderedRevision){render(data);renderedRevision=revision;}
+    else{
+      displayedReport=data;
+      $('freshness').textContent=Number.isFinite(data.age_seconds)?`Updated ${number(data.age_seconds,0)} s ago`:'';
+    }
     $('history-link').hidden=$('planner-history-link').hidden=!state.history_available;
     $('planner-history-status').textContent=state.history_available?'Earlier charts are preserved in a separate history view.':'Planner history is not configured on this server.';
     $('gpu-status').textContent=(state.gpu?.devices||[]).map(g=>`GPU · ${number(g.utilization_percent,0)} % · ${number(g.temperature_c,0)} °C`).join(' · ');
-  } catch { $('status').textContent = 'Disconnected'; }
+  } catch { renderedRevision=null; $('status').textContent = 'Disconnected'; }
   setTimeout(refresh, 2000);
 }
 refresh();

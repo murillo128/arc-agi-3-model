@@ -2,7 +2,7 @@
 
 Run with python -m model.dashboard --log model/runs/exploration/run.log.
 Read-only by default; explicit curriculum service enables two signal controls.
-No torch imports or persistent dashboard storage.
+No torch imports. Sequence history persistence requires an explicit archive path.
 """
 import argparse
 from collections import deque
@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from .curriculum_control import CurriculumControl
 from .optimization_control import OptimizationControl
+from .sequence_history import SequenceHistory, history_run
 
 
 MAX_READ = 8 * 1024 * 1024
@@ -654,6 +655,8 @@ def sequence_snapshot(path):
         data = json.loads(path.read_text())
         if data.get('kind') != 'game_sequences':
             raise ValueError('Expected a game-sequence report')
+        # Derive from this live snapshot, independently of the archive collector's cadence.
+        data['history_run'] = history_run(path, data)
         data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
         return data
     except (OSError, ValueError) as error:
@@ -661,7 +664,7 @@ def sequence_snapshot(path):
 
 
 def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=None, curriculum_service=None,
-                sequence_report=None, history_subgoal_report=None):
+                sequence_report=None, history_subgoal_report=None, sequence_history=None, max_points=2000):
     gpu = GpuMonitor()
     if sequence_report and any(x is not None for x in (monitor, behavior, campaign, subgoal_report, curriculum_service)):
         raise ValueError('Sequence report selects one independent run')
@@ -669,8 +672,11 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
         raise ValueError('Curriculum controls require a subgoal report')
     if history_subgoal_report and not sequence_report:
         raise ValueError('Historical subgoal view requires a sequence report')
+    if sequence_history and not sequence_report:
+        raise ValueError('Sequence history requires a sequence report')
     control = CurriculumControl(curriculum_service, subgoal_report) if curriculum_service else None
     optimization = OptimizationControl(sequence_report)
+    sequence_archive = None
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -728,6 +734,23 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
 
         def do_GET(self):
             route = urlsplit(self.path).path
+            if route == '/api/sequence-history' and sequence_archive is not None:
+                data, revision = sequence_archive.snapshot()
+                self.send_response(304 if revision and self.headers.get('If-None-Match') == revision else 200)
+                self.send_header('Cache-Control', 'no-store')
+                if revision:
+                    self.send_header('ETag', revision)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                unchanged = revision and self.headers.get('If-None-Match') == revision
+                if not unchanged:
+                    self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                if not unchanged and self.command != 'HEAD':
+                    try:
+                        self.wfile.write(data)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                return
             if route == '/api/optimization':
                 revision = optimization.revision()
                 if revision is not None and self.headers.get('If-None-Match') == revision:
@@ -750,6 +773,7 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                 state['gpu'] = gpu.snapshot()
                 if sequence_report:
                     state['history_available'] = history_subgoal_report is not None
+                    state['sequence_history'] = sequence_archive.metadata() if sequence_archive is not None else {'enabled': False}
                 data = json.dumps(state, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
             elif route == '/api/history/state' and history_subgoal_report:
@@ -768,7 +792,7 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             elif route == '/api/trajectory' and subgoal_report:
                 data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
+            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/sequence-trends.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
                            '/optimization.html', '/optimization.js', '/optimization.css'):
                 name = 'index.html' if route == '/' else route[1:]
                 if subgoal_report and name in ('index.html', 'campaign.html'):
@@ -798,7 +822,21 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
         def log_message(self, format, *args):
             pass  # Polling creates no second historical log.
 
-    return ThreadingHTTPServer(address, Handler)
+    class Server(ThreadingHTTPServer):
+        def server_close(self):
+            if sequence_archive is not None:
+                sequence_archive.close()
+            super().server_close()
+
+    server = Server(address, Handler)
+    try:
+        if sequence_history:
+            sequence_archive = SequenceHistory(sequence_report, sequence_history, max_points)
+            sequence_archive.start()
+    except Exception:
+        server.server_close()
+        raise
+    return server
 
 
 def main():
@@ -809,6 +847,8 @@ def main():
     parser.add_argument('--campaign-report', type=Path, help='Existing campaign report.json with completed comparisons')
     parser.add_argument('--subgoal-report', type=Path, help='Select the new synthetic-subgoal run for the entire dashboard')
     parser.add_argument('--sequence-report', type=Path, help='Select a game-sequence training report')
+    parser.add_argument('--sequence-history', type=Path,
+                        help='Opt in to a bounded numeric history archive; never overwrites the training report')
     parser.add_argument('--history-subgoal-report', type=Path,
                         help='Read-only previous subgoal run, kept separate from the active sequence run')
     parser.add_argument('--curriculum-service', help='Opt in to phase/level controls for this systemd user service')
@@ -824,6 +864,8 @@ def main():
         parser.error('--curriculum-service requires --subgoal-report')
     if args.history_subgoal_report and not args.sequence_report:
         parser.error('--history-subgoal-report requires --sequence-report')
+    if args.sequence_history and not args.sequence_report:
+        parser.error('--sequence-history requires --sequence-report')
     if args.subgoal_report and any((args.log, args.behavior_log, args.campaign_log, args.campaign_report)):
         parser.error('--subgoal-report selects one run; do not combine it with legacy log selectors')
     if not 2 <= args.max_points <= 10000:
@@ -832,7 +874,7 @@ def main():
     behavior = BehaviorMonitor(args.behavior_log, args.max_points) if args.behavior_log else None
     campaign = CampaignMonitor(args.campaign_log, args.max_points, args.campaign_report) if args.campaign_log else None
     with make_server((args.host, args.port), monitor, behavior, campaign, args.subgoal_report, args.curriculum_service,
-                     args.sequence_report, args.history_subgoal_report) as server:
+                     args.sequence_report, args.history_subgoal_report, args.sequence_history, args.max_points) as server:
         print(f'Training dashboard: http://{args.host}:{server.server_port}/', flush=True)
         try:
             server.serve_forever()

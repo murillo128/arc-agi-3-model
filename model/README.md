@@ -453,6 +453,48 @@ y se renueva al reanudar. Se conserva un máximo de 200 batches y únicamente la
 última galería de hasta ocho ejemplos, fuera de los checkpoints. Las métricas
 nuevas no reconstruyen retrospectivamente datos ausentes.
 
+El dashboard puede conservar un historial numérico más largo **sin reiniciar el
+trainer**. Esta persistencia es optativa y pertenece al dashboard:
+
+```sh
+.venv/bin/python -m model.dashboard \
+  --sequence-report model/runs/secuencias/report.json \
+  --sequence-history model/runs/secuencias/dashboard-history.json \
+  --max-points 2000 --port 8767
+```
+
+El archivo guarda como máximo 2.000 batches en este ejemplo, sin imágenes ni
+pesos; se actualiza atómicamente cuando cambia el informe, aunque no haya un
+navegador abierto. El proceso comprueba el informe cada cinco segundos. Se inicia
+con los batches todavía disponibles: no recupera los ya descartados. Cambiar de
+ejecución/cohorte o retroceder el contador evita reutilizar registros incompatibles.
+Sin `--sequence-history` el dashboard sigue sin escribir datos. Si no se puede
+guardar el archivo, avisa y mantiene las mediciones actuales. No se debe reutilizar
+el archivo entre varios servidores simultáneos.
+
+**Chart history** permite ver 200, 1.000 o todos los batches retenidos. La tarjeta
+**Prediction trend** calcula ventanas de 50 o 100 batches: primero agrega los
+conteos `wrong / union` de cada juego y luego promedia los errores con igual peso.
+La línea **Pooled pixels** pondera por el total de píxeles de esa unión. Una
+cohorte incompleta o sin denominador no se muestra como error cero. La comparación
+usa las dos últimas ventanas completas consecutivas, indica el cambio en puntos
+porcentuales y permite desplegar el detalle por juego. Los huecos y cambios de
+fase, LR, fuente de medición o política de exploración interrumpen las ventanas.
+El zoom vertical es optativo y mantiene los valores del eje visibles. Estas
+mediciones no son tasas de victoria ni pruebas de generalización.
+
+El historial viaja por `api/sequence-history`, con ETag, únicamente cuando cambia;
+`api/state` conserva su informe reciente. El dibujo limita los marcadores por
+serie, pero las medias usan todos los datos de su ventana. Los contadores y
+ejemplos visuales siguen mostrando el último batch, independientemente del rango.
+La identidad `history_run` del informe servido se calcula a partir de su ruta,
+proceso (`optimization_identity`) y cohorte. El navegador sólo incorpora el
+archivo cuando coincide con esa identidad; si el colector todavía está leyendo
+otra ejecución, muestra únicamente los batches actuales hasta que se actualice.
+Las gráficas de diagnósticos periódicos conservan su EMA entre muestras cuando
+los batches intermedios existen; los huecos reales y cambios de régimen sí la
+interrumpen.
+
 El modo de secuencias recoge acciones aleatorias: no inventa métricas de éxito o
 pérdidas de un planner inactivo. Para consultar todas las gráficas y trayectorias
 de una ejecución anterior, sin mezclarlas con las actuales:

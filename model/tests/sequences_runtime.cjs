@@ -23,12 +23,22 @@ const report = {status: 'paused', age_seconds: 2, games: ['<game>'],
       '<game>': {delta_error: .25, transitions: 512}},
     sessions: [{game: '<game>', steps: 512, boundaries: 15, end: 'budget'}]}]};
 let offline = false;
+let archiveState=null,archivePayload=null,archiveRequests=0,archiveOffline=false;
 const context = vm.createContext({console, setTimeout() {}, fixture: report, location:{hash:'#curriculum'},
   document: {getElementById: id => nodes.get(id), createElement: element, createElementNS: element},
-  fetch: async () => { if (offline) throw Error('offline'); return {ok: true, json: async () => ({sequences: report, history_available: true})}; }});
+  fetch: async url => {
+    if(offline)throw Error('offline');
+    if(url==='api/sequence-history'){
+      archiveRequests++;
+      if(archiveOffline)throw Error('archive offline');
+      return {ok:true,status:200,headers:{get:()=>archiveState.revision},json:async()=>archivePayload};
+    }
+    return {ok:true,json:async()=>({sequences:report,history_available:true,sequence_history:archiveState})};
+  }});
 const text = id => nodes.get(id).textContent;
 (async () => {
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(assets,'sequence-trends.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets, 'sequences.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('status'), 'Paused');
@@ -269,4 +279,114 @@ const text = id => nodes.get(id).textContent;
   vm.runInContext("chart('quality',chartRows,[series('Prueba',r=>r.v,{skip:r=>r.skip})],100)",context);
   assert.equal(smooth().length,1);
   assert.equal(smooth()[0].points,'50,220 680,201.2');
+  // Periodic diagnostics skip present, unsampled batches without resetting their EMA.
+  // 0 -> 1 -> 1 with alpha=.1 ends at .19 (19 for percentage plots).
+  offline=false;
+  const periodic=Array.from({length:8},(_,i)=>({batch:i+1}));
+  for(const batch of [1,4,8]) {
+    const value=batch===1?0:1;
+    periodic[batch-1].diagnostics={latent_drift:value,drift_reference_batch:1,
+      latent:{std_mean:value,effective_rank:value,inactive_fraction:value,changed_rms:value}};
+  }
+  report.history=periodic;
+  await vm.runInContext('refresh()',context);
+  const diagnosticCharts=['latent-drift','latent-diversity','latent-rank','latent-inactive','latent-sensitivity'];
+  const diagnosticLines=id=>nodes.get(id).children.filter(n=>n.class==='series-ema');
+  for(const id of diagnosticCharts) {
+    assert.equal(diagnosticLines(id).length,1,`${id}: unsampled batches keep one segment`);
+    nodes.get(id+'-legend').children[0].listeners.click();
+    const selectedGuide=nodes.get(id).children.find(n=>n.class==='series-guide');
+    assert.equal(selectedGuide.children[3].textContent,id==='latent-drift'||id==='latent-inactive'?'19':'0.19');
+  }
+  // Actual missing batches and regime changes on unsampled rows still break the line.
+  for(const interruption of ['gap','measurement','exploration','phase','lr','reference']) {
+    report.history=structuredClone(periodic);
+    if(interruption==='gap')report.history.splice(5,1);
+    else if(interruption==='reference')report.history[7].diagnostics.drift_reference_batch=2;
+    else Object.assign(report.history[5],{
+      measurement:{measurement_source:'training_pre_update'},exploration:{exploration:{policy:'learned'}},
+      phase:{phase:'predictor'},lr:{learning_rates:{predictor:1e-4}}
+    }[interruption]);
+    await vm.runInContext('refresh()',context);
+    for(const id of interruption==='reference'?['latent-drift']:diagnosticCharts)
+      assert.equal(diagnosticLines(id).length,2,`${id}: ${interruption} breaks the segment`);
+  }
+  // The archive expands charts, not live counters; window controls persist through polling.
+  offline=false;
+  const history=Array.from({length:1200},(_,i)=>({batch:i+1,actions:(i+1)*8,loss:.2,
+    measurement_source:'training_pre_update',quality:{'<game>':{wrong:i<1100?2:1,union:10,transitions:8},all:{delta_error:.2}}}));
+  archiveState={enabled:true,run:'test-run',revision:'"1"',limit:2000};
+  archivePayload={run:'test-run',history};
+  report.history_run='test-run';
+  report.history=history.slice(-200);report.progress={actions:9600,batches:1200};
+  nodes.get('history-range').value='all';nodes.get('trend-window').value='100';
+  await vm.runInContext('refresh()',context);
+  assert.equal(archiveRequests,1);
+  assert.equal(text('actions'),'9,600');
+  assert.equal(text('trend-balanced'),'10 %');
+  assert.equal(text('trend-change'),'-10 pp');
+  assert.match(text('trend-comparison'),/1,101–1,200 vs batches 1,001–1,100/);
+  assert.match(text('history-scope'),/1,200 retained batches, starting at 1/);
+  assert(nodes.get('loss').children.filter(n=>n.cx!==undefined).length<=351,'markers stay bounded on long histories');
+  nodes.get('history-range').value='200';nodes.get('history-range').listeners.change();
+  assert.match(text('history-scope'),/Showing 1,001–1,200/);
+  nodes.get('trend-zoom').checked=true;nodes.get('trend-zoom').listeners.change();
+  assert.match(text('trend-comparison'),/Y-axis zoomed/);
+  await vm.runInContext('refresh()',context);
+  assert.equal(archiveRequests,1,'unchanged archive is not re-downloaded on each live poll');
+  assert.equal(nodes.get('history-range').value,'200');
+  archiveState.revision='"2"';archiveOffline=true;
+  await vm.runInContext('refresh()',context);
+  assert.equal(text('status'),'Paused','archive failure does not disconnect live measurements');
+  assert.match(text('history-scope'),/temporarily unavailable/);
+  archiveState.run='other-run';
+  await vm.runInContext('refresh()',context);
+  assert.match(text('history-scope'),/200 retained batches/,'a new run cannot inherit the previous archive');
+  report.updated_at=1234;
+  await vm.runInContext('refresh()',context);
+  const priorPlot=nodes.get('loss').children[0];
+  report.age_seconds=10;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('loss').children[0],priorPlot,'unchanged metrics do not rebuild the charts');
+  assert.equal(text('freshness'),'Updated 10 s ago');
+  offline=true;await vm.runInContext('refresh()',context);
+  assert.equal(text('status'),'Disconnected');
+  offline=false;await vm.runInContext('refresh()',context);
+  assert.equal(text('status'),'Paused','recovery restores status even if no new batch was written');
+  // The live report can change run/cohort before the independent collector notices.
+  const counts=(wrong)=>({wrong,union:10,transitions:1});
+  const oldHistory=Array.from({length:100},(_,i)=>({batch:i+1,quality:{a:counts(0),b:counts(0)}}));
+  for(const {games,updatedAt} of [{games:['a','c'],updatedAt:2001},{games:['a','b'],updatedAt:2000}]) {
+    archiveOffline=false;
+    archiveState={enabled:true,run:'old-run',revision:'"old"',limit:2000};
+    archivePayload={run:'old-run',history:oldHistory};
+    Object.assign(report,{games:['a','b'],history_run:'old-run',updated_at:2000,history:oldHistory.slice(-1)});
+    await vm.runInContext('refresh()',context);
+    assert.equal(text('trend-balanced'),'0 %');
+    const requests=archiveRequests;
+    // Even if updated_at is unchanged, a new identity invalidates the rendered data.
+    Object.assign(report,{games,history_run:'new-run',updated_at:updatedAt,history:[{batch:101,quality:{a:counts(10),[games[1]]:counts(10)}}],
+      progress:{actions:808,batches:101}});
+    await vm.runInContext('refresh()',context);
+    assert.equal(text('trend-balanced'),'—','one new-run batch cannot complete an old-run window');
+    assert.match(text('trend-comparison'),/1 consecutive, compatible batches available/);
+    assert.match(text('history-scope'),/1 retained batches, starting at 101/);
+    assert.equal(text('actions'),'808','latest counters remain live while the collector lags');
+    assert.equal(archiveRequests,requests,'incompatible collector metadata does not trigger an archive fetch');
+    nodes.get('history-range').listeners.change();
+    assert.equal(text('trend-balanced'),'—','control changes cannot reintroduce incompatible rows');
+    // Metadata can also race the separate history response; reject its mismatched identity.
+    archiveState={...archiveState,run:'new-run',revision:'"new"'};
+    await vm.runInContext('refresh()',context);
+    assert.equal(text('trend-balanced'),'—');
+    assert.match(text('history-scope'),/temporarily unavailable/);
+    // After collection catches up, only the new run supplies a complete window.
+    archivePayload={run:'new-run',history:Array.from({length:100},(_,i)=>({batch:101+i,
+      quality:{a:counts(10),[games[1]]:counts(10)}}))};
+    report.history=archivePayload.history.slice(-1);report.updated_at++;
+    await vm.runInContext('refresh()',context);
+    assert.equal(text('trend-balanced'),'100 %');
+    assert.equal(text('trend-change'),'—','no previous window is inherited from the old run');
+    assert.match(text('history-scope'),/100 retained batches, starting at 101/);
+  }
 })().catch(error => { console.error(error); process.exitCode = 1; });
