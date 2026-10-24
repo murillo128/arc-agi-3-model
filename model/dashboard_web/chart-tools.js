@@ -97,7 +97,7 @@ globalThis.ChartTools = (() => {
     if (!items.some(i=>i.key===state.selected&&!i.disabled&&!i.passive)) state.selected=null;
     state.sync=()=>items.forEach((item,i)=>{
       const node=host.children[i]; node.textContent=item.text; node.style.color=item.color;
-      node.className=item.className||''; node.title=[item.title,!item.passive&&hint].filter(Boolean).join(' · ');
+      node.className=item.className||''; node.title=[item.title,!item.passive&&(item.hint??hint)].filter(Boolean).join(' · ');
       if (!item.passive) {
         node.disabled=!!item.disabled;
         node.setAttribute('aria-pressed',String(state.selected===item.key));

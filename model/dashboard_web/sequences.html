@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ARC · Memory across levels</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequences.js" defer></script></head>
+<title>ARC · Memory across levels</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequence-trends.js" defer></script><script src="sequences.js" defer></script></head>
 <body class="subgoal-dashboard">
 <div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a><div class="run-heading"><p class="eyebrow">ARC · SEQUENCE LEARNING</p><h1>Sequence training</h1>
 </div><div class="connection"><p class="run-context" id="phase-status"></p><span id="status" role="status">Waiting</span><small id="freshness"></small><p id="gpu-status" class="gpu-status"></p></div></header><div class="metrics summary-metrics compact-metrics">
@@ -15,7 +15,8 @@
 <button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false" tabindex="-1">Curriculum</button></div><a href="optimization.html">Optimization</a><a id="history-link" href="history.html#path" hidden>Planner history</a></nav></div>
 <main>
 <details id="run-configuration" class="run-details"><summary>Run configuration <span id="run-info" class="muted">Waiting for data…</span></summary><p class="run-context" id="configuration"></p><p class="run-context" id="learning-rates"></p></details>
-<p class="chart-help">Thin line: EMA (α = 0.1). Click a legend to mark its latest actual value; click again to remove the guide.</p>
+<div class="history-toolbar"><label>Chart history<select id="history-range"><option value="200">Last 200 batches</option><option value="1000" selected>Last 1,000 batches</option><option value="all">All retained batches</option></select></label><p id="history-scope" class="muted">Waiting for history…</p></div>
+<p class="chart-help">Main line: EMA (α = 0.1). Fine line: individual measurements. Select a legend to focus a series and mark its latest EMA. The trend below uses window means directly.</p>
 
 
 
@@ -23,6 +24,12 @@
 
 <section id="world" role="tabpanel" aria-labelledby="tab-world">
 <p class="muted" id="diagnostic-scope">New metrics appear when a measurement completes. Earlier data are retained.</p>
+<article class="chart-card trend-card">
+  <div class="quality-heading"><div><h3>Prediction trend <span>Delta error · lower is better</span></h3><p>Equal game weight separates learning trends from batch composition. These are training diagnostics, not win rates or held-out results.</p></div><div class="trend-controls"><label>Averaging window<select id="trend-window"><option value="50">50 batches</option><option value="100" selected>100 batches</option></select></label><label class="trend-zoom"><input id="trend-zoom" type="checkbox"> Zoom Y-axis to data</label></div></div>
+  <div class="trend-summary"><div><span>Equal-game error</span><strong id="trend-balanced">—</strong></div><div><span>Change vs previous window</span><strong id="trend-change">—</strong></div><div><span>Games with evidence</span><strong id="trend-coverage">—</strong></div></div>
+  <p id="trend-comparison" class="muted"></p><div id="prediction-trend-legend" class="legend"></div><svg id="prediction-trend" viewBox="0 0 700 260" role="img" aria-label="Prediction error with equal game weight and pooled pixel weight"></svg>
+  <details class="trend-details"><summary>Compare games <span class="muted">Current and previous windows · changes in percentage points</span></summary><div class="table-scroll"><table><thead><tr><th>Game</th><th>Previous error</th><th>Current error</th><th>Change (pp)</th><th>Transitions · previous / current</th></tr></thead><tbody id="trend-games"></tbody></table></div></details>
+</article>
 <article class="chart-card prediction-preview"><div class="quality-heading"><div><h3>One predictor action</h3><p id="preview-info">Waiting for a fixed-evaluation sample.</p></div><label>Sample game<select id="preview-game" aria-label="Game to inspect predictions"></select></label></div>
 <div id="preview-images" class="prediction-comparison" hidden>
   <div class="preview-state-groups">
