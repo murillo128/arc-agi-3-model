@@ -487,6 +487,13 @@ El historial viaja por `api/sequence-history`, con ETag, únicamente cuando camb
 `api/state` conserva su informe reciente. El dibujo limita los marcadores por
 serie, pero las medias usan todos los datos de su ventana. Los contadores y
 ejemplos visuales siguen mostrando el último batch, independientemente del rango.
+La identidad `history_run` del informe servido se calcula a partir de su ruta,
+proceso (`optimization_identity`) y cohorte. El navegador sólo incorpora el
+archivo cuando coincide con esa identidad; si el colector todavía está leyendo
+otra ejecución, muestra únicamente los batches actuales hasta que se actualice.
+Las gráficas de diagnósticos periódicos conservan su EMA entre muestras cuando
+los batches intermedios existen; los huecos reales y cambios de régimen sí la
+interrumpen.
 
 El modo de secuencias recoge acciones aleatorias: no inventa métricas de éxito o
 pérdidas de un planner inactivo. Para consultar todas las gráficas y trayectorias

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 from .curriculum_control import CurriculumControl
 from .optimization_control import OptimizationControl
-from .sequence_history import SequenceHistory
+from .sequence_history import SequenceHistory, history_run
 
 
 MAX_READ = 8 * 1024 * 1024
@@ -655,6 +655,8 @@ def sequence_snapshot(path):
         data = json.loads(path.read_text())
         if data.get('kind') != 'game_sequences':
             raise ValueError('Expected a game-sequence report')
+        # Derive from this live snapshot, independently of the archive collector's cadence.
+        data['history_run'] = history_run(path, data)
         data['age_seconds'] = max(0., time.time() - data.get('updated_at', path.stat().st_mtime))
         return data
     except (OSError, ValueError) as error:

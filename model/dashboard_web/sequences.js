@@ -104,7 +104,8 @@ const timingLabels = {collection_seconds:'Game',representation_seconds:'Represen
 function availableHistory(data) {
   const live=data.history||[], latest=live.at(-1)?.batch;
   if(!Number.isFinite(latest))return [];
-  const merged=new Map(retainedHistory.history.filter(r=>r.batch<=latest).map(r=>[r.batch,r]));
+  const archived=data.history_run&&retainedHistory.run===data.history_run?retainedHistory.history:[];
+  const merged=new Map(archived.filter(r=>r.batch<=latest).map(r=>[r.batch,r]));
   live.forEach(r=>merged.set(r.batch,r));
   return [...merged.values()].sort((a,b)=>a.batch-b.batch);
 }
@@ -201,7 +202,9 @@ function render(data) {
   chart('changes',rows,kinds.map(([key,label])=>series(label,r=>{
     const q=r.quality?.all;return q?.transitions>0&&Number.isFinite(q[key])?q[key]/q.transitions:null;
   })));
-  const measured=rows.filter(r=>r.diagnostics), diagnostic=measured.at(-1)?.diagnostics;
+  const diagnostic=rows.findLast(r=>r.diagnostics)?.diagnostics;
+  // Keep every batch for gap/regime detection, but skip intentionally unsampled diagnostics.
+  const diagnosticSeries=(label,value,extra={})=>series(label,value,{...extra,skip:r=>!r.diagnostics});
   chart('fixed-quality',rows,[series('1-step prediction %',r=>pct(r.quality?.all?.delta_error)),
     series('Global reconstruction %',r=>pct(r.diagnostics?.reconstruction_error),{skip:r=>!r.diagnostics}),
     series('3-step prediction %',r=>pct(r.diagnostics?.rollout_error),{skip:r=>!r.diagnostics}),
@@ -212,12 +215,12 @@ function render(data) {
     :diagnostic
     ?`Fixed evaluation every batch. Additional diagnostics every ${diagnostic.every} batches · latest measurement: batch ${diagnostic.batch}, ${diagnostic.sampled_transitions} transitions and ${diagnostic.latent?.sample_count??0} real states. Rollout: ${diagnostic.rollouts} three-step routes. Drift: process reference at batch ${diagnostic.drift_reference_batch}.`
     :'Fixed evaluation every batch. Additional diagnostics appear after a new measurement; historical gaps are not filled with zeros.';
-  chart('latent-drift',measured,[series('Drift %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})],
+  chart('latent-drift',rows,[diagnosticSeries('Drift %',r=>pct(r.diagnostics.latent_drift),{group:r=>r.diagnostics.drift_source??r.diagnostics.drift_reference_batch})],
     null,phaseThresholds(data,'latent_drift','Drift threshold',colors[0]));
-  chart('latent-diversity',measured,[series('Across observations',r=>r.diagnostics.latent?.std_mean),series('Within each episode',r=>r.diagnostics.latent?.within_episode_std)]);
-  chart('latent-rank',measured,[series('Effective rank',r=>r.diagnostics.latent?.effective_rank),series('Observable maximum',r=>r.diagnostics.latent?.max_rank)]);
-  chart('latent-inactive',measured,[series('Nearly constant %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
-  chart('latent-sensitivity',measured,[series('Changed blocks',r=>r.diagnostics.latent?.changed_rms),series('Unchanged blocks',r=>r.diagnostics.latent?.unchanged_rms)]);
+  chart('latent-diversity',rows,[diagnosticSeries('Across observations',r=>r.diagnostics.latent?.std_mean),diagnosticSeries('Within each episode',r=>r.diagnostics.latent?.within_episode_std)]);
+  chart('latent-rank',rows,[diagnosticSeries('Effective rank',r=>r.diagnostics.latent?.effective_rank),diagnosticSeries('Observable maximum',r=>r.diagnostics.latent?.max_rank)]);
+  chart('latent-inactive',rows,[diagnosticSeries('Nearly constant %',r=>pct(r.diagnostics.latent?.inactive_fraction))],100);
+  chart('latent-sensitivity',rows,[diagnosticSeries('Changed blocks',r=>r.diagnostics.latent?.changed_rms),diagnosticSeries('Unchanged blocks',r=>r.diagnostics.latent?.unchanged_rms)]);
   const exploration=data.exploration_config||{policy:'uniform'}, interaction=last.exploration;
   const policyLabel={uniform:'Uniform exploration',mixed:'Visible-element clicks',learned:'Learned change prior'}[exploration.policy]||exploration.policy;
   const adoption=data.exploration_adoptions?.at(-1);
@@ -312,24 +315,25 @@ for(const id of ['history-range','trend-window','trend-zoom'])$(id).addEventList
 async function refresh() {
   try { const response = await fetch('api/state', {cache: 'no-store'}); if (!response.ok) throw Error(response.status);
     const state=await response.json();historyMetadata=state.sequence_history;
-    if(!historyMetadata?.enabled||retainedHistory.run!==historyMetadata.run||
-       (retainedHistory.history.at(-1)?.batch??0)>(state.sequences?.history?.at(-1)?.batch??Infinity))
-      retainedHistory={history:[],revision:null,run:historyMetadata?.run};
-    historyError='';
-    if(historyMetadata?.revision&&historyMetadata.revision!==retainedHistory.revision){
+    const data=state.sequences||{status:'waiting'};
+    const compatible=historyMetadata?.enabled&&data.history_run&&historyMetadata.run===data.history_run;
+    if(!compatible||retainedHistory.run!==data.history_run||
+       (retainedHistory.history.at(-1)?.batch??0)>(data.history?.at(-1)?.batch??Infinity))
+      retainedHistory={history:[],revision:null,run:null};
+    historyError=historyMetadata?.enabled&&!compatible?'History is waiting for the current run; latest measurements remain live.':'';
+    if(compatible&&historyMetadata.revision&&historyMetadata.revision!==retainedHistory.revision){
       try{
         const result=await fetch('api/sequence-history',{cache:'no-store',headers:retainedHistory.revision?{'If-None-Match':retainedHistory.revision}:{}});
         if(result.status!==304){
           if(!result.ok)throw Error(result.status);
           const saved=await result.json();
-          if(saved.run!==historyMetadata.run||!Array.isArray(saved.history))throw Error('History changed');
+          if(saved.run!==data.history_run||!Array.isArray(saved.history))throw Error('History changed');
           retainedHistory={...saved,revision:result.headers.get('ETag')};
         }
       }catch{historyError='History temporarily unavailable; latest measurements remain live.';}
     }
-    const data=state.sequences||{status:'waiting'};
     const revision=Number.isFinite(data.updated_at)?JSON.stringify([data.updated_at,data.status,
-      historyMetadata?.revision,historyMetadata?.error,historyError]):null;
+      data.history_run,historyMetadata?.revision,historyMetadata?.error,historyError]):null;
     if(revision===null||revision!==renderedRevision){render(data);renderedRevision=revision;}
     else{
       displayedReport=data;

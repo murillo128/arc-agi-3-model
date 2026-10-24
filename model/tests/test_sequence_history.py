@@ -7,6 +7,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -105,6 +106,38 @@ class SequenceHistoryTests(unittest.TestCase):
         finally:
             server.shutdown();server.server_close();thread.join(timeout=2)
         self.assertFalse(any(t.name=='sequence-history' and t.is_alive() for t in threading.enumerate()))
+
+    def test_live_report_identity_is_independent_of_delayed_collector(self):
+        self.write([99,100])
+        # Freeze only scheduling to deterministically exercise the two independent snapshots.
+        with patch.object(SequenceHistory, 'start'):
+            server=make_server(('127.0.0.1',0),None,sequence_report=self.report,sequence_history=self.archive)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            base=f'http://127.0.0.1:{server.server_port}'
+            def read(route):
+                with urlopen(base+route) as response:
+                    return json.load(response)
+            original=read('/api/state')
+            old_run=original['sequence_history']['run']
+            self.assertEqual(original['sequences']['history_run'],old_run)
+            for identity,games in [('run-2',('a',)),('run-1',('a','b'))]:
+                with self.subTest(identity=identity,games=games):
+                    self.write([101],identity,games)
+                    report_bytes=self.report.read_bytes()
+                    live=read('/api/state')
+                    self.assertEqual(live['sequence_history']['run'],old_run,'collector is still behind')
+                    self.assertNotEqual(live['sequences']['history_run'],old_run,
+                                        'live identity must reflect both run and cohort changes')
+                    self.assertEqual(live['sequences']['history'][0]['batch'],101)
+                    self.assertEqual(read('/api/sequence-history')['run'],old_run)
+                    self.assertEqual(self.report.read_bytes(),report_bytes)
+            # Cohort ordering alone is not a different run.
+            previous=live['sequences']['history_run']
+            self.write([101],games=('b','a'))
+            self.assertEqual(read('/api/state')['sequences']['history_run'],previous)
+        finally:
+            server.shutdown();server.server_close();thread.join(timeout=2)
 
     @unittest.skipUnless(shutil.which('node'), 'Node.js required for numerical JavaScript contracts')
     def test_window_statistics(self):

@@ -18,6 +18,12 @@ SCALARS = ('batch', 'actions', 'recent_tps', 'examples_per_second', 'peak_gpu_gi
 SECTIONS = ('quality', 'diagnostics', 'predictor_terms', 'representation_terms', 'learning_rates')
 
 
+def history_run(report_path, report):
+    """Bind a snapshot to its source, training process and game cohort."""
+    return hashlib.sha256(json.dumps([str(Path(report_path).resolve()), report.get('optimization_identity'),
+        sorted(report.get('games', []))], sort_keys=True).encode()).hexdigest()[:24]
+
+
 def numeric_tree(value, depth=0):
     if type(value) in (int, float):
         return value if math.isfinite(value) else None
@@ -102,8 +108,7 @@ class SequenceHistory:
                 live = report.get('history', [])
                 if not live:
                     return
-                run = hashlib.sha256(json.dumps([str(self.report), report.get('optimization_identity'),
-                    sorted(report.get('games', []))], sort_keys=True).encode()).hexdigest()[:24]
+                run = history_run(self.report, report)
                 latest = live[-1]['batch']
                 rollback = self.rows and latest < self.rows[-1]['batch']
                 if self.run != run or rollback:
