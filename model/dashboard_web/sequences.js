@@ -150,19 +150,21 @@ function render(data) {
     :'Waiting for recorded batches.';
   renderTrend(data,all,rows);
   const training=data.measurement_source==='training_pre_update', control=data.phase_control;
-  $('phase-status').textContent=control?`Phase: ${control.phase==='predictor'?'Predictor · reduced representation LR':'Representation · predictor waiting'}${last.phase&&last.phase!==control.phase?' · Change takes effect next batch':''}`:'';
+  const frozen=Number.isInteger(control?.representation_frozen_at_batch);
+  $('phase-status').textContent=control?`Phase: ${frozen?`Predictor · representation frozen after batch ${number(control.representation_frozen_at_batch,0)}`:control.phase==='predictor'?'Predictor · reduced representation LR':'Representation · predictor waiting'}${last.phase&&last.phase!==control.phase?' · Change takes effect next batch':''}`:'';
   $('quality-source').textContent=$('early-source').textContent=training?'% · batch before training':'% · fixed evaluation';
   $('tab-evaluation').textContent=training?'Training measurements':'Fixed evaluation';
   $('evaluation-description').textContent=training?'Normal training trajectories, measured before weight updates. Each game has equal weight in the average. These are learning diagnostics, not measures of generalization or wins.':'Separate seeds, frozen weights and causal memory rebuilt from the start of each session. Each game has equal weight in the average; this does not measure wins.';
   $('evaluations-title').textContent=training?'Measurements before learning':'Fixed evaluations';
   $('evaluations-description').textContent=training?'One record per training batch. Scenes change between batches; these are not fixed episodes. Reconstruction and rollout use a sample from each game and level.':'One record per batch using the same real reference sessions. Reconstruction and rollout are measured every four batches; gaps do not mean zero.';
-  $('drift-description').textContent=training?'Relative encoder change on the same batch images, before and after updating representation. Each batch provides new images; object movement is kept separate from encoder drift.':'Relative latent change from the first measurement in this process. Resuming establishes a new reference; lines are separated between references.';
+  $('drift-description').textContent=frozen?'Encoder and decoder are frozen. Drift measurement is skipped; earlier measurements remain visible. Reconstruction and prediction quality are still measured before training.':training?'Relative encoder change on the same batch images, before and after updating representation. Each batch provides new images; object movement is kept separate from encoder drift.':'Relative latent change from the first measurement in this process. Resuming establishes a new reference; lines are separated between references.';
   $('phase-card').hidden=!control;
   if(control){
     $('phase-description').textContent=`Window of ${control.window_batches} batches. First observe every synthetic level and each SDK game's first level; higher SDK levels join when reached. Observed levels with insufficient transitions are ignored for admission, not marked as passed. At least one eligible level is required, and every eligible level must meet reconstruction, drift and confirmation requirements. All games continue training. Predictor admission is retained until the curriculum is extended.`;
+    if(frozen)$('phase-description').textContent=`Predictor admission is retained. Encoder and decoder weights are frozen; reconstruction and prediction remain measured over ${control.window_batches} batches. Drift is not measured or required while representation is frozen.`;
     table('phase-rows',control.rows.map(r=>[`${r.game} / ${r.level}`,`${r.samples} / ${r.changed} · minimum ${r.thresholds.minimum_samples} / ${r.thresholds.minimum_changed}`,
       `${number(pct(r.reconstruction_error))} % / ${number(pct(r.thresholds.representation_open))} %`,
-      `${number(pct(r.latent_drift))} % / ${number(pct(r.thresholds.latent_drift))} %`,`${r.passes} / ${r.thresholds.patience}`,
+      r.representation_frozen?'Frozen':`${number(pct(r.latent_drift))} % / ${number(pct(r.thresholds.latent_drift))} %`,`${r.passes} / ${r.thresholds.patience}`,
       r.required===false?'Not reached yet':r.observed===false?'Awaiting first observation':
       !r.enough?'Ignored · insufficient transitions':!r.passing?'Outside threshold':
       r.passes<r.thresholds.patience?'Awaiting confirmations':'Ready']));
@@ -185,7 +187,7 @@ function render(data) {
   $('sampling-info').textContent=`${sessionsPerRound} independent sessions per round. Weights change collection frequency; per-session loss weighting is unchanged.${weightAdoption?` Current frequencies apply from batch ${number(weightAdoption.batch+1,0)}; earlier chart history uses the previous mix.`:''} Collected counts cover ${exposureRows.length} retained batches${exposureRows.length?` (${exposureRows[0].batch}–${exposureRows.at(-1).batch})`:''} and may include partial rounds. Repeated games start with separate seeds and memory.`;
   table('sampling-games',(data.games||[]).map(game=>[game,`${weights[game]??1}×`,`${number(100*(weights[game]??1)/sessionsPerRound,2)} %`,
     number(exposure.get(game)?.[0]??0,0),number(exposure.get(game)?.[1]??0,0)]));
-  $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
+  $('learning-rates').textContent=Object.entries(data.learning_rates||{}).map(([key,value])=>`LR ${key}: ${frozen&&['encoder','decoder'].includes(key)?'Frozen':Number.isFinite(value)?value.toExponential(1):'—'}`).join(' · ');
   if(data.network?.rotation_adapter_width) $('learning-rates').textContent+=` · Rotation adapter: ${data.network.rotation_adapter_width} filters × 4 orientations`;
   if(data.click_map) $('learning-rates').textContent+=` · Gaussian click σ: ${number(data.click_map.sigma_pixels,4)} px (${data.click_map.learnable?'learned':'fixed'})`;
   const budgetLabel=data.budget===null?' · Unlimited actions':data.budget?` · budget ${number(data.budget,0)}`:'';
