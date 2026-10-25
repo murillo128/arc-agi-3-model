@@ -1,5 +1,55 @@
 # Modelo residual latente
 
+## Frozen reconstruction audit
+
+`model.reconstruction_audit` measures encoder/decoder reconstruction separately
+from prediction and game completion. It keeps an immutable representation-only
+snapshot, CPU exploration weights, evaluation observations and results in a fresh
+local directory. It never updates weights or writes observations to training replay.
+
+```sh
+python -m model.reconstruction_audit capture --checkpoint RUN/latest.pt --output results/reconstruction
+python -m model.reconstruction_audit collect --output results/reconstruction \
+  --split configs/splits.public-development.json --environments-dir environment_files
+python -m model.reconstruction_audit evaluate --output results/reconstruction --device cuda --pilot
+python -m model.reconstruction_audit evaluate --output results/reconstruction --device cuda
+python -m model.reconstruction_audit gallery --output results/reconstruction --device cuda
+```
+
+All games must be provisioned locally through the official SDK. Collection uses
+only public observations/actions and a frozen change head when available (otherwise
+visible/uniform exploration). It never selects a private SDK level directly.
+Held-out games use whatever levels are reached; training games contribute only
+their reserved final level. Terminal frames are excluded, level-entry observations
+discard previous-level animation, and ordinary observations retain animation context.
+The last levels of synthetic games are not part of this held-out SDK split.
+
+Defaults: two seeds, 4096 actions total per game (including reset actions), two CPU
+workers, 300 seconds per game checked between actions, and a uniform reservoir of
+up to 64 distinct settled images per game/target. `--actions` can increase the access
+budget up to 16384; `--games` selects exact split IDs. Use a separate output directory
+for another attempt, copying/linking the same frozen snapshot if comparing access
+budgets. Missing games, unreachable levels and timeouts are explicit coverage gaps.
+Reports are conditional on the visited states, not coverage of every level or a
+representative sample of all possible states.
+
+CUDA evaluation keeps original weight precision, uses BF16 autocast when supported,
+one spatial frame chunk and no predictor/optimizer. `--cuda-memory-fraction` defaults
+to 0.08 of device memory; this limits the PyTorch allocator, not driver/context or
+other processes. Check the one-image pilot and actual device free memory before
+running alongside training. `--device cpu` is available if coexistence is unsuitable.
+The report gives inference wall time, peak allocated/reserved memory and weight
+integrity; model loading and the final integrity hash are outside inference timing.
+
+Pixel error uses all evaluated pixels. Balanced color error averages per-target-color
+error ratios after pooling frames; non-dominant error excludes all tied largest colors
+in each image, without assigning a particular palette entry to background. Changed
+error uses real before/after changed pixels in same-level observations, excluding
+resets and level entries. A zero denominator is unavailable, not perfect. Duplicate
+settled images count once even if their animation context differs. Results also
+include perfect-frame fraction, per-color counts, access coverage and worst images.
+Keep captured observations, snapshots, galleries and detailed local results out of Git.
+
 ## Optional spatial predictor growth and Undo exclusion
 
 Sequence exploration accepts `"allow_undo": false` inside `sequence_exploration`.
