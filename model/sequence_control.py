@@ -43,9 +43,22 @@ class SequencePhaseControl:
         self.observed_native_levels = set()
         self.observed_pairs = set()
         self.phase, self.admitted_batch = 'representation', None
+        self.representation_frozen_at_batch = None
+
+    def freeze_representation(self, batch):
+        """Latch a user-requested freeze at a completed predictor-phase batch."""
+        if self.phase != 'predictor':
+            raise ValueError('Representation freeze requires the predictor phase')
+        if type(batch) is not int or batch < 0 or batch < (self.admitted_batch or 0):
+            raise ValueError('Representation freeze requires a valid completed batch')
+        if self.representation_frozen_at_batch is None:
+            self.representation_frozen_at_batch = batch
 
     def apply(self, representation):
         """Only change optimizer rates, retaining weights and optimizer moments."""
+        if self.representation_frozen_at_batch is not None:
+            representation.freeze()
+            return
         representation.frozen = False
         predictive = self.phase == 'predictor'
         for group in representation.optimizer.param_groups:
@@ -58,6 +71,7 @@ class SequencePhaseControl:
             representation.sigreg_enabled = False
 
     def rows(self):
+        frozen = self.representation_frozen_at_batch is not None
         totals = defaultdict(lambda: defaultdict(float))
         for entry in self.window:
             for key, values in entry['pairs'].items():
@@ -68,18 +82,19 @@ class SequencePhaseControl:
             counts, gates = totals[key], stage['thresholds']
             reconstruction = ratio(counts['reconstruction_wrong'], counts['reconstruction_union'])
             drift_square = ratio(counts['drift_delta'], counts['drift_scale'])
-            drift = math.sqrt(drift_square) if drift_square is not None else None
+            drift = math.sqrt(drift_square) if drift_square is not None and not frozen else None
             enough = (counts['samples'] >= gates['minimum_samples'] and
                       counts['changed'] >= gates['minimum_changed'] and
-                      counts['drift_samples'] >= gates['minimum_samples'])
-            passing = (enough and reconstruction is not None and drift is not None and
-                       reconstruction <= gates['representation_open'] and drift <= gates['latent_drift'])
+                      (frozen or counts['drift_samples'] >= gates['minimum_samples']))
+            passing = (enough and reconstruction is not None and
+                       reconstruction <= gates['representation_open'] and
+                       (frozen or (drift is not None and drift <= gates['latent_drift'])))
             required = (stage.get('source') != 'sdk' or stage['level'] == 1 or
                         key in self.observed_native_levels)
             rows.append(dict(game=stage['game'], level=stage['level'], key=key,
                 required=required, observed=key in self.observed_pairs, eligible=required and enough,
                 samples=int(counts['samples']), changed=int(counts['changed']),
-                reconstruction_error=reconstruction, latent_drift=drift,
+                reconstruction_error=reconstruction, latent_drift=drift, representation_frozen=frozen,
                 prediction_error=ratio(counts['prediction_wrong'], counts['prediction_union']),
                 enough=enough, passing=bool(passing), passes=self.streaks[key], thresholds=gates))
         return rows
@@ -112,11 +127,18 @@ class SequencePhaseControl:
 
     def snapshot(self):
         return dict(version=1, config=asdict(self.config), phase=self.phase,
+                    representation_frozen_at_batch=self.representation_frozen_at_batch,
                     admitted_batch=self.admitted_batch, window=list(self.window), streaks=dict(self.streaks),
                     observed_native_levels=sorted(self.observed_native_levels),
                     observed_pairs=sorted(self.observed_pairs))
 
     def restore(self, saved, *, extend=False, restrict=False):
+        frozen_at = saved.get('representation_frozen_at_batch')
+        if frozen_at is not None and (type(frozen_at) is not int or frozen_at < 0 or
+                saved.get('phase') != 'predictor' or frozen_at < (saved.get('admitted_batch') or 0)):
+            raise ValueError('Invalid representation freeze state')
+        if frozen_at is not None and (extend or restrict):
+            raise ValueError('Frozen representation cannot change the curriculum on resume')
         previous = set(saved['streaks'])
         expanded = extend and previous < self.stages.keys()
         reduced = restrict and set(self.stages) < previous
@@ -128,6 +150,7 @@ class SequencePhaseControl:
                 (previous != set(self.stages) and not (expanded or reduced))):
             raise ValueError('Incompatible sequence phase state')
         self.phase, self.admitted_batch = saved['phase'], saved['admitted_batch']
+        self.representation_frozen_at_batch = frozen_at
         if expanded:
             self.phase, self.admitted_batch = 'representation', None
         self.window.clear()
@@ -146,6 +169,7 @@ class SequencePhaseControl:
 
     def report(self):
         return dict(phase=self.phase, admitted_batch=self.admitted_batch,
+                    representation_frozen_at_batch=self.representation_frozen_at_batch,
                     window_batches=self.config.window_batches, batches=len(self.window),
                     source='training_pre_update', rows=self.rows())
 
@@ -182,6 +206,7 @@ class TrainingBatchDiagnostics(SequenceDiagnostics):
             raise ValueError('diagnostic_samples must cover every game/level in a batch')
         self.pairs = defaultdict(lambda: defaultdict(float))
         self.anchors = []
+        self.representation_frozen = False
 
     @torch.no_grad()
     def observe(self, encoded, session, t, z, predicted, next_h, pixels):
@@ -208,7 +233,11 @@ class TrainingBatchDiagnostics(SequenceDiagnostics):
         self.seconds += time.perf_counter() - begin
 
     @torch.no_grad()
-    def after_representation(self):
+    def after_representation(self, *, frozen=False):
+        self.representation_frozen = frozen
+        if frozen:
+            self.anchors.clear()
+            return
         begin = time.perf_counter()
         e = self.engine
         e.model.eval()
@@ -225,8 +254,9 @@ class TrainingBatchDiagnostics(SequenceDiagnostics):
         result, samples = super().finish()
         delta = sum(row['drift_delta'] for row in self.pairs.values())
         scale = sum(row['drift_scale'] for row in self.pairs.values())
-        result.update(latent_drift=math.sqrt(delta/scale) if scale else None,
-                      drift_reference_batch=None, drift_source='same_batch_before_after',
+        result.update(latent_drift=math.sqrt(delta/scale) if scale and not self.representation_frozen else None,
+                      drift_reference_batch=None,
+                      drift_source='frozen_representation' if self.representation_frozen else 'same_batch_before_after',
                       reconstruction_delta_error=ratio(
                           sum(row['reconstruction_wrong'] for row in self.pairs.values()),
                           sum(row['reconstruction_union'] for row in self.pairs.values())))

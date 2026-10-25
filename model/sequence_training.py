@@ -137,7 +137,8 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
     synchronize(e)
     begin = time.perf_counter()
     reconstruction = []
-    if representation is not None:
+    frozen = bool(representation is not None and getattr(representation, 'frozen', False))
+    if representation is not None and not frozen:
         # Rotate games evenly. Frame selection is independent of prediction error.
         rng = random.Random(sum(s.seed for s in sessions))
         for i in range(c.representation_updates):
@@ -148,13 +149,13 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
                 if result is not None:
                     reconstruction.append(result)
     synchronize(e)
-    representation_seconds = time.perf_counter() - begin
+    representation_seconds = 0. if frozen else time.perf_counter() - begin
     drift_seconds = 0.
     if training_probe is not None:
         start = time.perf_counter()
-        training_probe.after_representation()
+        training_probe.after_representation(frozen=frozen)
         synchronize(e)
-        drift_seconds = time.perf_counter() - start
+        drift_seconds = 0. if frozen else time.perf_counter() - start
     start = time.perf_counter()
     e.model.eval()
     encoded = EncodedSessions(e, sessions) if train_predictor else None
@@ -250,6 +251,9 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
     if fix_click_sigma and (disable_undo or upgrade_predictor):
         raise ValueError('Fixed click sigma cannot be combined with other adaptations')
     adaptation = disable_undo or upgrade_predictor or fix_click_sigma
+    if saved.get('sequence_control', {}).get('representation_frozen_at_batch') is not None and any(
+            (adopt, extend, restrict, adopt_exploration, adaptation, adopt_game_weights)):
+        raise ValueError('Frozen representation cannot be combined with other adoptions or curriculum changes')
     if sum((adopt, extend, restrict, adopt_exploration, adaptation, adopt_game_weights)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
     expected = normalized_plan(plan.payload)
@@ -348,6 +352,11 @@ def run(args):
     upgrade_predictor = getattr(args, 'upgrade_predictor', False)
     fix_click_sigma = getattr(args, 'fix_click_sigma', False)
     adopt_game_weights = getattr(args, 'adopt_game_weights', False)
+    freeze_representation = getattr(args, 'freeze_representation', False)
+    if freeze_representation and (not args.resume or 'sequence_control' not in plan.payload or any(
+            (adopt, extend, restrict, adopt_exploration, disable_undo, upgrade_predictor,
+             fix_click_sigma, adopt_game_weights, rate is not None))):
+        raise ValueError('--freeze-representation requires controlled --resume without other adoptions or LR override')
     if fix_click_sigma and (disable_undo or upgrade_predictor):
         raise ValueError('--fix-click-sigma cannot be combined with other adaptations')
     adaptation = disable_undo or upgrade_predictor or fix_click_sigma
@@ -432,6 +441,8 @@ def run(args):
             del saved
         sampling_start_batch = game_weight_adoptions[-1]['batch'] if game_weight_adoptions else 0
         predictor_learning_rate(learner, rate)
+        if freeze_representation:
+            control.freeze_representation(batches)
         if control:
             control.apply(representation)
         telemetry = None
@@ -600,6 +611,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--source', type=Path)
     parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--freeze-representation', action='store_true',
+                        help='Persistently freeze encoder and decoder on predictor-phase resume, retaining learned state')
     parser.add_argument('--disable-undo', action='store_true',
                         help='Explicitly adopt allow_undo=false while preserving learned state')
     parser.add_argument('--upgrade-predictor', action='store_true',

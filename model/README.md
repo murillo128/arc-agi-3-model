@@ -212,6 +212,23 @@ umbrales sobre los batches normales de entrenamiento. Guarda cada batch completo
 no activa el planner ni modifica la rotación configurada de niveles. Los planes
 anteriores sin `sequence_control` mantienen su comportamiento y evaluación fija.
 
+Once a controlled run has entered the predictor phase, resume with
+`--freeze-representation` to stop encoder and decoder optimization completely.
+The operation preserves model weights, both optimizer states, counters, RNG and
+the existing plan; it cannot be combined with another adoption, curriculum change
+or predictor LR override. Save a recovery checkpoint before changing a live run.
+The checkpoint records the completed batch at which representation was frozen;
+ordinary `--resume` retains that freeze without repeating the flag. Older
+checkpoints remain unfrozen. A frozen run rejects subsequent curriculum/adoption
+changes instead of implicitly unfreezing representation.
+
+Predictor training retains its visual loss and differentiates through the frozen
+decoder. Reconstruction and prediction diagnostics continue on normal training
+batches. Representation loss is absent (not zero), and redundant encoder-drift
+measurement is skipped with an explicit frozen status in the dashboard. There
+is no automatic unfreeze; use the preserved checkpoint to resume the earlier
+training regime. Freezing is not evidence that prediction quality improved.
+
 ### Mixed synthetic and public SDK training
 
 [`sequence_mixed.example.json`](sequence_mixed.example.json) combines all 71

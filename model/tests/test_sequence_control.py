@@ -16,7 +16,7 @@ import torch
 from model import checkpoint
 from model.config import NetworkConfig, TrainConfig, SequenceConfig
 from model.curriculum import CurriculumConfig
-from model.game_sequences import SequenceLearner, evaluate_sessions
+from model.game_sequences import SequenceLearner, EncodedSessions, evaluate_sessions
 from model.learning import Engine
 from model.networks import WorldModel
 from model.online_learning import OnlineRepresentation
@@ -41,6 +41,128 @@ class SequenceControlTests(unittest.TestCase):
     def controller(self, **options):
         return SequencePhaseControl(stages(), {'encoder_learning_rate_after_predictor': 3e-7},
                                     SequenceControlConfig(**options))
+
+    def test_freeze_latches_and_visual_loss_still_trains_dynamics(self):
+        e = Engine(WorldModel(NetworkConfig.small()), TrainConfig())
+        rep = OnlineRepresentation(e, 3e-5, encoder_learning_rate_after_predictor=3e-7)
+        learner = SequenceLearner(e, SequenceConfig(block_steps=2, representation_updates=1))
+        sessions = [session()]
+        fit_batch(learner, sessions, rep)
+        before = deepcopy(e.model.state_dict())
+        moments = deepcopy(rep.optimizer.state_dict())
+        control = self.controller()
+        control.phase, control.admitted_batch = 'predictor', 1
+        control.freeze_representation(5)
+        control.freeze_representation(6)
+        other = self.controller()
+        other.restore(control.snapshot())
+        other.apply(rep)
+        other.apply(rep)
+        self.assertEqual(other.representation_frozen_at_batch, 5)
+        self.assertEqual(rep.learning_rates, {'encoder': None, 'decoder': None})
+
+        # Exercise the visual term alone: a frozen decoder must transmit a real
+        # learning signal to dynamics while accumulating no parameter gradients.
+        learner.optimizer.zero_grad(set_to_none=True)
+        e.model.dynamics.requires_grad_(True)
+        terms = learner.block_loss(EncodedSessions(e, sessions), 0, 2)
+        terms[1].backward()
+        grads = [p.grad for p in e.model.dynamics.parameters() if p.grad is not None]
+        self.assertTrue(grads)
+        self.assertTrue(all(torch.isfinite(g).all() for g in grads))
+        self.assertGreater(sum(float(g.abs().sum()) for g in grads), 0.)
+        self.assertTrue(all(p.grad is None for m in (e.model.encoder, e.model.decoder) for p in m.parameters()))
+
+        probe = TrainingBatchDiagnostics(e, sessions, 8)
+        probe.start(6)
+        evaluate_sessions(e, sessions, diagnostics=probe)
+        result = fit_batch(learner, sessions, rep, training_probe=probe)
+        diagnostics, _ = probe.finish()
+        self.assertGreater(result['updates'], 0)
+        self.assertGreater(result['predictor_terms']['visual'], 0)
+        self.assertIsNone(result['reconstruction_loss'])
+        self.assertEqual((result['representation_seconds'], result['drift_seconds']), (0., 0.))
+        self.assertIsNone(diagnostics['latent_drift'])
+        self.assertEqual(diagnostics['drift_source'], 'frozen_representation')
+        self.assertIsNotNone(diagnostics['reconstruction_error'])
+        for key, value in before.items():
+            if key.startswith(('encoder.', 'decoder.')):
+                self.assertTrue(torch.equal(e.model.state_dict()[key], value), key)
+        self.assertTrue(any(not torch.equal(value, e.model.state_dict()[key])
+                            for key, value in before.items() if key.startswith('dynamics.')))
+        self.assertEqual(rep.optimizer.state_dict()['param_groups'], moments['param_groups'])
+        for key, state in moments['state'].items():
+            for name, value in state.items():
+                torch.testing.assert_close(rep.optimizer.state_dict()['state'][key][name], value, rtol=0, atol=0)
+
+    def test_freeze_validation_and_legacy_state(self):
+        c = self.controller()
+        with self.assertRaisesRegex(ValueError, 'predictor phase'):
+            c.freeze_representation(1)
+        legacy = c.snapshot()
+        legacy.pop('representation_frozen_at_batch')
+        c.restore(legacy)
+        self.assertIsNone(c.representation_frozen_at_batch)
+        c.phase, c.admitted_batch = 'predictor', 2
+        for bad in (-1, True, 1):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'completed batch'):
+                c.freeze_representation(bad)
+        c.freeze_representation(3)
+        for operation in ('extend', 'restrict'):
+            with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, 'Frozen representation'):
+                self.controller().restore(c.snapshot(), **{operation: True})
+        bad = c.snapshot() | {'representation_frozen_at_batch': True}
+        with self.assertRaisesRegex(ValueError, 'Invalid representation freeze'):
+            self.controller().restore(bad)
+        for option in ('extend', 'restrict', 'adopt_exploration', 'upgrade_predictor', 'adopt_game_weights'):
+            with self.subTest(option=option), self.assertRaisesRegex(ValueError, 'Frozen representation'):
+                restore_run({'sequence_control': c.snapshot()}, None, None, None, **{option: True})
+        c.observe(4, {'game/1': counts(drift_delta=0, drift_scale=0, drift_samples=0),
+                      'game/2': counts(drift_delta=0, drift_scale=0, drift_samples=0)})
+        self.assertTrue(all(row['eligible'] and row['passing'] and row['representation_frozen']
+                            and row['latent_drift'] is None for row in c.rows()))
+
+    def test_controlled_resume_freezes_without_resetting_training_state(self):
+        with tempfile.TemporaryDirectory() as directory, redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            path, values = config(root, [dict(source='synthetic', game='sc01-v1', levels=[1])],
+                sequence=dict(batch_games=1, session_steps=4, block_steps=2, level_steps=4, representation_updates=1),
+                sequence_control=dict(diagnostic_samples=4),
+                thresholds=dict(representation_open=1., latent_drift=1., patience=1,
+                                minimum_samples=1, minimum_changed=1))
+            values['settings']['actions'] = 64
+            path.write_text(json.dumps(values))
+            base = dict(training_config=path, output=root/'run', source=None,
+                        device='cpu', compile=False, max_batches=1)
+            for options in (dict(resume=False), dict(resume=True, predictor_learning_rate=1e-4),
+                            dict(resume=True, extend_curriculum=True)):
+                with self.subTest(options=options), self.assertRaisesRegex(ValueError, 'controlled --resume'):
+                    run(SimpleNamespace(**base, **options, freeze_representation=True))
+            run(SimpleNamespace(**base, resume=False))
+            run(SimpleNamespace(**base, resume=True))
+            before = checkpoint.load(root/'run/latest.pt')
+            self.assertEqual(before['sequence_control']['phase'], 'predictor')
+            for repeat_flag in (True, False, True):
+                run(SimpleNamespace(**base, resume=True, freeze_representation=repeat_flag))
+                after = checkpoint.load(root/'run/latest.pt')
+                self.assertEqual(after['sequence_control']['representation_frozen_at_batch'], 2)
+                self.assertEqual(after['plan'], before['plan'])
+                self.assertGreater(after['progress']['updates'], before['progress']['updates'])
+                self.assertEqual(after['predictor_optimizer']['param_groups'], before['predictor_optimizer']['param_groups'])
+                for key, value in before['weights'].items():
+                    if key.startswith(('encoder.', 'decoder.')):
+                        self.assertTrue(torch.equal(after['weights'][key], value), key)
+                for key, state in before['representation_optimizer']['state'].items():
+                    for name, value in state.items():
+                        torch.testing.assert_close(after['representation_optimizer']['state'][key][name], value, rtol=0, atol=0)
+            self.assertEqual(after['progress']['batches'], 5)
+            self.assertEqual(after['representation_state']['updates'], before['representation_state']['updates'])
+            report = json.loads((root/'run/report.json').read_text())
+            self.assertEqual(len(report['history']), 5)
+            self.assertEqual(report['phase_control']['representation_frozen_at_batch'], 2)
+            self.assertEqual(report['learning_rates']['encoder'], None)
+            self.assertEqual(report['learning_rates']['decoder'], None)
+            self.assertEqual(report['history'][-1]['diagnostics']['drift_source'], 'frozen_representation')
 
     def test_sparse_observed_levels_do_not_veto_qualified_peers(self):
         sparse_rows = (
