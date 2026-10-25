@@ -1,6 +1,8 @@
 from dataclasses import replace
+from io import StringIO
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -9,7 +11,7 @@ from model.config import NetworkConfig
 from model.data import Observation
 from model.networks import WorldModel
 from model.reconstruction_audit import (FrozenReconstructor, ReconstructionMetrics,
-                                        UniqueReservoir, collect_target, weights_digest)
+                                        UniqueReservoir, collect_target, main, weights_digest)
 from model.sequence_exploration import SequenceExplorationConfig
 
 
@@ -19,6 +21,23 @@ def observation(color=0, level=1, state='NOT_FINISHED', frames=None):
 
 
 class ReconstructionAuditTests(unittest.TestCase):
+    def test_collect_cli_accepts_64_samples(self):
+        with patch('sys.argv', ['reconstruction_audit', 'collect', '--output', 'unused',
+                                '--samples', '64']), patch('model.reconstruction_audit.collect') as collect:
+            main()
+        collect.assert_called_once()
+        self.assertEqual(collect.call_args.args[0].samples, 64)
+
+    def test_collect_cli_rejects_65_samples_before_collection(self):
+        with patch('sys.argv', ['reconstruction_audit', 'collect', '--output', 'unused',
+                                '--samples', '65']), patch('model.reconstruction_audit.collect') as collect, \
+                patch('sys.stderr', new_callable=StringIO) as stderr:
+            with self.assertRaises(SystemExit) as raised:
+                main()
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn('Invalid resource limits', stderr.getvalue())
+        collect.assert_not_called()
+
     def test_pixel_color_and_changed_errors_have_independent_denominators(self):
         actual = np.array([[0, 0, 0, 0], [0, 0, 1, 2]], dtype=np.uint8)
         predicted = actual.copy()

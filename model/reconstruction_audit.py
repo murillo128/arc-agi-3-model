@@ -404,7 +404,7 @@ def main():
     parser.add_argument('--pilot', action='store_true')
     parser.add_argument('--hold-seconds', type=int, default=0)
     args = parser.parse_args()
-    if not (1 <= args.actions <= 16384 and 1 <= args.samples <= 256 and 1 <= args.workers <= 4
+    if not (1 <= args.actions <= 16384 and 1 <= args.samples <= 64 and 1 <= args.workers <= 4
             and 1 <= args.cpu_threads <= 8 and 0 < args.timeout <= 1800
             and 0 < args.cuda_memory_fraction <= 1 and 0 <= args.hold_seconds <= 30):
         parser.error('Invalid resource limits')
