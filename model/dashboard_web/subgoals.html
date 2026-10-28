@@ -3,7 +3,8 @@
 <title>ARC · Incremental curriculum</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="subgoals.js" defer></script></head>
 <body class="subgoal-dashboard">
 <div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a><div class="run-heading"><p class="eyebrow">ARC · GOAL PLANNER → PATH PLANNER</p><h1>Learning across levels</h1></div><div class="connection"><span id="connection" role="status">Connecting…</span><small id="freshness"></small><p id="gpu-status" class="gpu-status" aria-label="Current server GPU utilization and temperature">GPU · data unavailable</p></div></header><nav class="dashboard-tabs" aria-label="Dashboard navigation"><div class="local-tabs" role="tablist" aria-label="Page sections"><button id="tab-world" role="tab" aria-controls="world" aria-selected="true">Representation & prediction</button><button id="tab-path" role="tab" aria-controls="path" aria-selected="false">Subgoals & planner</button><button id="tab-evaluation" role="tab" aria-controls="evaluation" aria-selected="false">Fixed evaluation</button><button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false">Curriculum</button></div><a id="training-nav" href="index.html">Live training</a><a href="optimization.html">Optimization</a></nav></div>
-<main>
+<main id="history-content">
+<p id="archive-context" class="archive-context muted" hidden></p>
 <div class="run-details page-context"><p id="run-info" class="muted">One run · one game</p><p id="progress" class="run-context" role="status"></p></div>
 <p class="chart-help">Thin line: EMA (α = 0.1). Click a legend to mark its latest actual value; click again to remove the guide.</p>
 

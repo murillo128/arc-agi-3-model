@@ -1,6 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const historicalView = globalThis.location?.pathname?.endsWith('/history.html') === true;
+const embeddedSection = historicalView ? document.body?.dataset?.historySection : null;
 const reportApi = historicalView ? 'api/history/' : 'api/';
 const finite = x => typeof x === 'number' && Number.isFinite(x);
 const fmt = (x, n=0) => finite(x) ? x.toLocaleString('en-US', {maximumFractionDigits:n}) : '—';
@@ -560,6 +561,12 @@ function render(report) {
   $('freshness').textContent=`Last write ${fmt(report.age_seconds)} s ago · polling every 2 s`;
   const initialization=c.initialization==='random'?' · Initialized from scratch':c.initialization==='checkpoint'?' · Pretrained weights':'';
   $('run-info').textContent=`${p.game||c.game||'One configuration'} · seed ${fmt(c.seed)} · ${c.training_plan?'configured curriculum':'cumulative curriculum'}${initialization}`;
+  if(embeddedSection){
+    $('archive-context').hidden=false;
+    $('archive-context').textContent=report.status==='waiting'
+      ?`Archived data unavailable. ${report.message||'Waiting for the earlier report.'}`
+      :`Previous run · ${$('run-info').textContent} · ${fmt(p.actions)} real actions · read only`;
+  }
   const curriculum=report.curriculum, limits=curriculum?.thresholds||{};
   const pct=value=>finite(value)?`${fmt(value*100,2)} %`:'—';
   $('curriculum-panel').hidden=!curriculum;
@@ -816,5 +823,15 @@ phaseButton.addEventListener('click',()=>advanceCurriculum('phase'));
 levelButton.addEventListener('click',()=>advanceCurriculum('level'));
 async function poll(){try{const response=await fetch(reportApi+'state',{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw Error('HTTP '+response.status);const data=await response.json();gpuStatus(data.gpu);if(!data.subgoals)throw Error('Waiting for subgoal data');render(data.subgoals);if(data.curriculum_control?.pending||data.curriculum_control?.result)controlError='';renderControls(data.curriculum_control);await refreshTrajectory(data.subgoals.planner_trajectory);}catch(error){gpuStatus(null);renderControls(null);$('connection').textContent='Disconnected · '+error.message;$('connection').className='warn';}finally{setTimeout(poll,2000);}}
 const initialTab=globalThis.location?.hash?.slice(1);
-selectTab(tabs.includes(initialTab)?initialTab:'world');
+selectTab(tabs.includes(embeddedSection)?embeddedSection:tabs.includes(initialTab)?initialTab:'world');
+if(embeddedSection&&globalThis.ResizeObserver){
+  let previousHeight=0;
+  const observer=new ResizeObserver(()=>{
+    const height=Math.ceil($('history-content').getBoundingClientRect().height)+16;
+    if(height===previousHeight)return;
+    previousHeight=height;
+    globalThis.parent.postMessage({type:'arc-archive-height',section:embeddedSection,height},globalThis.location.origin);
+  });
+  observer.observe($('history-content'));
+}
 poll();

@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from .curriculum_control import CurriculumControl
 from .optimization_control import OptimizationControl
@@ -786,8 +786,28 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
             elif route == '/api/history/trajectory' and history_subgoal_report:
                 self.send_json(200, {'trajectory': trajectory_snapshot(history_subgoal_report)})
                 return
-            elif route == '/history.html' and history_subgoal_report:
-                data = (ASSETS / 'subgoals.html').read_bytes()
+            elif route == '/history.html' and (sequence_report or history_subgoal_report):
+                query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                if sequence_report and 'section' not in query:
+                    # A Location without a fragment retains old #world/#path bookmarks.
+                    self.send_response(302)
+                    self.send_header('Location', 'index.html?archive=1')
+                    self.send_header('Content-Length', '0')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    return
+                section = query.get('section', [None])
+                if 'section' in query and (len(section) != 1 or section[0] not in ('world', 'path', 'evaluation', 'curriculum')):
+                    self.send_error(400, 'Unknown archived section')
+                    return
+                if not history_subgoal_report:
+                    self.send_error(404, 'No earlier run configured')
+                    return
+                html = (ASSETS / 'subgoals.html').read_text()
+                if section[0]:
+                    html = html.replace('<body class="subgoal-dashboard">',
+                        f'<body class="subgoal-dashboard planner-history-embedded" data-history-section="{section[0]}">')
+                data = html.encode()
                 mime = 'text/html; charset=utf-8'
             elif route == '/api/trajectory' and subgoal_report:
                 data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
@@ -800,6 +820,12 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                 if sequence_report and name in ('index.html', 'campaign.html'):
                     name = 'sequences.html'
                 data = (ASSETS / name).read_bytes()
+                if name == 'optimization.html' and not sequence_report:
+                    html = data.decode()
+                    start, end = html.index('<nav '), html.index('</nav>') + len('</nav>')
+                    data = (html[:start] + '<nav class="dashboard-tabs" aria-label="Dashboard navigation">'
+                        '<a href="index.html">Training</a><a href="optimization.html" aria-current="page">Optimization</a>'
+                        '</nav>' + html[end:]).encode()
                 mime = {'html': 'text/html', 'css': 'text/css', 'js': 'text/javascript'}[name.rsplit('.', 1)[1]] + '; charset=utf-8'
             else:
                 self.send_error(404)

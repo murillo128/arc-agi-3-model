@@ -402,10 +402,22 @@ body .metrics small { line-height: 1.6; }
 
 /* Training monitoring shares the same cards and hierarchy as optimization. */
 .section-card { margin-top: 20px; }
-.planner-availability { padding: 30px; max-width: 960px; }
-.history-action { display: inline-flex; align-items: center; gap: 24px; padding: 12px 18px; margin: 4px 0 18px; border: 1px solid var(--border); border-radius: 24px; background: #20312d; text-decoration: none; }
-.history-action:hover { border-color: var(--mint); }
-.history-action:focus-visible { outline: 2px solid var(--mint); outline-offset: 4px; }
+.planner-intro { margin-bottom: 20px; }
+.planner-intro p { line-height: 1.8; }
+.planner-status { color: var(--mint); font-size: 12px; margin-bottom: 0; }
+.archive-section { margin-top: 24px; }
+.archive-disclosure { border: 1px solid var(--border); border-radius: 12px; padding: 16px 20px; background: var(--inset); }
+.archive-disclosure > summary { cursor: pointer; color: var(--text); font-weight: 600; line-height: 1.8; }
+.archive-disclosure > summary:focus-visible { outline: 2px solid var(--mint); outline-offset: 5px; border-radius: 3px; }
+.archive-badge { display: inline-block; margin-left: 10px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 12px; font-size: 10px; font-weight: 500; color: var(--muted); vertical-align: middle; }
+.archive-disclosure > p, .archive-context, .archive-empty { font-size: 12px; line-height: 1.8; }
+.archive-content { min-width: 0; }
+.archive-frame { display: block; width: 100%; height: 320px; min-height: 240px; border: 0; }
+body.planner-history-embedded { margin: 0; padding: 8px 0; background: transparent; }
+.planner-history-embedded .dashboard-header { display: none; }
+.planner-history-embedded main { max-width: none; margin: 0; padding: 0; }
+.planner-history-embedded main > :not([role="tabpanel"]):not(.archive-context) { display: none; }
+.planner-history-embedded .curriculum-controls { display: none; }
 .evaluation-history { max-height: 620px; overflow: auto; }
 .evaluation-history thead { position: sticky; top: 0; background: var(--surface); }
 .prediction-preview select { min-width: 145px; }
@@ -481,6 +493,12 @@ body .compact-metrics small { display: block; font-size: 10px; line-height: 1.5;
   font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
 }
 .dashboard-tabs > a:first-of-type { margin-left: auto; }
+.sequence-dashboard .dashboard-tabs > a:first-of-type, .optimization-dashboard .dashboard-tabs > a:first-of-type { margin-left: 0; }
+.optimization-views { overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+.optimization-views button { flex: 0 0 auto; white-space: nowrap; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 13px 4px; margin: 0; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+.optimization-views button[aria-selected="true"] { color: var(--mint); border-bottom-color: var(--mint); }
+.optimization-views button:hover { color: var(--text); background: #192724; }
+.optimization-views button:focus-visible { outline: 2px solid var(--mint); outline-offset: -3px; }
 .dashboard-tabs button[aria-selected="true"], .dashboard-tabs a[aria-current="page"] { color: var(--mint); border-bottom-color: var(--mint); }
 .dashboard-tabs a:hover, .dashboard-tabs button:hover { color: var(--text); background: #192724; }
 .dashboard-tabs :focus-visible { outline: 2px solid var(--mint); outline-offset: -3px; }
