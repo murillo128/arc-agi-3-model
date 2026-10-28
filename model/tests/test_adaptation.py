@@ -36,12 +36,12 @@ def observed(column=1, *, level=0, state='NOT_FINISHED', actions=(4,)):
 
 
 def config(**kwargs):
-    return replace(AdaptationConfig(), **(dict(exploration=1., representation_steps=1,
+    return replace(AdaptationConfig(), **(dict(stopping='steps', exploration=1., representation_steps=1,
                    per_observation_seconds=30., total_seconds=300.) | kwargs))
 
 
 def no_learning(**kwargs):
-    return replace(AdaptationConfig(), exploration=1., representation_steps=0,
+    return replace(AdaptationConfig(), stopping='steps', exploration=1., representation_steps=0,
                    predictor_steps=0, path_steps=0, goal_steps=0, **kwargs)
 
 
@@ -141,14 +141,16 @@ class AdaptationTests(unittest.TestCase):
         self.assertEqual(policy.diagnostics['predictive_pairs'], 0)
         self.assertEqual(policy._hindsight(), [])
         self.assertIsNone(policy.goal)
-        # Boundary animations are reduced to their final frame for memory, but
-        # the next public choose still accepts the complete returned observation.
+        # Preserve every raw frame, while memory and representation see only
+        # the new scene, not the previous level's winning animation.
         multi = observed(3, level=2)
         multi = replace(multi, frames=np.concatenate((observed().frames, multi.frames)))
         policy.choose_action(observed(2, level=1))
         policy.confirm_result(multi)
         policy.choose_action(multi)
-        self.assertEqual(len(policy.history[-1].observation.frames), 1)
+        np.testing.assert_array_equal(policy.history[-1].observation.frames, multi.frames)
+        self.assertEqual(len(policy.history[-1].scene_observation.frames), 1)
+        self.assertEqual(len(policy._examples('representation')[-1].frames), 1)
         policy.cancel_pending()
         self.assertEqual(policy.diagnostics['boundary_skips'], 2)
 
@@ -288,7 +290,7 @@ class AdaptationTests(unittest.TestCase):
         _, error = color_macro(logits, target)
         self.assertEqual(float(error), .5)
 
-    def test_config_rejects_unbounded_or_nonfinite_values(self):
+    def test_config_rejects_invalid_or_nonfinite_values(self):
         for kwargs in ({'replay_size': 0}, {'minibatch': 5}, {'per_observation_seconds': float('nan')},
                        {'exploration': 0}, {'predictor_steps': -1}, {'allow_undo': 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):

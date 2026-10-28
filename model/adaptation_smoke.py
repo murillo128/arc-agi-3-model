@@ -104,9 +104,9 @@ def _config(config):
     from .adaptation import AdaptationConfig
 
     if config is None:
-        return AdaptationConfig()
+        return AdaptationConfig(stopping='steps')
     if isinstance(config, dict):
-        return AdaptationConfig(**config)
+        return AdaptationConfig(**({'stopping': 'steps'} | config))
     if not isinstance(config, AdaptationConfig):
         raise TypeError('config must be an AdaptationConfig or configuration dictionary')
     return config

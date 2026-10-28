@@ -33,11 +33,7 @@ from .metrics import delta_counts
 GAMES = ('ar25-0c556536', 'cn04-2fe56bfb', 'lf52-271a04aa',
          'tn36-ef4dde99', 'vc33-5430563c')
 CHECKPOINT_SHA256 = '4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7'
-CONFIG = AdaptationConfig(rank=4, alpha=4., learning_rate=1e-4, replay_size=32,
-    minibatch=4, representation_steps=2, predictor_steps=1, path_steps=1,
-    goal_steps=1, reconstruction_threshold=.10, per_observation_seconds=10.,
-    total_seconds=300., exploration=.25, horizon=2, beam=4, clicks=8,
-    goal_lifetime=16, allow_undo=False)
+CONFIG = AdaptationConfig()
 COUNT_KEYS = ('wrong', 'union', 'changed', 'missed', 'invented', 'wrong_color',
               'correct', 'samples', 'unchanged_samples')
 
@@ -119,11 +115,11 @@ def group_digests(bank):
             enumerate(bank.parameters((group,))))[0] for group in bank.groups}
 
 
-def run_game(wrapper, policy, *, started, emit, seconds=900.,
+def run_game(wrapper, policy, *, started, emit, seconds=None,
              predict=predict_action, reconstruct=reconstruction):
     """One SDK lifetime; RESET never replaces the policy. Flush every real return.
 
-    The wall deadline includes initialization, decisions, diagnostics, SDK and
+    An optional wall deadline includes initialization, decisions, diagnostics, SDK and
     adaptation. Checks before selection and immediately before SDK.step avoid
     beginning another action after expiry. A running operation is not preempted.
     """
@@ -137,11 +133,11 @@ def run_game(wrapper, policy, *, started, emit, seconds=900.,
         initial_reconstruction = reconstruct(policy, observation)
         emit(dict(event='initial', levels_completed=observation.levels_completed,
                   total_levels=observation.win_levels, reconstruction=initial_reconstruction))
-        while requests < policy.max_actions:
+        while policy.max_actions is None or requests < policy.max_actions:
             if observation.state == 'WIN':
                 reason = 'win'
                 break
-            if time.monotonic() - started >= seconds:
+            if seconds is not None and time.monotonic() - started >= seconds:
                 reason = 'wall_timeout'
                 break
             before_diagnostics = deepcopy(policy.diagnostics)
@@ -156,7 +152,7 @@ def run_game(wrapper, policy, *, started, emit, seconds=900.,
             decision_seconds = time.monotonic() - decision_started
             selection_adaptation = (policy.diagnostics['adaptation_seconds'] -
                                     before_diagnostics['adaptation_seconds'])
-            if time.monotonic() - started >= seconds:
+            if seconds is not None and time.monotonic() - started >= seconds:
                 policy.cancel_pending()
                 reason = 'wall_timeout'
                 emit(dict(event='cancelled_at_deadline', decision_seconds=decision_seconds,
@@ -207,8 +203,14 @@ def run_game(wrapper, policy, *, started, emit, seconds=900.,
             confirm_started = time.monotonic()
             # The same confirmation boundary as the Kaggle agent, including WIN,
             # GAME_OVER, level changes and the last budgeted action.
-            if not policy.confirm_result(result, action=action):
-                raise RuntimeError('SDK result was not confirmed exactly once')
+            admitted_before = policy.actions_taken
+            try:
+                if not policy.confirm_result(result, action=action):
+                    raise RuntimeError('SDK result was not confirmed exactly once')
+            finally:
+                # Admission precedes SFT. Cancellation during SFT must retain
+                # the already-returned SDK transition as confirmed, exactly once.
+                row['confirmed'] = policy.actions_taken == admitted_before + 1
             row.update(confirmed=True, confirm_wall_seconds=time.monotonic() - confirm_started,
                 result_adaptation_seconds=policy.diagnostics['adaptation_seconds'] - before_adaptation,
                 elapsed_seconds=time.monotonic() - started, diagnostics=deepcopy(policy.diagnostics))
@@ -217,12 +219,16 @@ def run_game(wrapper, policy, *, started, emit, seconds=900.,
             if observation.state == 'WIN':
                 reason = 'win'
                 break
+    except (KeyboardInterrupt, InterruptedError):
+        reason = 'cancelled'
+        policy.cancel_pending()
+        emit(dict(event='cancelled'))
     except Exception as exc:
         reason, error = 'error', f'{type(exc).__name__}: {exc}'
         logging.exception('Game failed; retaining partial results')
         emit(dict(event='error', error=error))
     elapsed = time.monotonic() - started
-    if reason == 'action_budget' and elapsed >= seconds:
+    if reason == 'action_budget' and seconds is not None and elapsed >= seconds:
         reason = 'wall_timeout'
     eligible = [row for row in rows if row.get('prediction_counts') is not None]
     level_actions = {}
@@ -240,18 +246,23 @@ def run_game(wrapper, policy, *, started, emit, seconds=900.,
     adaptation_calls = [r[key] for r in rows for key in
         ('selection_adaptation_seconds', 'result_adaptation_seconds') if key in r and r[key] > 0]
     updates = policy.diagnostics['updates']
-    return dict(stop_reason=reason, error=error, truncated=reason in ('action_budget', 'wall_timeout', 'error'),
+    config = getattr(policy, 'config', CONFIG)
+    return dict(stop_reason=reason, error=error, truncated=reason != 'win',
         requests=requests, actions=returned, confirmations=confirmations, resets=resets,
         sdk_initializations=1, levels_completed=max([0] + [r.get('levels_completed', 0) for r in rows]),
         total_levels=observation.win_levels if observation is not None else None,
-        win=reason == 'win', elapsed_seconds=elapsed, wall_overrun_seconds=max(0., elapsed-seconds),
+        win=reason == 'win', elapsed_seconds=elapsed,
+        wall_overrun_seconds=max(0., elapsed-seconds) if seconds is not None else 0.,
         actions_by_level=level_actions, prediction=aggregate_counts(r['prediction_counts'] for r in eligible),
         first=window(eligible[:10]), last=window(eligible[-10:]),
         window_overlap=max(0, min(10, len(eligible))*2-len(eligible)),
         boundary_prediction=aggregate_counts(r['boundary_counts'] for r in rows if 'boundary_counts' in r),
         adaptation_limits=dict(max_observation_seconds=max(adaptation_calls, default=0.),
-            observations_over_10_seconds=sum(s > 10. for s in adaptation_calls),
-            total_overrun_seconds=max(0., policy.diagnostics['adaptation_seconds']-300.)),
+            per_observation_seconds=config.per_observation_seconds, total_seconds=config.total_seconds,
+            observations_over_limit=(sum(s > config.per_observation_seconds for s in adaptation_calls)
+                                     if config.per_observation_seconds is not None else 0),
+            total_overrun_seconds=(max(0., policy.diagnostics['adaptation_seconds']-config.total_seconds)
+                                   if config.total_seconds is not None else 0.)),
         optimizer_steps_by_module=dict(encoder=updates.get('representation', 0),
             decoder=updates.get('representation', 0), predictor=updates.get('predictor', 0),
             path=updates.get('path', 0), goal=updates.get('goal', 0)),
@@ -316,13 +327,22 @@ def main():
     parser.add_argument('--environments-dir', default='environment_files')
     parser.add_argument('--mode', choices=('normal', 'offline'), default='normal')
     parser.add_argument('--threads', type=int, default=2)
+    parser.add_argument('--max-actions', type=int, help='Optional cap; default: until WIN or external stop')
+    parser.add_argument('--max-game-seconds', type=float, help='Optional wall cap; default: none')
+    parser.add_argument('--adaptation-config', type=Path, help='JSON AdaptationConfig overrides')
     args = parser.parse_args()
     if not 1 <= args.threads <= 16:
         parser.error('--threads must be in 1..16')
     if tuple(load_split(args.split).evaluation) != GAMES:
         parser.error('Split differs from the five authorized public held-out games')
-    if asdict(CONFIG) != asdict(AdaptationConfig()):
-        parser.error('Adaptation defaults changed; document discrepancy before executing')
+    if args.max_actions is not None and args.max_actions <= 0:
+        parser.error('--max-actions must be positive')
+    if args.max_game_seconds is not None and (not np.isfinite(args.max_game_seconds) or args.max_game_seconds <= 0):
+        parser.error('--max-game-seconds must be finite and positive')
+    try:
+        config = AdaptationConfig(**(json.loads(args.adaptation_config.read_text()) if args.adaptation_config else {}))
+    except (OSError, ValueError, TypeError) as exc:
+        parser.error(str(exc))
     if args.output_dir.exists():
         parser.error('Output directory already exists; refusing overwrite/restart')
     if not torch.cuda.is_available():
@@ -337,8 +357,8 @@ def main():
     report = dict(format='arc3-online-lora-experiment-v1', manual=True,
         commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         command=[sys.executable, '-m', 'model.online_lora_experiment', *sys.argv[1:]],
-        sdk=version('arc-agi'), seed=42, policy_seed='42:<game_id>', max_actions=80,
-        max_game_seconds=900, config=asdict(CONFIG), games=[], status='preparing',
+        sdk=version('arc-agi'), seed=42, policy_seed='42:<game_id>', max_actions=args.max_actions,
+        max_game_seconds=args.max_game_seconds, config=asdict(config), games=[], status='preparing',
         checkpoint=dict(expected_sha256=CHECKPOINT_SHA256, dataset='sergiogarciamurillo/arc3-lora-smoke-base',
                         dataset_version=1, source_batches=8246), threads=args.threads)
     arcade = None
@@ -349,7 +369,7 @@ def main():
             raise ValueError('Portable checkpoint SHA-256 does not match the authorized batch-8246 asset')
         # An unused bank retains the shared base and checks isolation, without
         # running a second policy or producing a frozen gameplay comparison.
-        sentinel = load(args.checkpoint, device='cuda:0', config=CONFIG, max_actions=80, seed='isolation')
+        sentinel = load(args.checkpoint, device='cuda:0', config=config, max_actions=args.max_actions, seed='isolation')
         runtime = sentinel.runtime
         if runtime.metadata['source_batches'] != 8246:
             raise ValueError('Checkpoint source batch mismatch')
@@ -371,7 +391,7 @@ def main():
             game = dict(game=game_id, stop_reason='error')
             policy = None
             try:
-                policy = load(args.checkpoint, device='cuda:0', config=CONFIG, max_actions=80, seed=f'42:{game_id}')
+                policy = load(args.checkpoint, device='cuda:0', config=config, max_actions=args.max_actions, seed=f'42:{game_id}')
                 pristine = (not policy.history and not policy.path_labels and policy.state is None
                     and policy.goal is None and policy.actions_taken == 0
                     and policy.observation is None and policy.pending_action is None
@@ -393,7 +413,8 @@ def main():
                                 action=event['action_number'], levels=event['levels_completed'],
                                 elapsed=round(event['elapsed_seconds'], 2),
                                 adaptation=round(event['diagnostics']['adaptation_seconds'], 2))), flush=True)
-                    game.update(run_game(wrapper, policy, started=game_started, emit=emit))
+                    game.update(run_game(wrapper, policy, started=game_started, emit=emit,
+                                         seconds=args.max_game_seconds))
                 game.update(fresh_private_state=pristine, adapter_sha256_before=adapter_before,
                             adapter_sha256_after=bank_digest(policy.bank), adapter_bytes=policy.bank.bytes,
                             adapter_groups_changed={k: v != groups_before[k]
@@ -420,8 +441,11 @@ def main():
                 actions=game.get('actions'), levels=game.get('levels_completed'), reason=game['stop_reason'])), flush=True)
             if not all(game[key] for key in ('base_immutable', 'inactive_bank_unchanged', 'base_frozen')):
                 raise RuntimeError('Integrity failure; remaining games must not run')
+            if game['stop_reason'] == 'cancelled':
+                break
             del policy
-        report['status'] = 'finished_with_errors' if any(g['stop_reason'] == 'error' for g in report['games']) else 'finished'
+        report['status'] = ('cancelled' if any(g['stop_reason'] == 'cancelled' for g in report['games']) else
+            'finished_with_errors' if any(g['stop_reason'] == 'error' for g in report['games']) else 'finished')
     except BaseException as exc:
         report.update(status='failed', error=f'{type(exc).__name__}: {exc}')
         logging.exception('Experiment failed; retaining partial report')

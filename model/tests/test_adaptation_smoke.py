@@ -105,7 +105,7 @@ class AdaptationSmokeTests(unittest.TestCase):
     def test_public_sdk_smoke_uses_level_one_without_teacher(self):
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = portable_fixture(Path(directory))
-            config = AdaptationConfig(representation_steps=1, per_observation_seconds=30.,
+            config = AdaptationConfig(stopping='steps', representation_steps=1, per_observation_seconds=30.,
                                       total_seconds=120., reconstruction_threshold=0.,
                                       horizon=1, beam=1, clicks=2)
             # The smoke must never import the trainer's privileged collection API.

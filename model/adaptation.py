@@ -7,7 +7,7 @@ at scene boundaries, and uses the current game's current adapters throughout.
 """
 from collections import Counter, deque
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import math
 from pathlib import Path
@@ -21,6 +21,8 @@ import torch
 from torch.nn import functional as F
 
 from .adaptation_heads import goal_loss, path_loss, matches
+from .adaptation_convergence import (GROUPS, delta_metrics, goal_metrics, path_metrics,
+                                    fit, fixed_hindsight, recency_weights, weighted_mean)
 from .data import Action, Observation
 from .goal_observation import compose_goal_observation
 from .learning import State, visual_delta_loss
@@ -34,15 +36,25 @@ class AdaptationConfig:
     rank: int = 4
     alpha: float = 4.
     learning_rate: float = 1e-4
-    replay_size: int = 32
+    replay_size: int | None = None
+    history_half_life: float = 32.
+    history_weight_floor: float = .25
     minibatch: int = 4
+    stopping: str = 'convergence'
+    plateau_patience: int = 8
+    plateau_min_relative_improvement: float = .001
     representation_steps: int = 2
     predictor_steps: int = 1
     path_steps: int = 1
     goal_steps: int = 1
     reconstruction_threshold: float = .10
-    per_observation_seconds: float = 10.
-    total_seconds: float = 300.
+    delta_threshold: float = .10
+    goal_color_threshold: float = .10
+    goal_mask_threshold: float = .10
+    path_reachability_threshold: float = .10
+    path_cost_threshold: float = .10
+    per_observation_seconds: float | None = None
+    total_seconds: float | None = None
     exploration: float = .25
     goal_lifetime: int = 16
     horizon: int = 2
@@ -60,20 +72,31 @@ class AdaptationConfig:
             ('rank', 1, 64), ('replay_size', 1, 256), ('minibatch', 1, 4),
             ('representation_steps', 0, 64), ('predictor_steps', 0, 64),
             ('path_steps', 0, 64), ('goal_steps', 0, 64),
+            ('plateau_patience', 1, 1000),
             ('goal_lifetime', 1, 256), ('numerical_failure_limit', 1, 8)):
             value = getattr(self, key)
+            if key == 'replay_size' and value is None:
+                continue
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f'Invalid adaptation {key}')
-        for key in ('alpha', 'learning_rate', 'per_observation_seconds', 'total_seconds'):
+        for key in ('alpha', 'learning_rate', 'history_half_life', 'per_observation_seconds', 'total_seconds'):
             value = getattr(self, key)
+            if key.endswith('seconds') and value is None:
+                continue
             if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f'Invalid adaptation {key}')
-        for key, low in (('exploration', .000001), ('reconstruction_threshold', 0.)):
+        for key, low in (('exploration', .000001), ('reconstruction_threshold', 0.),
+                         ('history_weight_floor', .000001),
+                         ('delta_threshold', 0.), ('goal_color_threshold', 0.),
+                         ('goal_mask_threshold', 0.), ('path_reachability_threshold', 0.),
+                         ('path_cost_threshold', 0.), ('plateau_min_relative_improvement', .000001)):
             value = getattr(self, key)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= 1:
                 raise ValueError(f'Invalid adaptation {key}')
         if type(self.allow_undo) is not bool:
             raise ValueError('allow_undo must be boolean')
+        if self.stopping not in ('convergence', 'steps'):
+            raise ValueError('stopping must be convergence or steps')
         PathConfig(horizon=self.horizon, beam=self.beam, clicks=self.clicks)
 
 
@@ -131,7 +154,7 @@ _runtimes = weakref.WeakValueDictionary()
 _runtime_lock = threading.RLock()
 
 
-def load(path, *, device='cpu', config=None, max_actions=80, seed=0):
+def load(path, *, device='cpu', config=None, max_actions=None, seed=0):
     """Load once per file identity/device, only when an adaptive game is made."""
     from .adaptation_checkpoint import load as load_base
     path = Path(path).resolve(strict=True)
@@ -151,6 +174,12 @@ class Record:
     observation: Observation
     action: Action | None = None  # incoming confirmed action
     boundary: bool = False
+    scene_observation: Observation = field(init=False, repr=False)
+
+    def __post_init__(self):
+        # Retain every SDK frame, but do not encode an old level's animation
+        # as context for the new scene. This view shares the raw CPU pixels.
+        self.scene_observation = self.observation.level_initial() if self.boundary else self.observation
 
 
 class _VisibleCandidates:
@@ -168,23 +197,24 @@ class _VisibleCandidates:
 
 
 class AdaptivePolicy:
-    def __init__(self, runtime, config=AdaptationConfig(), *, max_actions=80, seed=0):
-        if type(max_actions) is not int or max_actions <= 0:
-            raise ValueError('max_actions must be positive')
+    def __init__(self, runtime, config=AdaptationConfig(), *, max_actions=None, seed=0):
+        if max_actions is not None and (type(max_actions) is not int or max_actions <= 0):
+            raise ValueError('max_actions must be positive or None')
         self.runtime, self.config, self.max_actions = runtime, config, max_actions
         self.rng = random.Random(seed)
         bank_seed = int.from_bytes(hashlib.sha256(str(seed).encode()).digest()[:8], 'little') % (2**63)
         self.bank = runtime.router.new_bank(rank=config.rank, alpha=config.alpha, seed=bank_seed,
                                             learning_rate=config.learning_rate)
-        self.history = deque(maxlen=config.replay_size + 1)
+        self.history = deque(maxlen=None if config.replay_size is None else config.replay_size + 1)
         self.path_labels = deque(maxlen=config.replay_size)
         self.pending_action = self.observation = self.state = self.goal = None
         self.actions_taken = 0
         self._lock = threading.RLock()
+        self._cancelled = threading.Event()
         self._candidates = _VisibleCandidates()
         self.diagnostics = dict(observations=0, confirmed_transitions=0, predictive_pairs=0,
             boundary_skips=0, updates=dict.fromkeys(('representation', 'predictor', 'path', 'goal'), 0),
-            losses={}, adaptation_seconds=0., numerical_failures=0, budget_stops=0,
+            losses={}, convergence={}, adaptation_seconds=0., numerical_failures=0, budget_stops=0,
             skipped=Counter(), goal_outcomes=Counter(), native_outcomes=Counter(), masks=0)
 
     def _filtered(self, obs):
@@ -194,7 +224,9 @@ class AdaptivePolicy:
     def choose_action(self, observation):
         obs = public_observation(observation)
         with self._lock:
-            if self.actions_taken >= self.max_actions:
+            if self._cancelled.is_set():
+                raise InterruptedError('Game adaptation cancelled')
+            if self.max_actions is not None and self.actions_taken >= self.max_actions:
                 raise RuntimeError('Action budget exhausted')
             if self.pending_action is not None:
                 if not same_observation(obs, self.observation):
@@ -204,6 +236,8 @@ class AdaptivePolicy:
                 self._admit(obs)
             elif not same_observation(obs, self.observation):
                 raise ValueError('New observations require confirm_result, not choose_action')
+            if self._cancelled.is_set():
+                raise InterruptedError('Game adaptation cancelled')
             if obs.state == 'WIN':
                 raise RuntimeError('No action after WIN')
             if obs.state in ('NOT_PLAYED', 'GAME_OVER'):
@@ -212,7 +246,7 @@ class AdaptivePolicy:
                 legal = self._filtered(obs)
                 with self.runtime.router.activate(self.bank):
                     try:
-                        states = self._states()
+                        states = self._states(numbers={self.history[-1].number})
                         state = states[self.history[-1].number]
                         self.state = State(None if state.z is None else state.z.cpu(), state.h.cpu(), state.geometry)
                         action = self._plan(state, legal)
@@ -225,6 +259,10 @@ class AdaptivePolicy:
     def cancel_pending(self):
         with self._lock:
             self.pending_action = None
+
+    def request_stop(self):
+        """Cooperative cancellation, including from another thread during SFT."""
+        self._cancelled.set()
 
     def confirm_result(self, observation, action=None):
         obs = public_observation(observation)
@@ -253,39 +291,49 @@ class AdaptivePolicy:
 
     def _admit(self, obs, action=None, boundary=False):
         number = self.diagnostics['observations']
-        self.history.append(Record(number, obs.level_initial() if boundary else obs, action, boundary))
+        self.history.append(Record(number, obs, action, boundary))
         self.observation = obs
         self.diagnostics['observations'] += 1
-        first = self.history[0].number
-        self.path_labels = deque((row for row in self.path_labels if row['start'] >= first),
-                                 maxlen=self.config.replay_size)
-        if self.goal is not None and self.goal['start'] < first:
-            self.diagnostics['goal_outcomes']['censored'] += 1
-            self.goal = None
+        if self.config.replay_size is not None:
+            first = self.history[0].number
+            self.path_labels = deque((row for row in self.path_labels if row['start'] >= first),
+                                     maxlen=self.config.replay_size)
+            if self.goal is not None and self.goal['start'] < first:
+                self.diagnostics['goal_outcomes']['censored'] += 1
+                self.goal = None
         with self.runtime.router.activate(self.bank):
             self._adapt()
 
     @torch.no_grad()
-    def _states(self):
+    def _states(self, *, cpu=False, numbers=None):
         engine = self.runtime.engine
         result = {}
+        last = max(numbers) if numbers else None
         h = torch.zeros(1, engine.model.config.memory, device=engine.device)
         previous = None
         with engine.autocast():
             for record in self.history:
-                z = engine.encode([record.observation])[0]
+                if self._cancelled.is_set():
+                    raise InterruptedError('Game adaptation cancelled')
+                z = engine.encode([record.scene_observation])[0]
                 if record.boundary:
                     if z is not None:
                         h, _ = engine.advance(z[None], h, engine.actions([Action(0)]))
                 elif previous is not None and previous.z is not None and record.action is not None:
                     h, _ = engine.advance(previous.z[None], h, engine.actions([record.action]))
                 state = State(z, h.float(), None if z is None else record.observation.final.shape)
-                result[record.number] = state
+                if numbers is None or record.number in numbers:
+                    result[record.number] = (State(None if z is None else z.cpu(), state.h.cpu(), state.geometry)
+                                             if cpu else state)
                 previous = state
+                if last is not None and record.number >= last:
+                    break
         return result
 
-    def _hindsight(self):
+    def _hindsight(self, *, fixed=False):
         rows = list(self.history)
+        if fixed:
+            return fixed_hindsight(rows)
         labels = []
         for end in range(1, len(rows)):
             after = rows[end].observation
@@ -323,7 +371,8 @@ class AdaptivePolicy:
         self.diagnostics['goal_outcomes'][reason] += 1
         if reason != 'censored':
             self.path_labels.append(dict(start=goal['start'], frame=goal['frame'], mask=goal['mask'],
-                success=success, distance=distance, budget=goal['budget']))
+                end=self.diagnostics['observations'], success=success,
+                distance=distance, budget=goal['budget']))
         self.goal = None
 
     def _plan(self, state, obs):
@@ -339,7 +388,8 @@ class AdaptivePolicy:
             if mask.any() and not matches(obs.final, frame, mask):
                 self.goal = dict(frame=frame, mask=mask, start=self.history[-1].number,
                     created_action=self.actions_taken,
-                    budget=min(self.config.goal_lifetime, self.max_actions-self.actions_taken))
+                    budget=(self.config.goal_lifetime if self.max_actions is None else
+                            min(self.config.goal_lifetime, self.max_actions-self.actions_taken)))
         if self.goal is not None and self.rng.random() >= self.config.exploration:
             planner = PathPlanner(self.runtime.engine, self.runtime.path,
                 PathConfig(horizon=self.config.horizon, beam=self.config.beam, clicks=self.config.clicks),
@@ -357,16 +407,30 @@ class AdaptivePolicy:
     def _adapt(self):
         start = time.monotonic()
         elapsed = self.diagnostics['adaptation_seconds']
-        deadline = start + min(self.config.per_observation_seconds, self.config.total_seconds - elapsed)
+        limits = [v for v in (self.config.per_observation_seconds,
+                  None if self.config.total_seconds is None else self.config.total_seconds - elapsed)
+                  if v is not None]
+        deadline = start + min(limits) if limits else None
+        self.diagnostics['convergence'] = {}
         if self.diagnostics['numerical_failures'] >= self.config.numerical_failure_limit:
             self.diagnostics['skipped']['learning_disabled'] += 1
+            if self.config.stopping == 'convergence':
+                self.diagnostics['convergence'] = {name: dict(reason='learning_disabled',
+                    steps=0, threshold_met=False) for name in GROUPS}
             return
         try:
-            for name, groups in (('representation', ('encoder', 'decoder')), ('predictor', ('predictor',)),
-                                 ('path', ('path',)), ('goal', ('goal',))):
+            for name, groups in GROUPS.items():
+                if self.config.stopping == 'convergence':
+                    if getattr(self.config, name + '_steps') == 0:
+                        self.diagnostics['convergence'][name] = dict(reason='disabled', steps=0, threshold_met=False)
+                        continue
+                    fit(self, name, deadline)
+                    if self.diagnostics['convergence'][name]['reason'] in ('budget', 'cancelled'):
+                        return
+                    continue
                 for _ in range(getattr(self.config, name + '_steps')):
-                    if time.monotonic() >= deadline:
-                        self.diagnostics['budget_stops'] += 1
+                    if reason := self._stop_reason(deadline):
+                        self.diagnostics['budget_stops'] += int(reason == 'budget')
                         return
                     with self.runtime.router.activate(self.bank, groups=groups):
                         objective = self._objective(name)
@@ -380,15 +444,44 @@ class AdaptivePolicy:
         finally:
             self.diagnostics['adaptation_seconds'] += time.monotonic() - start
 
-    def _objective(self, name):
+    def _stop_reason(self, deadline):
+        if self._cancelled.is_set():
+            return 'cancelled'
+        if deadline is not None and time.monotonic() >= deadline:
+            return 'budget'
+        return None
+
+    def _examples(self, name):
+        rows = list(self.history)
+        if name == 'representation':
+            return [r.scene_observation for r in rows if r.observation.final is not None]
+        if name == 'predictor':
+            return [(before, after) for before, after in zip(rows, rows[1:])
+                    if not after.boundary and before.observation.final is not None
+                    and after.observation.final is not None]
+        labels = self._hindsight(fixed=True)
+        return list(self.path_labels) + labels if name == 'path' else labels
+
+    def _weights(self, name, samples):
+        if name == 'representation':
+            numbers = {id(row.scene_observation): row.number for row in self.history}
+            ends = [numbers[id(obs)] for obs in samples]
+        elif name == 'predictor':
+            ends = [after.number for _, after in samples]
+        else:
+            ends = [row['end'] for row in samples]
+        return recency_weights(ends, self.history[-1].number, self.config)
+
+    def _objective(self, name, *, samples=None, states=None, measured=None, weights=None):
         engine = self.runtime.engine
         rows = list(self.history)
         if name == 'representation':
-            samples = [r.observation for r in rows if r.observation.final is not None]
+            if samples is None:
+                samples = [r.scene_observation for r in rows if r.observation.final is not None]
+                if samples:
+                    samples = [samples[-1]] + self.rng.sample(samples[:-1], min(len(samples)-1, self.config.minibatch-1))
             if not samples:
                 return None
-            newest = samples[-1]
-            samples = [newest] + self.rng.sample(samples[:-1], min(len(samples)-1, self.config.minibatch-1))
 
             def objective():
                 losses, errors = [], []
@@ -399,24 +492,30 @@ class AdaptivePolicy:
                     loss, error = color_macro(logits, target)
                     losses.append(loss)
                     errors.append(error)
-                return torch.stack(losses).mean(), torch.stack(errors).mean()
+                    if measured is not None:
+                        measured.append(dict(reconstruction_error=float(error)))
+                return weighted_mean(losses, weights), torch.stack(errors).mean()
             return objective
-        # Re-encode all real frames and causal carries after representation and
-        # every predictor update. These tensors never survive this bounded step.
-        states = self._states()
+        # Re-encode real frames and causal carries after representation and
+        # every predictor update. CPU caches never survive an optimizer update.
+        states = self._states(cpu=True) if states is None else states
+        def current(number):
+            state = states[number]
+            return State(None if state.z is None else state.z.to(engine.device),
+                         state.h.to(engine.device), state.geometry)
         records = {r.number: r for r in rows}
         if name == 'predictor':
-            pairs = [(before, after) for before, after in zip(rows, rows[1:])
-                     if not after.boundary and before.observation.final is not None
-                     and after.observation.final is not None]
-            pairs = self.rng.sample(pairs, min(len(pairs), self.config.minibatch))
+            pairs = samples
+            if pairs is None:
+                pairs = self._examples(name)
+                pairs = self.rng.sample(pairs, min(len(pairs), self.config.minibatch))
             if not pairs:
                 return None
 
             def objective():
                 losses = []
                 for before, after in pairs:
-                    state, target_state = states[before.number], states[after.number]
+                    state, target_state = current(before.number), current(after.number)
                     predicted, _, delta = engine.predict(state.z[None], state.h,
                         engine.actions([after.action]), *state.geometry)
                     target = (target_state.z - state.z).detach()[None]
@@ -427,12 +526,15 @@ class AdaptivePolicy:
                     visual = visual_delta_loss(logits, reference, actual, engine.config.false_change_weight,
                                                mode=engine.config.prediction_delta_loss).mean()
                     losses.append(latent + visual)
-                return torch.stack(losses).mean(), None
+                    if measured is not None:
+                        measured.append(delta_metrics(reference, actual, logits.argmax(-1)))
+                return weighted_mean(losses, weights), None
             return objective
-        labels = self._hindsight()
-        if name == 'path':
-            labels = list(self.path_labels)[-self.config.minibatch:] + labels
-            labels = labels[:self.config.minibatch]
+        labels = samples
+        if labels is None:
+            labels = self._hindsight()
+            if name == 'path':
+                labels = (list(self.path_labels)[-self.config.minibatch:] + labels)[:self.config.minibatch]
         if not labels:
             return None
         self.diagnostics['masks'] += sum(int(row['mask'].sum()) for row in labels)
@@ -440,12 +542,14 @@ class AdaptivePolicy:
             def objective():
                 losses = []
                 for row in labels:
-                    state = states[row['start']]
+                    state = current(row['start'])
                     logits, mask_logits = self.runtime.goal(state.z[None], state.h, *state.geometry)
                     tensors = [torch.tensor(np.array(v), device=engine.device)[None] for v in
                                (records[row['start']].observation.final, row['frame'], row['mask'])]
                     losses.append(goal_loss(logits, mask_logits, tensors[0].long(), tensors[1].long(), tensors[2].bool()))
-                return torch.stack(losses).mean(), None
+                    if measured is not None:
+                        measured.append(goal_metrics(logits, mask_logits, tensors[0].long(), tensors[1].long(), tensors[2].bool()))
+                return weighted_mean(losses, weights), None
             return objective
         encoded = []
         with torch.no_grad(), engine.autocast():
@@ -461,7 +565,7 @@ class AdaptivePolicy:
         def objective():
             losses = []
             for row, (z, mask) in zip(labels, encoded):
-                state = states[row['start']]
+                state = current(row['start'])
                 patch = engine.model.config.patch
                 height, width = state.geometry
                 logits, cost = self.runtime.path(state.z[None], state.h, z[None], mask,
@@ -470,11 +574,12 @@ class AdaptivePolicy:
                 targets = torch.tensor([float(row['success'])], device=engine.device)
                 duration = torch.tensor([math.log1p(row['distance'])], device=engine.device)
                 losses.append(path_loss(logits, cost, targets, duration))
-            return torch.stack(losses).mean(), None
+                if measured is not None:
+                    measured.append(path_metrics(logits, cost, row['success'], row['distance']))
+            return weighted_mean(losses, weights), None
         return objective
 
-    def _step(self, name, groups, objective):
-        parameters = list(self.bank.parameters(groups))
+    def _step(self, name, groups, objective, *, check_threshold=True):
         optimizers = [self.bank.optimizers[g] for g in groups]
         for opt in optimizers:
             opt.zero_grad(set_to_none=True)
@@ -487,10 +592,25 @@ class AdaptivePolicy:
         metrics = dict(pre=pre, post=pre, error_pre=None if error is None else float(error),
                        error_post=None if error is None else float(error))
         self.diagnostics['losses'][name] = metrics
-        if name == 'representation' and float(error) <= self.config.reconstruction_threshold:
+        if check_threshold and name == 'representation' and float(error) <= self.config.reconstruction_threshold:
             self.diagnostics['skipped']['reconstruction_threshold'] += 1
             return False
         loss.backward()
+
+        def check():
+            with torch.no_grad(), engine.autocast():
+                post, post_error = objective()
+            if not torch.isfinite(post) or (post_error is not None and not torch.isfinite(post_error)):
+                raise FloatingPointError('Nonfinite updated adapter objective')
+            metrics.update(post=float(post), error_post=None if post_error is None else float(post_error))
+
+        self._update(name, groups, check=check)
+        return True
+
+    def _update(self, name, groups, *, check=None):
+        """Apply accumulated gradients atomically, including Adam moments."""
+        parameters = list(self.bank.parameters(groups))
+        optimizers = [self.bank.optimizers[g] for g in groups]
         if any(p.grad is not None and not torch.isfinite(p.grad).all() for p in parameters):
             for opt in optimizers:
                 opt.zero_grad(set_to_none=True)
@@ -502,13 +622,13 @@ class AdaptivePolicy:
         try:
             for opt in optimizers:
                 opt.step()
-            with torch.no_grad(), engine.autocast():
-                post, post_error = objective()
-            if (not torch.isfinite(post) or any(not torch.isfinite(p).all() for p in parameters)
+            if (any(not torch.isfinite(p).all() for p in parameters)
                     or any(torch.is_tensor(v) and not torch.isfinite(v).all()
                            for opt in optimizers for state in opt.state.values() for v in state.values())):
                 raise FloatingPointError('Nonfinite updated adapter')
-        except Exception:
+            if check is not None:
+                check()
+        except BaseException:
             with torch.no_grad():
                 for parameter, saved in zip(parameters, previous):
                     parameter.copy_(saved)
@@ -518,6 +638,4 @@ class AdaptivePolicy:
         finally:
             for opt in optimizers:
                 opt.zero_grad(set_to_none=True)
-        metrics.update(post=float(post), error_post=None if post_error is None else float(post_error))
         self.diagnostics['updates'][name] += 1
-        return True
