@@ -45,6 +45,7 @@ PyTorch. These commands generate local artifacts; none uploads or submits them.
    python -m arc3.kaggle.build --adaptive \
      --agent-checkpoint /kaggle/input/your-private-base/base.pt \
      --agent-dataset your-handle/your-private-base \
+     --extra-wheel-dir /kaggle/input/your-private-base \
      --username your-handle --accelerator cpu --cpu-threads 2 \
      --max-actions 80 --output artifacts/adaptive-submission.ipynb
    ```
@@ -52,10 +53,20 @@ PyTorch. These commands generate local artifacts; none uploads or submits them.
    Uploading a private weight dataset and notebook is a separate explicit
    operation owned by the chat controller. Attach that dataset and the official
    competition inputs in Kaggle. Verify the mounted filename matches the
-   generated path. `--accelerator t4`, `p100` or `rtx6000` selects CUDA; the
+   generated path. Include the official MIT-licensed
+   `arc_agi-0.9.9-py3-none-any.whl` beside `base.pt` in that private asset.
+   The inspected competition bundle contains SDK 0.9.8; it cannot satisfy the
+   project's 0.9.9 pin by itself. `--extra-wheel-dir` names the mounted directory
+   containing companion wheels (not an individual wheel). Installation searches
+   both this directory and the competition's `arc_agi_3_wheels` using
+   `--no-index --find-links ... --find-links ...`. Missing directories or required
+   dependency wheels stop execution with an attachment error; there is no
+   internet fallback or SDK downgrade. This option also works for random/frozen
+   notebooks. It does not upload a dataset or alter its contents.
+   `--accelerator t4`, `p100` or `rtx6000` selects CUDA; the
    runtime uses BF16 only when the device supports it, otherwise FP32. CPU is
    supported. There are no runtime internet/package downloads: SDK installation
-   uses the competition's local wheels with `--no-index`.
+   uses only the explicitly mounted local wheels.
 
 4. Run Kaggle **Save & Run All** and inspect
    `/kaggle/working/adaptation-smoke.json` (configurable with `--smoke-output`).
@@ -165,3 +176,48 @@ Compilation and `git diff --check` passed. No browser tests or broad training
 benchmark were run. Repository Actions only route executor workflow regressions
 for infrastructure paths; none of those paths changes in this delivery, so no
 application CI run is expected from the current workflow filters.
+
+## Offline runtime compatibility correction
+
+The companion-wheel installer was validated in a clean Python 3.12 environment
+with socket connections disabled. The 31 development wheel fixtures were fetched
+from PyPI and matched every filename and byte size in the supplied competition
+inventory; the competition wheel archive itself was not available locally.
+The separately supplied SDK wheel was used unchanged.
+
+- The previous generated install cell failed because the official inventory
+  provides only SDK 0.9.8, demonstrating the original deployment defect.
+- The corrected cell installed SDK 0.9.9, arcengine 0.9.3, NumPy 2.4.4 and
+  python-dotenv 1.2.2 using both local sources and no network.
+- Removing arcengine from the local wheel fixture failed with the new explicit
+  offline-dependency error. There was no fallback install attempt.
+- Nineteen focused installer, baseline and adaptive/frozen packaging tests
+  passed. The six installer tests cover generated arguments, the SDK pin, CLI
+  wiring, mounted-path validation and missing mount/dependency diagnostics.
+
+The supplied `agents/agent.py` and `agents/swarm.py` were executed directly with
+the generated adaptive agent and the versions above. The probe used their actual
+main loops, frame conversion and two Swarm threads. It confirmed one terminal
+result exactly once, a second game's exact two-action budget, independent click
+payloads, unchanged base weights, and matching concurrent/isolated adapter states.
+Agent SHA256: `85655f7a11a105e50bba76efd00bebf8056d02ddbae827a8f8a5b46e849fc087`;
+Swarm SHA256: `d9dc48f710f1b90a6552db0921293c7e89c8a925ed00a3faefa07ae19998ad39`.
+
+The local supplied framework fixture lacks `recorder.py` and `tracing.py`; the
+probe substitutes only those ancillary recording/tracing helpers and a scripted
+SDK gateway. It reports three simulated confirmations and zero real game
+transitions. It does not validate live gateway protocol, scoring or the absent
+helpers. To reproduce with the supplied framework directory (or a complete
+runtime bundle, whose helpers will be used when present):
+
+```sh
+PYTHONPATH=src:. OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python \
+  -m model.tests.check_kaggle_framework \
+  --framework /path/to/competition-input/ARC-AGI-3-Agents \
+  --output artifacts/kaggle-lora-smoke-20261028/runtime-compatibility/framework-report.json
+```
+
+The installer report, actual pip logs, focused test log and framework report are
+retained in ignored `artifacts/kaggle-lora-smoke-20261028/runtime-compatibility/`.
+Earlier production-weight adaptation evidence remains applicable: this correction
+changes installation and its validation, not model weights or learning behavior.

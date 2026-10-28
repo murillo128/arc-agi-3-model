@@ -27,7 +27,8 @@ def code_cell(source: str) -> dict:
 def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu",
                    agent_checkpoint: str | None = None, adaptive: bool = False,
                    adaptation_config: dict | None = None, cpu_threads: int = 2,
-                   smoke_output: str = '/kaggle/working/adaptation-smoke.json') -> dict:
+                   smoke_output: str = '/kaggle/working/adaptation-smoke.json',
+                   extra_wheel_dir: str | None = None) -> dict:
     if max_actions <= 0:
         raise ValueError("max_actions must be positive")
     if accelerator not in ACCELERATORS:
@@ -58,6 +59,16 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         mount = PurePosixPath(agent_checkpoint)
         if not mount.is_relative_to('/kaggle/input') or '..' in mount.parts or mount.suffix != '.pt':
             raise ValueError('Agent checkpoint must be a mounted /kaggle/input/.../*.pt asset')
+    wheel_dirs = [f'{INPUT_ROOT}/arc_agi_3_wheels']
+    if extra_wheel_dir is not None:
+        if not isinstance(extra_wheel_dir, str) or '\x00' in extra_wheel_dir:
+            raise ValueError('Extra wheel directory must be a mounted /kaggle/input/... directory')
+        wheel_mount = PurePosixPath(extra_wheel_dir)
+        if (not wheel_mount.is_relative_to('/kaggle/input')
+                or wheel_mount == PurePosixPath('/kaggle/input') or '..' in wheel_mount.parts
+                or wheel_mount.suffix.lower() == '.whl'):
+            raise ValueError('Extra wheel directory must be a mounted /kaggle/input/... directory, not a wheel file')
+        wheel_dirs.append(str(wheel_mount))
     accelerator_name, uses_gpu = ACCELERATORS[accelerator]
     sources = {
         "arc3/__init__.py": "",
@@ -89,10 +100,24 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
     install = dedent(f"""\
         import subprocess
         import sys
-        subprocess.run([
-            sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links',
-            '{INPUT_ROOT}/arc_agi_3_wheels', 'arc-agi=={SDK_VERSION}', 'python-dotenv'
-        ], check=True)
+        from pathlib import Path
+        offline_wheel_dirs = {wheel_dirs!r}
+        for wheel_dir in offline_wheel_dirs:
+            if not Path(wheel_dir).is_dir():
+                raise FileNotFoundError(
+                    f'Missing offline wheel directory: {{wheel_dir}}. Attach the competition input '
+                    'and the configured --extra-wheel-dir asset before running this notebook.')
+        try:
+            subprocess.run([
+                sys.executable, '-m', 'pip', 'install', '--no-index',
+                *[argument for directory in offline_wheel_dirs for argument in ('--find-links', directory)],
+                'arc-agi=={SDK_VERSION}', 'python-dotenv'
+            ], check=True)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                'Offline installation failed: attach arc-agi=={SDK_VERSION} and all required dependency wheels. '
+                'The competition bundle may contain an older SDK; use --extra-wheel-dir for the companion '
+                'wheel asset. Internet installation is disabled.') from exc
         from importlib.metadata import version
         assert version('arc-agi') == '{SDK_VERSION}', 'Unexpected SDK version'
     """)
@@ -210,6 +235,7 @@ def main() -> None:
     parser.add_argument("--max-actions", type=int, default=80)
     parser.add_argument("--agent-checkpoint", help="Mounted /kaggle/input/.../agent.pt; weights are never embedded")
     parser.add_argument("--agent-dataset", help="Optional owner/dataset reference for that mounted checkpoint")
+    parser.add_argument('--extra-wheel-dir', help='Mounted /kaggle/input/... directory with companion offline wheels, including arc-agi 0.9.9')
     parser.add_argument('--adaptive', action='store_true', help='Opt in to per-game LoRA using a portable adaptation base')
     parser.add_argument('--adaptation-config', help='Local JSON object containing bounded AdaptationConfig overrides')
     parser.add_argument('--cpu-threads', type=int, default=2)
@@ -231,7 +257,7 @@ def main() -> None:
         notebook = build_notebook(args.seed, args.max_actions, accelerator=args.accelerator,
                                   agent_checkpoint=args.agent_checkpoint, adaptive=args.adaptive,
                                   adaptation_config=adaptation_config, cpu_threads=args.cpu_threads,
-                                  smoke_output=args.smoke_output)
+                                  smoke_output=args.smoke_output, extra_wheel_dir=args.extra_wheel_dir)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     output.parent.mkdir(parents=True, exist_ok=True)

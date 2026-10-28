@@ -145,12 +145,13 @@ collect diagnostics or write traces. Collection and Kaggle execution are unchang
 
 ```sh
 python -m arc3.kaggle.build --seed 0 --max-actions 80 \
+  --extra-wheel-dir /kaggle/input/YOUR_PRIVATE_BASE \
   --output artifacts/submission.ipynb
 ```
 
 The generated notebook embeds the actual `core/policy.py` source and the [official Agents interface](https://github.com/arcprize/ARC-AGI-3-Agents/blob/4743e7d0aaae0ded0d98a89a7e282e63564cd58b/agents/agent.py) adapter. It needs no repository checkout, local game cache or network dependency installation during competition execution. Following the [official Starter pattern](https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter/blob/eeb1535404f321d280a8f9194bbc1d7aca5f05fc/scripts/build_notebook.py), it installs from the competition's offline wheels, waits for the internal gateway on a competition rerun, and runs the supplied Agents framework. The gateway enforces competition restrictions and produces `submission.parquet`. During save-and-run, the notebook creates the starter's dummy parquet artifact; that artifact is not a measured score.
 
-The notebook defaults to CPU and disables internet. `--accelerator` can select `cpu`, `t4`, `p100`, or `rtx6000` without changing the shared policy. Attach the official `arc-prize-2026-arc-agi-3` competition input, which must provide the pinned `arc-agi==0.9.9` wheel and its dependencies plus the Agents framework at the starter's paths. Compatibility with Kaggle's current wheel bundle and gateway must be checked there before any submission; the local smoke suite does not validate those services. [Opt-in adaptive mode](docs/kaggle-adaptation.md) uses a separately mounted portable base and confirms real SDK results before updating private game adapters. Random/frozen modes and ordinary evaluation do not update weights.
+The notebook defaults to CPU and disables internet. `--accelerator` can select `cpu`, `t4`, `p100`, or `rtx6000` without changing the shared policy. Attach the official `arc-prize-2026-arc-agi-3` competition input for dependency wheels and its supplied Agents framework. The inspected bundle contains SDK 0.9.8, so also mount the official `arc_agi-0.9.9-py3-none-any.whl` in a private input and pass its directory through `--extra-wheel-dir`. Installation retains the 0.9.9 pin and searches both local directories with `--no-index`; missing offline dependencies fail clearly. Remote gateway execution must still be checked before submission. [Opt-in adaptive mode](docs/kaggle-adaptation.md) can mount the companion wheel beside its portable base and confirms real SDK results before updating private game adapters. Random/frozen modes and ordinary evaluation do not update weights.
 
 Kernel metadata is generated **only** when a username is explicitly supplied:
 
