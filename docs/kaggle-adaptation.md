@@ -12,15 +12,46 @@ The adaptive policy defaults to `stopping="convergence"`, without an action cap,
 per-observation learning deadline, per-game learning deadline or maximum number
 of optimizer updates. Kaggle/environment termination and explicit cancellation
 own the outer lifetime. Each observation triggers representation → predictor →
-Path → Goal fitting, using only that game's retained real evidence. The base
+Path → Goal fitting, using only that game's real evidence. The base
 weights remain frozen. Adapters and Adam state persist across actions and levels.
 
+By default `replay_size=null` retains **all** confirmed frames, incoming actions
+and actual goal outcomes for that game in CPU RAM, across levels and RESETs.
+It no longer drops transitions older than 32 actions. This is an in-memory
+history for the current game instance, not a persistent recording across process
+restarts. Only scene-safe predictive pairs and hindsight targets enter fitting;
+retaining a boundary does not turn it into a valid dynamics target.
+
+Recent evidence receives more weight in every stage's loss. With age measured
+in confirmed observation steps, the weight is:
+
+```text
+weight(age) = history_weight_floor
+              + (1 - history_weight_floor) * 2 ** (-age / history_half_life)
+weighted_loss = sum(weight * sample_loss) / sum(weight)
+```
+
+Defaults are `history_half_life=32` and `history_weight_floor=0.25`: the newest
+sample weighs 1, one 32 actions old weighs 0.625, and one 64 actions old weighs
+0.4375. Every old sample keeps at least 0.25 weight. Age refers to the observation
+for reconstruction, the confirmed destination for prediction, and the observed
+outcome for Path/Goal labels. These are per-example weights; many old examples
+can still outweigh a few recent ones in total. Both settings are configurable.
+
 Each stage fixes its examples for this observation and measures the entire set
-before learning and after each minibatched sweep. Newest examples are included;
-checks never use a changing random minibatch. Latents and causal memory are
-rebuilt with the current adapters before each predictor update and measurement.
-Encoder/decoder remain fixed during predictor/Path/Goal fitting. The default
-thresholds are fractions (0.10 = 10%), independently configurable:
+before learning and after each full sweep. Gradients accumulate over minibatches
+of at most 4 examples, normalized over the **whole** history; there is one Adam
+update per sweep. This makes recency affect the combined gradient rather than
+just rescaling separate Adam steps. Latents and causal memory are rebuilt with
+the current adapters once per sweep/measurement, cached on CPU, and only the
+active examples move to the accelerator. Graph memory is bounded by minibatch
+size; CPU memory and work per sweep grow with history length. Encoder/decoder
+remain fixed during predictor/Path/Goal fitting.
+
+Convergence errors remain **unweighted** over the entire history, including the
+latest-frame/transition guards, so low weights cannot hide poor historical fit.
+Checks never use a changing random minibatch. The default thresholds are
+fractions (0.10 = 10%), independently configurable:
 
 | Configuration key | Measured fitting error |
 | --- | --- |
@@ -35,31 +66,37 @@ The goal stage needs both its thresholds; Path needs both when successful labels
 exist. An empty delta union is reported as `no_change` with null delta error, not
 as evidence of dynamic prediction accuracy. A stage without usable data reports
 `no_data` and does not delay action selection. Hindsight uses one deterministic
-reached target per replay origin, preferring evidence of native progress and
-then the latest reachable state in that scene. Reachability is not a winning
-label. Path also retains the active goal's observed success/failure outcomes.
+target per origin: the latest different frame actually reached in that scene,
+with public native progress recorded separately. It computes these targets in
+linear frame work rather than enumerating every historical pair. Reachability
+is not a winning label. Path also retains the active goal's observed
+success/failure outcomes.
 
 There is no update-count ceiling in convergence mode. To avoid waiting forever
 for inconsistent or insufficient evidence, `plateau_patience=8` full-replay checks
 without `plateau_min_relative_improvement=0.001` (0.1%) improvement in the same
-replay objective stop that stage. Improvements accumulate against the last
-meaningful improvement; the best exact loss seen is tracked separately. On a
+recency-weighted replay objective stop that stage. Improvements accumulate
+against the last meaningful improvement; the best exact loss seen is tracked separately. On a
 plateau, restore the best adapters **and Adam state**, report `plateau` and
 `threshold_met=false`, and acquire another observation. A decreasing loss can
 keep training beyond any fixed number of sweeps. This does not guarantee every
 threshold is attainable or that a fitted transition will generalize.
 
 `diagnostics.convergence` records each stage's stop reason, updates, full checks,
-example count, initial/final fitting errors and loss, best loss, restoration and
-time. These are fitting measurements on already-seen observations. The runner's
-prediction-before-SDK-result measurements remain separate. Nonfinite updates
+example count, weight range/total and decay settings, initial/final fitting
+errors and loss, best loss, restoration and time. These are fitting measurements
+on already-seen observations. The runner's prediction-before-SDK-result
+measurements remain separate. Nonfinite updates
 roll back; cooperative `policy.request_stop()` or Ctrl+C can interrupt fitting.
 An already-admitted real result remains confirmed even if its SFT is cancelled.
 
 Optional positive `max_actions`, `per_observation_seconds` and `total_seconds`
-are still supported explicitly. `stopping="steps"` reproduces the earlier bounded
-update schedule. In convergence mode, positive `*_steps` values do not cap work;
-zero disables that stage. `goal_lifetime`, `horizon`, `beam` and `clicks` still
+are still supported explicitly. A finite `replay_size` is an opt-in legacy
+engineering mode that intentionally discards old evidence. `stopping="steps"`
+reproduces the earlier sampled, unweighted update schedule; combine it with
+`replay_size=32` to reproduce its former history window. In convergence mode,
+positive `*_steps` values do not cap work; zero disables that stage.
+`goal_lifetime`, `horizon`, `beam` and `clicks` still
 control goal/search scope and are not total game action budgets. The standalone
 smoke and generated save-and-run fixture explicitly use `stopping="steps"`; the
 scored adaptive agent uses the requested convergence configuration.
@@ -92,7 +129,7 @@ Use `--adaptation-config path/to/config.json` for threshold/plateau overrides.
 Optional `--max-actions N` and `--max-game-seconds S` enable explicit experiment
 caps; both default to no limit. To reproduce the previous bounded protocol,
 combine `--max-actions 80 --max-game-seconds 900` with configuration
-`{"stopping":"steps","per_observation_seconds":10,"total_seconds":300}`.
+`{"stopping":"steps","replay_size":32,"per_observation_seconds":10,"total_seconds":300}`.
 
 The runner rejects an existing output directory, changed split, a
 checkpoint hash other than
@@ -236,9 +273,9 @@ PyTorch. These commands generate local artifacts; none uploads or submits them.
 
 `--adaptation-config path/to/config.json` accepts a JSON object of
 `model.adaptation.AdaptationConfig` overrides. Defaults include rank/alpha 4,
-32 replay transitions, minibatches of at most 4, convergence stopping with the
-thresholds above, and 25% exploration. Timers default to null; when supplied,
-they are checked between optimizer steps/check chunks and permit inference after
+full-game replay with recency weighting, minibatches of at most 4, convergence
+stopping with the thresholds above, and 25% exploration. Timers default to null;
+when supplied, they are checked between optimizer steps/check chunks and permit inference after
 expiry. A running PyTorch kernel cannot be preempted. Frozen/random notebooks
 retain their 80-action default. Adaptive notebooks omit the default cap and use
 a compatible unlimited loop over the supplied framework's conversion, action
@@ -247,15 +284,17 @@ for unlimited mode.
 
 Adapters persist through RESET and level changes, but those scene boundaries
 never become predictive pairs and clear the active spatial goal. Recurrent
-context is rebuilt with current adapters from the bounded retained history,
-starting at zero at its left edge and using boundary markers. Hindsight masks
+context is rebuilt with current adapters from the full history, starting at zero
+at its left edge and using boundary markers. Raw boundary animations are retained,
+but only their final frame is encoded as the new scene. Hindsight masks
 come only from changed same-level states actually reached; they indicate
 reachability, not proof of winning. Pending goal segments are censored rather
 than treated as failures. Only group=1 Conv2d and Linear targets are adapted;
 the smoke report lists supported targets and excluded grouped/depthwise layers.
-Minibatch loss diagnostics retain the most recently measured pre/post values for each
-phase; skipped phases do not imply an optimizer step. Nonfinite steps roll back
-the affected adapters and Adam state. After two numerical failures, learning
+Loss diagnostics retain the most recently measured pre/post values for each
+phase (full-history weighted loss in convergence mode); skipped phases do not
+imply an optimizer step. Nonfinite steps roll back the affected adapters and
+Adam state. After two numerical failures, learning
 stops for that game while legal exploration remains available.
 
 Omit `--adaptive` to preserve the existing frozen `arc3-agent` checkpoint mode;

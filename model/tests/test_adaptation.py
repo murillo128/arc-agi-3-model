@@ -141,14 +141,16 @@ class AdaptationTests(unittest.TestCase):
         self.assertEqual(policy.diagnostics['predictive_pairs'], 0)
         self.assertEqual(policy._hindsight(), [])
         self.assertIsNone(policy.goal)
-        # Boundary animations are reduced to their final frame for memory, but
-        # the next public choose still accepts the complete returned observation.
+        # Preserve every raw frame, while memory and representation see only
+        # the new scene, not the previous level's winning animation.
         multi = observed(3, level=2)
         multi = replace(multi, frames=np.concatenate((observed().frames, multi.frames)))
         policy.choose_action(observed(2, level=1))
         policy.confirm_result(multi)
         policy.choose_action(multi)
-        self.assertEqual(len(policy.history[-1].observation.frames), 1)
+        np.testing.assert_array_equal(policy.history[-1].observation.frames, multi.frames)
+        self.assertEqual(len(policy.history[-1].scene_observation.frames), 1)
+        self.assertEqual(len(policy._examples('representation')[-1].frames), 1)
         policy.cancel_pending()
         self.assertEqual(policy.diagnostics['boundary_skips'], 2)
 

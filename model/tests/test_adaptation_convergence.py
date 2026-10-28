@@ -117,7 +117,7 @@ class ConvergenceTests(unittest.TestCase):
             original()
             saved.append((parameter.detach().clone(), deepcopy(opt.state_dict())))
 
-        def objective(name, *, samples=None, states=None, measured=None):
+        def objective(name, *, samples=None, states=None, measured=None, weights=None):
             def calculate():
                 if measured is not None:
                     measured.append(dict(reconstruction_error=1.))
@@ -144,14 +144,14 @@ class ConvergenceTests(unittest.TestCase):
     def test_cancel_during_adaptation_preserves_admission_and_returns_no_new_action(self):
         policy = AdaptivePolicy(runtime(), AdaptationConfig(learning_rate=.01, exploration=1.), seed=3)
         policy.choose_action(observed())
-        original = policy._step
+        original = policy._update
 
         def stop_after_step(*args, **kwargs):
             done = original(*args, **kwargs)
             policy.request_stop()
             return done
 
-        with patch.object(policy, '_step', side_effect=stop_after_step):
+        with patch.object(policy, '_update', side_effect=stop_after_step):
             self.assertTrue(policy.confirm_result(observed(3)))
         self.assertEqual(policy.actions_taken, 1)
         self.assertEqual(policy.diagnostics['confirmed_transitions'], 1)

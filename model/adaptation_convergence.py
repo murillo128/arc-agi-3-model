@@ -7,6 +7,7 @@ from copy import deepcopy
 import math
 import time
 
+import numpy as np
 import torch
 
 from .adaptation_heads import balanced_regions
@@ -14,6 +15,57 @@ from .adaptation_heads import balanced_regions
 
 GROUPS = dict(representation=('encoder', 'decoder'), predictor=('predictor',),
               path=('path',), goal=('goal',))
+
+
+def recency_weights(ends, latest, config):
+    floor = config.history_weight_floor
+    return [floor + (1. - floor) * 2. ** (-max(0, latest - end) / config.history_half_life)
+            for end in ends]
+
+
+def weighted_mean(values, weights=None):
+    values = torch.stack(values)
+    if weights is None:
+        return values.mean()
+    weights = values.new_tensor(weights)
+    return (values * weights).sum() / weights.sum()
+
+
+def fixed_hindsight(rows):
+    """Latest different same-scene outcome per origin, in linear frame work.
+
+    If an origin equals the scene's last frame, its latest different outcome is
+    the last frame different from that final frame. Otherwise it is the final
+    frame itself. Only these two targets are needed, not every historical pair.
+    """
+    labels = []
+
+    def scene(records, boundary):
+        if len(records) < 2 or records[0].observation.final is None:
+            return
+        last = records[-1]
+        last_frame = last.observation.final
+        different = next((r for r in reversed(records[:-1])
+                          if not np.array_equal(r.observation.final, last_frame)), None)
+        for before in records[:-1]:
+            end = different if np.array_equal(before.observation.final, last_frame) else last
+            if end is None or end.number <= before.number:
+                continue
+            after = end.observation
+            labels.append(dict(start=before.number, end=end.number, frame=after.final,
+                mask=before.observation.final != after.final, success=True,
+                distance=end.number-before.number, budget=end.number-before.number,
+                progress=(after.state == 'WIN' or (end is last and boundary is not None and
+                    boundary.observation.levels_completed > after.levels_completed))))
+
+    start = 0
+    for i, record in enumerate(rows):
+        if i > start and (record.boundary or record.observation.final is None or
+                          rows[i-1].observation.final is None):
+            scene(rows[start:i], record if record.boundary else None)
+            start = i
+    scene(rows[start:], None)
+    return labels
 
 
 def delta_metrics(before, actual, predicted):
@@ -104,7 +156,11 @@ def fit(policy, name, deadline):
         policy.diagnostics['skipped'][name] += 1
         return
     groups = GROUPS[name]
-    chunks = [examples[i:i + policy.config.minibatch]
+    weights = policy._weights(name, examples)
+    total_weight = sum(weights)
+    result['weights'] = dict(minimum=min(weights), maximum=max(weights), total=total_weight,
+        half_life=policy.config.history_half_life, floor=policy.config.history_weight_floor)
+    chunks = [(examples[i:i + policy.config.minibatch], weights[i:i + policy.config.minibatch])
               for i in range(0, len(examples), policy.config.minibatch)]
     best, best_measurement = None, None
     best_loss, progress_loss, stale = math.inf, math.inf, 0
@@ -120,18 +176,50 @@ def fit(policy, name, deadline):
     def measure():
         statistics, total = [], 0.
         with torch.no_grad(), policy.runtime.engine.autocast():
-            states = None if name == 'representation' else policy._states()
-            for chunk in chunks:
+            states = None if name == 'representation' else policy._states(cpu=True)
+            for chunk, chunk_weights in chunks:
                 if interrupted():
                     return None
-                loss, _ = policy._objective(name, samples=chunk, states=states, measured=statistics)()
-                total += float(loss) * len(chunk)
+                loss, _ = policy._objective(name, samples=chunk, states=states,
+                    measured=statistics, weights=chunk_weights)()
+                total += float(loss) * sum(chunk_weights)
         metrics = summarize(name, statistics)
-        loss = total / len(examples)
+        loss = total / total_weight
         if not math.isfinite(loss) or any(v is not None and not math.isfinite(v) for v in metrics.values()):
             raise FloatingPointError('Nonfinite fixed-replay measurement')
         result['checks'] += 1
         return dict(loss=loss, metrics=metrics)
+
+    def train_sweep():
+        optimizers = [policy.bank.optimizers[group] for group in groups]
+        for opt in optimizers:
+            opt.zero_grad(set_to_none=True)
+        total = 0.
+        try:
+            # No weights change until the sweep finishes, so one CPU cache of
+            # current-weight states is valid for every minibatch in this update.
+            states = None if name == 'representation' else policy._states(cpu=True)
+            for chunk, chunk_weights in chunks:
+                if interrupted():
+                    return False
+                objective = policy._objective(name, samples=chunk, states=states, weights=chunk_weights)
+                with policy.runtime.engine.autocast():
+                    loss, _ = objective()
+                if not torch.isfinite(loss):
+                    raise FloatingPointError('Nonfinite weighted adaptation objective')
+                fraction = sum(chunk_weights) / total_weight
+                (loss * fraction).backward()
+                total += float(loss.detach()) * fraction
+                # Release this minibatch's graph before constructing the next.
+                del objective, loss
+            if interrupted():
+                return False
+            policy._update(name, groups)
+            policy.diagnostics['losses'][name] = dict(pre=total, post=None, error_pre=None, error_post=None)
+            return True
+        finally:
+            for opt in optimizers:
+                opt.zero_grad(set_to_none=True)
 
     with policy.runtime.router.activate(policy.bank, groups=groups):
         try:
@@ -142,6 +230,8 @@ def fit(policy, name, deadline):
                 if result['initial'] is None:
                     result['initial'] = deepcopy(measurement)
                 result['final'] = measurement
+                if result['steps']:
+                    policy.diagnostics['losses'][name]['post'] = measurement['loss']
                 loss = measurement['loss']
                 if loss < best_loss:
                     best_loss, best_measurement = loss, deepcopy(measurement)
@@ -158,16 +248,8 @@ def fit(policy, name, deadline):
                 if stale >= policy.config.plateau_patience:
                     result['reason'] = 'plateau'
                     break
-                for chunk in chunks:
-                    if interrupted():
-                        break
-                    # Rebuild current-weight latents/carry before every update.
-                    objective = policy._objective(name, samples=chunk)
-                    # The reconstruction stop is owned by the full replay check,
-                    # not a potentially easy individual minibatch.
-                    policy._step(name, groups, objective, check_threshold=False)
+                if train_sweep():
                     result['steps'] += 1
-                else:
                     continue
                 break
         except FloatingPointError:
