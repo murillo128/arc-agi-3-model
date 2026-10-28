@@ -36,7 +36,7 @@ class RecentThroughput:
 
 
 class PlannerTrajectory:
-    """One complete executed episode, atomically replaced at most every 2s."""
+    """One executed episode or explicitly partial window, atomically replaced at most every 2s."""
     def __init__(self, path, *, interval=2., max_bytes=4 * 1024 * 1024, clock=time.monotonic):
         self.path, self.interval, self.max_bytes, self.clock = path, interval, max_bytes, clock
         self.last_capture = -float('inf')
@@ -111,7 +111,7 @@ class PlannerTrajectory:
             def pack(array):
                 return dict(shape=list(array.shape), pixels=base64.b64encode(array.tobytes()).decode('ascii'))
             steps = [dict(action=dict(id=action.id, data=dict(action.data)), source=record['action_source'],
-                          goal=record['goal'], frames=pack(frames))
+                          goal=record['goal'], goal_source=record.get('goal_source'), frames=pack(frames))
                      for action, record, frames in zip(episode.actions, records, arrays[1:])]
             if self.rows is not None:
                 if len(self.rows) != len(steps):

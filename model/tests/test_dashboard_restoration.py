@@ -39,7 +39,8 @@ class DashboardRestorationTests(unittest.TestCase):
         self.assertIn('goal', set(nodes))
         for owner, contents in (
             ('goal', ('planning-before', 'planning-target', 'planning-predicted', 'goal-loss', 'planning-error')),
-            ('path', ('path-learning-loss', 'planning-success', 'planning-steps', 'planning-outcomes')),
+            ('path', ('path-learning-loss', 'planning-success', 'planning-steps', 'planning-outcomes',
+                      'observation', 'trajectory-goal', 'trajectory-matrix')),
         ):
             for content in contents:
                 with self.subTest(content=content):
@@ -119,7 +120,10 @@ class DashboardRestorationTests(unittest.TestCase):
                         self.assertIn(f'id="{section}"', html)
                 self.assertIn('optimization.html', html)
                 self.assertLess(html.index('src="chart-tools.js"'), html.index('src="sequences.js"'))
+                self.assertLess(html.index('src="trajectory-viewer.js"'), html.index('src="sequences.js"'))
                 url = f'http://127.0.0.1:{server.server_port}'
+                with urlopen(url+'/trajectory-viewer.js') as response:
+                    self.assertIn('ArcTrajectory', response.read().decode())
                 with urlopen(url+'/optimization.html') as response:
                     self.assertIn('href="index.html#goal"', response.read().decode())
                 with urlopen(url+'/api/state') as response:
@@ -156,11 +160,15 @@ class DashboardRestorationTests(unittest.TestCase):
         from urllib.request import Request
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            current, archive = root/'report.json', root/'old.json'
-            current.write_text(json.dumps(dict(kind='game_sequences', status='running', progress=dict(actions=16))))
+            current, archive = root/'report.json', root/'old'/'report.json'
+            archive.parent.mkdir()
+            current.write_text(json.dumps(dict(kind='game_sequences', status='running', progress=dict(actions=16),
+                                              planner_trajectory=dict(id='current-trajectory'))))
             archive.write_text(json.dumps(dict(kind='synthetic_subgoals', status='running',
                 progress=dict(actions=999), planner_trajectory=dict(id='old-trajectory'))))
-            (root/'planner_trajectory.json').write_text(json.dumps(dict(kind='planner_trajectory', id='old-trajectory')))
+            archive.with_name('planner_trajectory.json').write_text(json.dumps(dict(kind='planner_trajectory', id='old-trajectory')))
+            sidecar = root/'planner_trajectory.json'
+            sidecar.write_text(json.dumps(dict(kind='planner_trajectory', id='current-trajectory')))
             server = make_server(('127.0.0.1', 0), None, sequence_report=current, history_subgoal_report=archive)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -180,6 +188,13 @@ class DashboardRestorationTests(unittest.TestCase):
                 self.assertTrue(history['subgoals']['historical'])
                 self.assertIsNone(history['curriculum_control'])
                 self.assertNotIn('sequences', history)
+                self.assertEqual(read('/api/history/trajectory')['trajectory']['id'], 'old-trajectory')
+                self.assertEqual(read('/api/trajectory')['trajectory']['id'], 'current-trajectory')
+                self.assertEqual(read('/api/trajectory?file=/etc/passwd')['trajectory']['id'], 'current-trajectory')
+                sidecar.write_text(json.dumps(dict(kind='planner_trajectory', id='unpublished-next-sample')))
+                self.assertIsNone(read('/api/trajectory')['trajectory'], 'A sidecar must match the current report ID')
+                sidecar.unlink()
+                self.assertIsNone(read('/api/trajectory')['trajectory'], 'Missing live data must never fall back to the archive')
                 self.assertEqual(read('/api/history/trajectory')['trajectory']['id'], 'old-trajectory')
                 with urlopen(url+'/history.html#path') as response:
                     self.assertEqual(response.url, url+'/index.html?archive=1')

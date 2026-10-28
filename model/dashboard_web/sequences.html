@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ARC · Memory across levels</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequence-trends.js" defer></script><script src="sequences.js" defer></script></head>
+<title>ARC · Memory across levels</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequence-trends.js" defer></script><script src="trajectory-viewer.js" defer></script><script src="sequences.js" defer></script></head>
 <body class="subgoal-dashboard sequence-dashboard">
 <div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a><div class="run-heading"><p class="eyebrow">ARC · SEQUENCE LEARNING</p><h1>Sequence training</h1>
 </div><div class="connection"><p class="run-context" id="phase-status"></p><span id="status" role="status">Waiting</span><small id="freshness"></small><p id="gpu-status" class="gpu-status"></p></div></header><div class="metrics summary-metrics compact-metrics">
@@ -109,7 +109,21 @@
 </section>
 <section id="path" role="tabpanel" aria-labelledby="tab-path" hidden>
 <article class="chart-card planner-intro"><p class="eyebrow">PATH PLANNER</p><h3>Learning how to reach a goal</h3><p id="path-description">Waiting for path learning status.</p><p id="path-status" class="planner-status"></p></article>
-<div id="path-details" hidden><div class="charts">
+<div id="path-details" hidden><div class="charts trajectory-context">
+<article class="chart-card observation-card"><h3>Real observation</h3><div class="observation-content"><canvas id="observation" width="64" height="64" aria-label="Selected real observation" class="goal-image"></canvas><div><strong id="observation-context">Current interaction</strong><p id="observation-detail" class="muted"></p></div></div></article>
+<article class="chart-card goal-card"><h3>Selected goal</h3><div class="observation-content"><canvas id="trajectory-goal" width="64" height="64" aria-label="Subgoal for the selected observation" class="goal-image"></canvas><div><strong id="goal-context">Current goal</strong><p id="goal-detail" class="muted">The goal actually used for the selected action, from the teacher or the learned head.</p></div></div></article>
+</div>
+<article class="chart-card trajectory-preview">
+<div class="trajectory-heading"><div><h3>Real trajectory & imagination</h3><p id="trajectory-info" class="muted" role="status">Waiting for a completed trajectory with the planner active…</p></div><div class="trajectory-controls"><small>Current training · one sample per batch</small><label class="trajectory-live"><input id="trajectory-live" type="checkbox" checked> Update sample</label><span id="trajectory-mode" class="trajectory-mode" role="status"></span></div></div>
+<p id="trajectory-warning" class="warn" role="status"></p>
+<div id="trajectory-viewer" hidden>
+<div class="trajectory-axis"><span>Time moves forward →</span><span>Select a step to pin the sample · training continues</span></div>
+<div class="trajectory-scroll" tabindex="0" role="region" aria-label="Complete trajectory; scroll to browse all steps"><table id="trajectory-matrix" aria-label="Real states and latent predictions aligned by time"></table></div>
+<div class="trajectory-playback"><div class="trajectory-toolbar"><button id="trajectory-prev" type="button" aria-label="Previous frame">Previous</button><button id="trajectory-play" type="button">Play animation</button><button id="trajectory-next" type="button" aria-label="Next frame">Next</button></div><label class="trajectory-timeline">Real frames, including animations <input id="trajectory-position" type="range" min="0" max="0" value="0" step="1"></label></div>
+<p id="trajectory-step" class="muted"></p></div>
+<div class="trajectory-key"><span class="observed-key">Observed</span><span class="imagined-key">Predicted from latent</span><span class="different-key">Route differs from the executed path</span></div>
+<p id="trajectory-explanation" class="muted">One row per origin and one column per time step, up to three steps. Shows an explored continuation of the chosen route when available. If only another branch was retained, it is labeled “Explored alternative”. The planner replans after acting.</p></article>
+<div class="charts">
 <article class="chart-card"><h3>Path learning <span>loss</span></h3><p>Success within the remaining budget, plus duration on successful real attempts. Lower loss does not by itself establish better completion rates.</p><div id="path-learning-loss-legend" class="legend"></div><svg id="path-learning-loss" viewBox="0 0 700 260" role="img" aria-label="Path learning"></svg></article>
 <article class="chart-card"><h3>Reaching the chosen goal <span>% of completed attempts</span></h3><p>Teacher success is verified by the game. Learned-goal success means its proposed pixels match; it is not necessarily task progress. Interrupted attempts are excluded.</p><div id="planning-success-legend" class="legend"></div><svg id="planning-success" viewBox="0 0 700 260" role="img" aria-label="Teacher and learned goal completion rates"></svg></article>
 <article class="chart-card"><h3>Steps to the goal <span>successful attempts only</span></h3><p>Real actions, including exploration and ineffective clicks. No successful attempts means no measurement.</p><div id="planning-steps-legend" class="legend"></div><svg id="planning-steps" viewBox="0 0 700 260" role="img" aria-label="Steps per successful goal attempt"></svg></article>

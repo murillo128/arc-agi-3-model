@@ -3,6 +3,8 @@ from contextlib import redirect_stdout
 from copy import deepcopy
 import io
 import json
+import base64
+import random
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -26,9 +28,64 @@ from model.training_config import load_plan
 from model.data import Action
 from model.optimization_telemetry import OptimizationTelemetry
 from model.optimization_control import OptimizationControl
+from model.training_telemetry import PlannerTrajectory
 
 
 class SequencePlanningTests(unittest.TestCase):
+    def test_live_capture_preserves_real_collection_and_stops_before_the_next_level(self):
+        heads = self.heads()
+        heads.path_updates = heads.config.warmup_updates
+        config = SequenceConfig(batch_games=1, session_steps=8, level_steps=4, block_steps=4)
+        factory = Factory('sc01-v1', Path(__file__).parents[2]/'games')
+        before = deepcopy(heads.engine.model.state_dict())
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)/'planner_trajectory.json'
+                baseline = collect_session(factory, [1, 2], 124, config, planning=heads)
+                writer = PlannerTrajectory(path, interval=0)
+                heads.begin_capture(writer, batch=7)
+                rng, torch_rng = random.getstate(), torch.get_rng_state().clone()
+                captured = collect_session(factory, [1, 2], 124, config, planning=heads)
+                self.assertEqual(random.getstate(), rng)
+                self.assertTrue(torch.equal(torch.get_rng_state(), torch_rng))
+                self.assertEqual([s.action for s in baseline.transitions], [s.action for s in captured.transitions])
+                for old, new in zip(baseline.transitions, captured.transitions):
+                    np.testing.assert_array_equal(old.before.frames, new.before.frames)
+                    np.testing.assert_array_equal(old.after.frames, new.after.frames)
+                self.assertEqual(writer.sequence, 1, 'Later episodes/levels must not decode another sample in this batch')
+                sample = json.loads(path.read_text())
+                self.assertEqual((sample['game'], sample['level'], sample['batch']), ('sc01-v1', 1, 7))
+                self.assertLessEqual(sample['actions'], 4)
+                self.assertEqual(base64.b64decode(sample['initial']['pixels']), captured.transitions[0].before.frames[-1:].tobytes())
+                for row, transition in zip(sample['steps'], captured.transitions):
+                    self.assertEqual(row['action']['id'], transition.action.id)
+                    self.assertEqual(base64.b64decode(row['frames']['pixels']), transition.after.frames.tobytes())
+                    self.assertEqual(row['goal_source'], 'teacher')
+                planned = [s for s in sample['steps'] if s['source'] == 'planner']
+                self.assertTrue(planned, 'This literal seed includes genuine planner decisions')
+                self.assertTrue(all(s['imagination'] and s['selected_estimate'] for s in planned))
+                self.assertTrue(all(len(s['imagination']) <= 3 for s in sample['steps']))
+                for name, old in before.items():
+                    torch.testing.assert_close(heads.engine.model.state_dict()[name], old, rtol=0, atol=0)
+        finally:
+            factory.arcade.close_scorecard()
+
+    def test_live_capture_records_the_learned_goal_without_turning_a_match_into_a_win(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'planner_trajectory.json'
+            heads = self.heads()
+            heads.begin_capture(PlannerTrajectory(path), batch=9)
+            collector, session, rng = self.collection(heads, learned=True)
+            heads.propose = Mock(return_value=(np.full((4,4),2,np.uint8),np.ones((4,4),bool)))
+            self.step(collector, session, rng, obs(0), obs(2))
+            collector.close_trajectory('session_budget')
+            sample = json.loads(path.read_text())
+            self.assertEqual(sample['steps'][0]['goal_source'], 'learned')
+            self.assertEqual(base64.b64decode(sample['steps'][0]['goal_frame']['pixels']), bytes([2]*16))
+            self.assertFalse(sample['success'])
+            self.assertTrue(sample['truncated'])
+            self.assertEqual(sample['reason'], 'session_budget')
+
     def test_configuration_requires_teacher_scope_and_bounded_exploration(self):
         with tempfile.TemporaryDirectory() as directory:
             path, values = config(Path(directory), sequence={}, sequence_planning={})
@@ -293,6 +350,14 @@ class SequencePlanningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 restore_run(nonfrozen, plan, learner, rep, control, planning=heads, adopt_planning=True)
             run(SimpleNamespace(**args, resume=True, adopt_planning=True))
+            preview_report = json.loads((root/'run/report.json').read_text())
+            self.assertIn('planner_trajectory', set(preview_report), 'Sequence planning must publish its live sample')
+            preview = json.loads((root/'run/planner_trajectory.json').read_text())
+            self.assertEqual(preview['id'], preview_report['planner_trajectory']['id'])
+            self.assertEqual(preview['batch'], 3)
+            self.assertEqual(preview['format_version'], 2)
+            self.assertEqual(preview['game'], 'sc01-v1')
+            self.assertTrue(all(s['goal_source'] == 'teacher' for s in preview['steps']))
             trained = checkpoint.load(root/'run/latest.pt')
             self.assertGreater(trained['planning']['goal_updates'], 0)
             self.assertGreater(trained['planning']['path_updates'], 0)
@@ -311,6 +376,9 @@ class SequencePlanningTests(unittest.TestCase):
                     for name, old in state.items():
                         torch.testing.assert_close(actual['state'][key][name], old, rtol=0, atol=0)
             run(SimpleNamespace(**args, resume=True))
+            next_report = json.loads((root/'run/report.json').read_text())
+            self.assertNotEqual(next_report['planner_trajectory']['id'], preview['id'])
+            self.assertEqual(next_report['planner_trajectory']['batch'], 4)
             resumed = checkpoint.load(root/'run/latest.pt')
             self.assertGreater(resumed['planning']['goal_updates'], trained['planning']['goal_updates'])
             self.assertEqual(resumed['planning']['adopted_batch'], 2)
