@@ -45,6 +45,32 @@ const text = id => nodes.get(id).textContent;
   assert.equal(text('exploration-policy'), 'Uniform exploration');
   assert.equal(text('exploration-head-info'), 'No learned-head measurements yet');
   assert.equal(nodes.get('interaction-change-legend').children[0].textContent,'Changed actions %: —');
+  assert.equal(nodes.get('planning-details').hidden,true);
+  report.planning={goal_updates:16,path_updates:12,learned_probability:.125,
+    config:{exploration:.25,horizon:2,beam:4}};
+  report.history[0].planning={identity:'0',teacher_actions:8,episodes:2,censored:1,
+    goal_loss:2.,path_loss:.5,goal_color_error:.2,goal_mask_error:.1,
+    teacher_attempts:2,teacher_reached:1,teacher_steps:4,teacher_task_progress:1,teacher_level_successes:0,
+    learned_attempts:1,learned_reached:1,learned_steps:2,learned_task_progress:0,learned_level_successes:0};
+  report.planning_sample={batch:1,game:'sc01-v1',before:[[0,1]],target:[[2,3]],mask:[[true,false]],
+    predicted:[[4,5]],predicted_mask:[[false,true]]};
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('planning-details').hidden,false);
+  assert.match(text('planning-status'),/Learned-goal share: 12.5%/);
+  assert.equal(nodes.get('planning-success-legend').children[0].textContent,'Teacher %: 50');
+  assert.equal(nodes.get('planning-success-legend').children[1].textContent,'Learned image match %: 100');
+  assert.equal(nodes.get('planning-outcomes').children[1].children[3].textContent,'0',
+    'Matching a learned image must not be displayed as genuine task progress');
+  assert.equal(nodes.get('planning-target').context.pixels[1].color,'#aaa');
+  assert.equal(nodes.get('planning-predicted').context.pixels[0].color,'#eee');
+  report.history[0].planning.teacher_attempts=0;
+  report.history[0].planning.teacher_reached=0;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('planning-success-legend').children[0].textContent,'Teacher %: —');
+  assert.equal(nodes.get('planning-steps-legend').children[0].textContent,'Teacher: —');
+  delete report.planning;delete report.planning_sample;delete report.history[0].planning;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('planning-details').hidden,true);
   report.exploration_config={policy:'learned',uniform_probability:.25};
   report.exploration_adoptions=[{batch:0}];
   report.history[0].exploration={policy:'learned',identity:'new',eligible_transitions:100,changed_actions:40,

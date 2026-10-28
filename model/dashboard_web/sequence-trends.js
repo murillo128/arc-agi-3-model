@@ -3,7 +3,7 @@
 globalThis.SequenceTrends = (() => {
   const finite = Number.isFinite;
   const regime = row => JSON.stringify([row.measurement_source ?? 'fixed_evaluation', row.phase,
-    row.exploration?.policy ?? 'uniform', row.exploration?.identity,
+    row.exploration?.policy ?? 'uniform', row.exploration?.identity, row.planning?.identity,
     ...['predictor', 'encoder', 'decoder'].map(k => row.learning_rates?.[k])]);
   const connected = (a, b) => a && b.batch === a.batch + 1 && regime(a) === regime(b);
   function suffix(rows) {
@@ -59,7 +59,8 @@ globalThis.SequenceTrends = (() => {
       if (index-start >= size) a.add(rows[index-size], -1);
       const value = index-start+1 >= size ? a.result() : {balanced:null, pooled:null, coverage:0};
       return {batch:row.batch, actions:row.actions, measurement_source:row.measurement_source,
-        phase:row.phase, exploration:row.exploration, learning_rates:row.learning_rates, ...value};
+        phase:row.phase, exploration:row.exploration, planning:row.planning,
+        learning_rates:row.learning_rates, ...value};
     });
   }
   return {regime, connected, suffix, compare, rolling};

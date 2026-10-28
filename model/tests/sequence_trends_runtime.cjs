@@ -29,7 +29,7 @@ assert.equal(compare([row(1,q(1,10)),row(2,{delta_error:0})],['a'],2).current.ba
 assert.equal(compare([row(1,q(11,10)),row(2,q(0,10))],['a'],2).current.balanced,null);
 // Neither comparison nor moving means may bridge a missing batch or a new regime.
 for(const changed of [{batch:7},{measurement_source:'training_pre_update'},{phase:'predictor'},
-  {learning_rates:{predictor:1e-4}},{exploration:{policy:'learned',identity:'different'}}]){
+  {learning_rates:{predictor:1e-4}},{exploration:{policy:'learned',identity:'different'}},{planning:{identity:'133'}}]){
   const altered=rows.map(r=>({...r}));Object.assign(altered[2],changed);
   if(changed.batch)altered[3].batch=8;else Object.assign(altered[3],changed);
   const c=compare(altered,['a','b'],2);

@@ -67,7 +67,7 @@ def close_factories(factories):
 
 
 def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exploration=None, explorer=None,
-                  game_weights=None, sampling_start_batch=0):
+                  game_weights=None, sampling_start_batch=0, planning=None):
     games = schedule_games(list(factories), batch_index - sampling_start_batch, config,
                            seed=seed, weights=game_weights)
     sessions = []
@@ -77,6 +77,8 @@ def collect_batch(factories, config, batch_index, seed, *, evaluation=False, exp
         session_seed = 4_000_000 + 2 * (seed * 10_000 + batch_index * config.batch_games + i) + int(evaluation)
         factory, levels = factories[game]
         options = {} if evaluation or exploration is None else dict(exploration=exploration, explorer=explorer)
+        if planning is not None and not evaluation:
+            options['planning'] = planning
         sessions.append(collect_session(factory, levels, session_seed, config, **options))
     if any(not any(s.supervised for s in row.transitions) for row in sessions):
         raise ValueError('A session has no eligible real transitions; check level access and budgets')
@@ -198,7 +200,7 @@ def fit_batch(learner, sessions, representation=None, *, telemetry=None,
 
 def save_run(path, plan, learner, representation, batches, actions, control=None, *, extensions=(),
              restrictions=(), explorer=None, exploration_adoptions=(), predictor_adaptations=(),
-             game_weight_adoptions=()):
+             game_weight_adoptions=(), planning=None):
     e = learner.engine
     checkpoint.write(path, dict(kind='game_sequences', version=1, plan=plan.payload,
         network=asdict(e.model.config), training=asdict(e.config), weights=e.model.state_dict(),
@@ -210,6 +212,7 @@ def save_run(path, plan, learner, representation, batches, actions, control=None
         predictor_adaptations=list(predictor_adaptations),
         game_weight_adoptions=list(game_weight_adoptions),
         **(dict(exploration=explorer.snapshot()) if explorer is not None else {}),
+        **(dict(planning=planning.snapshot()) if planning is not None else {}),
         torch_rng=torch.get_rng_state(),
         cuda_rng=torch.cuda.get_rng_state_all() if e.device.type == 'cuda' else [],
         **(dict(sequence_control=control.snapshot(), representation_state=dict(
@@ -247,7 +250,7 @@ def restricted_plan_matches(previous, current):
 
 def restore_run(saved, plan, learner, representation, control=None, *, adopt=False, extend=False, restrict=False,
                 adopt_exploration=False, explorer=None, disable_undo=False, upgrade_predictor=False,
-                fix_click_sigma=False, adopt_game_weights=False):
+                fix_click_sigma=False, adopt_game_weights=False, planning=None, adopt_planning=False):
     if fix_click_sigma and (disable_undo or upgrade_predictor):
         raise ValueError('Fixed click sigma cannot be combined with other adaptations')
     adaptation = disable_undo or upgrade_predictor or fix_click_sigma
@@ -256,6 +259,14 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
         raise ValueError('Frozen representation cannot be combined with other adoptions or curriculum changes')
     if sum((adopt, extend, restrict, adopt_exploration, adaptation, adopt_game_weights)) > 1:
         raise ValueError('Explicit adoptions/extensions cannot be combined')
+    if adopt_planning and (any((adopt, extend, restrict, adopt_exploration, adaptation, adopt_game_weights))
+            or planning is None or 'planning' in saved or 'sequence_planning' in saved['plan']):
+        raise ValueError('Planning adoption requires a new head and no other adoption')
+    if planning is not None and (saved.get('sequence_control', {}).get('phase') != 'predictor'
+            or saved.get('sequence_control', {}).get('representation_frozen_at_batch') is None):
+        raise ValueError('Sequence planning requires frozen representation in predictor phase')
+    if planning is None and 'planning' in saved:
+        raise ValueError('Cannot discard saved planning heads')
     expected = normalized_plan(plan.payload)
     if adopt:
         if control is None or 'sequence_control' in saved or 'sequence_control' in saved['plan']:
@@ -263,6 +274,8 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
         expected.pop('sequence_control')
         expected['settings']['encoder_learning_rate_after_predictor'] = saved['plan']['settings']['encoder_learning_rate_after_predictor']
     previous_plan = normalized_plan(saved['plan'])
+    if adopt_planning:
+        expected.pop('sequence_planning', None)
     if adopt_exploration:
         # Initial adoption only: never silently reinitialize an existing head.
         if saved.get('exploration') is not None or explorer is None:
@@ -308,6 +321,13 @@ def restore_run(saved, plan, learner, representation, control=None, *, adopt=Fal
             representation.sigreg_enabled and learner.updates == 0)
         representation.updates = state.get('updates', 0)
         control.apply(representation)
+    if planning is not None:
+        if adopt_planning:
+            planning.adopted_batch = saved['progress']['batches']
+        else:
+            if 'planning' not in saved:
+                raise ValueError('Missing planner weights; use --adopt-planning once')
+            planning.restore(saved['planning'])
     torch.set_rng_state(saved['torch_rng'])
     if learner.engine.device.type == 'cuda' and saved['cuda_rng']:
         if len(saved['cuda_rng']) != torch.cuda.device_count():
@@ -353,6 +373,11 @@ def run(args):
     fix_click_sigma = getattr(args, 'fix_click_sigma', False)
     adopt_game_weights = getattr(args, 'adopt_game_weights', False)
     freeze_representation = getattr(args, 'freeze_representation', False)
+    adopt_planning = getattr(args, 'adopt_planning', False)
+    if adopt_planning and (not args.resume or 'sequence_planning' not in plan.payload or rate is not None or freeze_representation):
+        raise ValueError('--adopt-planning requires a planner-enabled resume without LR/freeze override')
+    if 'sequence_planning' in plan.payload and not args.resume:
+        raise ValueError('Adopt planning from an existing frozen sequence run')
     if freeze_representation and (not args.resume or 'sequence_control' not in plan.payload or any(
             (adopt, extend, restrict, adopt_exploration, disable_undo, upgrade_predictor,
              fix_click_sigma, adopt_game_weights, rate is not None))):
@@ -390,6 +415,9 @@ def run(args):
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
         explorer = ChangeExplorer(exploration) if exploration.policy == 'learned' else None
+        from .sequence_planning import SequencePlanning, SequencePlanningConfig
+        planning = (SequencePlanning(engine, SequencePlanningConfig(**plan.payload['sequence_planning']),
+                    explorer=explorer, seed=plan.settings['seed']) if 'sequence_planning' in plan.payload else None)
         if exploration_source:
             bootstrap = checkpoint.load(exploration_source)
             if bootstrap.get('kind') != 'sequence_change_head':
@@ -405,7 +433,8 @@ def run(args):
                                            adopt=adopt, extend=extend, restrict=restrict,
                                            adopt_exploration=adopt_exploration, explorer=explorer,
                                            disable_undo=disable_undo, upgrade_predictor=upgrade_predictor,
-                                           fix_click_sigma=fix_click_sigma, adopt_game_weights=adopt_game_weights)
+                                           fix_click_sigma=fix_click_sigma, adopt_game_weights=adopt_game_weights,
+                                           planning=planning, adopt_planning=adopt_planning)
             game_weight_adoptions = list(saved.get('game_weight_adoptions', []))
             if adopt_game_weights and saved['plan'].get('sequence_game_weights', {}) != plan.payload.get('sequence_game_weights', {}):
                 game_weight_adoptions.append(dict(batch=batches, actions=actions,
@@ -450,7 +479,7 @@ def run(args):
             from .optimization_telemetry import OptimizationTelemetry
             telemetry = OptimizationTelemetry(engine.model, output, every=args.optimization_every,
                 restored_batch=batches, identity=json.dumps(
-                    {k:v for k,v in plan.payload.items() if k not in ('sequence_exploration', 'sequence_game_weights')}, sort_keys=True))
+                    {k:v for k,v in plan.payload.items() if k not in ('sequence_exploration', 'sequence_game_weights', 'sequence_planning')}, sort_keys=True))
         stop = False
         def interrupt(signum, frame):
             nonlocal stop
@@ -470,6 +499,8 @@ def run(args):
         report['exploration_adoptions'] = exploration_adoptions
         report['predictor_adaptations'] = predictor_adaptations
         report['network'] = asdict(engine.model.config)
+        if planning is not None:
+            report['planning'] = dict(config=asdict(planning.config), **planning.status())
         report['click_map'] = click_map_report(engine)
         report['budget'] = action_budget
         report['measurement_source'] = 'training_pre_update' if control else 'fixed_evaluation'
@@ -493,6 +524,8 @@ def run(args):
                 report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
                 report['prediction_samples'] = previous.get('prediction_samples', [])
                 report['prediction_sample_batch'] = previous.get('prediction_sample_batch')
+                if planning is not None:
+                    report['planning_sample'] = previous.get('planning_sample')
                 if 'adopted_at_batch' in previous:
                     report['adopted_at_batch'] = previous['adopted_at_batch']
         completed_here = 0
@@ -511,7 +544,7 @@ def run(args):
                     telemetry.start_batch(batches + 1)
                 sessions = collect_batch(factories, config, batches, plan.settings['seed'],
                                          exploration=exploration, explorer=explorer,
-                                         game_weights=report['game_weights'], sampling_start_batch=sampling_start_batch)
+                                         game_weights=report['game_weights'], sampling_start_batch=sampling_start_batch, planning=planning)
                 collection_seconds = time.perf_counter() - begin
                 if control:
                     phase = control.phase
@@ -558,6 +591,13 @@ def run(args):
                 measured['exploration'] = dict(policy=exploration.policy, identity=digest(asdict(exploration)),
                     **sum_counts(interaction_rows), head=head_metrics,
                     games=[dict(game=session.game, **counts) for session, counts in zip(sessions, interaction_rows)])
+                if planning is not None:
+                    measured['planning'], sample = planning.fit(sessions)
+                    measured['planning_seconds'] = measured['planning']['seconds']
+                    measured['planning']['identity'] = str(planning.adopted_batch)
+                    report['planning'] = dict(config=asdict(planning.config), **planning.status())
+                    if sample is not None:
+                        report['planning_sample'] = dict(sample, batch=batches+1)
                 real_actions = sum(s.environment_actions for s in sessions)
                 batches += 1
                 actions += real_actions
@@ -565,7 +605,7 @@ def run(args):
                 save_run(output / 'latest.pt', plan, learner, representation, batches, actions, control,
                          extensions=extensions, restrictions=restrictions,
                          explorer=explorer, exploration_adoptions=exploration_adoptions,
-                         predictor_adaptations=predictor_adaptations, game_weight_adoptions=game_weight_adoptions)
+                         predictor_adaptations=predictor_adaptations, game_weight_adoptions=game_weight_adoptions, planning=planning)
                 measured['save_seconds'] = time.perf_counter() - save_start
                 if telemetry:
                     telemetry_start = time.perf_counter()
@@ -625,6 +665,8 @@ def main():
                         help='Explicitly remove training games/levels on resume, preserving weights, optimizers and phase')
     parser.add_argument('--adopt-training-phases', action='store_true',
                         help='Explicitly adopt sequence_control on a legacy checkpoint, retaining weights and optimizers')
+    parser.add_argument('--adopt-planning', action='store_true',
+                        help='Add goal/path heads once to a frozen representation sequence run')
     parser.add_argument('--adopt-exploration', action='store_true',
                         help='Adopt the first learned exploration head without resetting the world model')
     parser.add_argument('--adopt-game-weights', action='store_true',

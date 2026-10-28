@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from model.dashboard import make_server
-from model.sequence_history import SequenceHistory
+from model.sequence_history import SequenceHistory, compact_row
 
 
 def row(batch):
@@ -23,6 +23,13 @@ def row(batch):
 
 
 class SequenceHistoryTests(unittest.TestCase):
+    def test_planning_regime_and_missing_measurements_survive_compaction(self):
+        original = row(1) | dict(planning_seconds=2.5, planning=dict(identity='133', goal_loss=None,
+            teacher_attempts=0, teacher_reached=0, learned_reached=1, learned_task_progress=0))
+        compact = compact_row(original)
+        self.assertEqual(compact['planning'], original['planning'])
+        self.assertEqual(compact['planning_seconds'], 2.5)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

@@ -220,7 +220,8 @@ or predictor LR override. Save a recovery checkpoint before changing a live run.
 The checkpoint records the completed batch at which representation was frozen;
 ordinary `--resume` retains that freeze without repeating the flag. Older
 checkpoints remain unfrozen. A frozen run rejects subsequent curriculum/adoption
-changes instead of implicitly unfreezing representation.
+changes instead of implicitly unfreezing representation, with the explicit
+teacher-guided planning extension described below as the only exception.
 
 Predictor training retains its visual loss and differentiates through the frozen
 decoder. Reconstruction and prediction diagnostics continue on normal training
@@ -228,6 +229,13 @@ batches. Representation loss is absent (not zero), and redundant encoder-drift
 measurement is skipped with an explicit frozen status in the dashboard. There
 is no automatic unfreeze; use the preserved checkpoint to resume the earlier
 training regime. Freezing is not evidence that prediction quality improved.
+
+An optional `sequence_planning` section adds learned visual goals and a
+success-first path head alongside the predictor, initially supervised only by
+the bundled Follow the Cross teachers. Adopt it once with `--adopt-planning` on
+a frozen predictor run; ordinary resume preserves both new heads and all existing
+weights and optimizer states. See [sequence planning](../docs/sequence-planning.md)
+for the configuration, real-outcome labels, monitoring and deployment boundary.
 
 ### Mixed synthetic and public SDK training
 
