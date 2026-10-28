@@ -126,15 +126,17 @@ class AdaptationSmokeTests(unittest.TestCase):
             self.assertTrue(all(report['isolation'].values()))
             # The fixed default seed's first sc01 level-1 SDK action changes
             # the returned board. That real pair supplies predictor supervision
-            # and an already reached hindsight goal, so all four phases must
-            # perform useful bounded work. No oracle labels or seed/LR search
+            # and real reachability, but no native success for Goal supervision.
+            # No oracle labels or seed/LR search
             # are involved; both fixture weights and policy seed are fixed.
             observed = report['games'][0]['diagnostics']
             self.assertEqual(observed['confirmed_transitions'], 1)
             self.assertEqual(observed['predictive_pairs'], 1)
             self.assertEqual(observed['boundary_skips'], 0)
             self.assertEqual(observed['numerical_failures'], 0)
-            for group in ('representation', 'predictor', 'path', 'goal'):
+            self.assertEqual(observed['updates']['goal'], 0)
+            self.assertNotIn('goal', observed['losses'])
+            for group in ('representation', 'predictor', 'path'):
                 self.assertGreater(observed['updates'][group], 0, group)
                 losses = observed['losses'][group]
                 self.assertTrue(math.isfinite(losses['pre']) and math.isfinite(losses['post']), group)

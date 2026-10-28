@@ -79,8 +79,10 @@ def _fixture():
     second[1:3, 1:3], second[1:3, 3:5] = 0, 3
     third = second.copy()
     third[5:7, 5:7], third[3:5, 5:7] = 0, 9
-    return [Observation(frame[None], (1, 2, 3, 4), 'NOT_FINISHED', 0, 5)
-            for frame in (first, second, third)]
+    # Simulated success enables Goal fitting only after the second confirmation.
+    # The terminal display itself is never the Goal target.
+    return [Observation(frame[None], (1, 2, 3, 4), 'WIN' if i == 2 else 'NOT_FINISHED', 0, 5)
+            for i, frame in enumerate((first, second, third))]
 
 
 def _probe(policy, observation):

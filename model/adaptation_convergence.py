@@ -68,6 +68,46 @@ def fixed_hindsight(rows):
     return labels
 
 
+def successful_hindsight(rows):
+    """Observed subgoals from scenes followed by native success, never end screens.
+
+    The final nonterminal frame is a subgoal on a successful trajectory, not a
+    claim that its pixels alone define the game's winning condition. A RESET,
+    geometry change or missing frame cannot manufacture this supervision.
+    """
+    labels, scene = [], []
+    for record in rows:
+        obs = record.observation
+        previous = scene[-1].observation if scene else None
+        reset = record.action is not None and record.action.id == 0
+        success = (previous is not None and not reset and record.action is not None
+                   and (obs.state == 'WIN' or obs.levels_completed > previous.levels_completed))
+        if success:
+            last = scene[-1]
+            for before in scene[:-1]:
+                mask = before.observation.final != last.observation.final
+                if mask.any():
+                    labels.append(dict(start=before.number, end=last.number,
+                        frame=last.observation.final, mask=mask, success=True,
+                        distance=last.number-before.number, budget=last.number-before.number,
+                        progress=True))
+        boundary = (record.boundary or reset or obs.terminal or obs.final is None or success
+                    or (previous is not None and (previous.levels_completed != obs.levels_completed
+                        or previous.final.shape != obs.final.shape)))
+        if boundary:
+            scene = []
+        if obs.final is not None and not obs.terminal and obs.state != 'NOT_PLAYED':
+            scene.append(record)
+    return labels
+
+
+def predictive_pair(before, after):
+    a, b = before.observation, after.observation
+    return (not after.boundary and after.action is not None and after.action.id != 0
+            and not a.terminal and a.final is not None and b.final is not None
+            and a.final.shape == b.final.shape and a.levels_completed == b.levels_completed)
+
+
 def delta_metrics(before, actual, predicted):
     real, proposed = actual != before, predicted != before
     missed = int((real & ~proposed).sum())
@@ -100,6 +140,13 @@ def summarize(name, rows):
         result = {key: sum(row[key] for row in rows) for key in rows[0]}
         result['delta_error'] = result['wrong'] / result['union'] if result['union'] else None
         result['latest_delta_error'] = rows[-1]['wrong'] / rows[-1]['union'] if rows[-1]['union'] else None
+        rollouts = [row for row in rows if row.get('rollout_samples')]
+        result['rollout_samples'] = len(rollouts)
+        union = result.get('rollout_union', 0)
+        result['rollout_delta_error'] = result['rollout_wrong'] / union if union else None
+        last = rollouts[-1] if rollouts else {}
+        result['latest_rollout_delta_error'] = (last['rollout_wrong'] / last['rollout_union']
+                                                if last.get('rollout_union') else None)
         return result
     result = {}
     for key in rows[0]:
@@ -114,11 +161,17 @@ def stopping_reason(name, metrics, config):
     if name == 'representation':
         return 'threshold' if max(metrics['reconstruction_error'], metrics['latest_reconstruction_error']) <= config.reconstruction_threshold else None
     if name == 'predictor':
-        if metrics['delta_error'] is None:
+        for keys, threshold in ((('delta_error', 'latest_delta_error'), config.delta_threshold),
+                                (('rollout_delta_error', 'latest_rollout_delta_error'), config.rollout_delta_threshold)):
+            if any(metrics.get(key) is not None and metrics[key] > threshold for key in keys):
+                return None
+        if not metrics.get('rollout_samples'):
+            return 'insufficient_rollout_history'
+        if metrics['delta_error'] is None and metrics['rollout_delta_error'] is None:
             return 'no_change'
-        passed = (metrics['delta_error'] <= config.delta_threshold and
-                  (metrics['latest_delta_error'] is None or metrics['latest_delta_error'] <= config.delta_threshold))
-        return 'threshold' if passed else None
+        if metrics['rollout_delta_error'] is None:
+            return 'no_rollout_change'
+        return 'threshold'
     if name == 'goal':
         passed = (metrics['color_error'] <= config.goal_color_threshold and
                   metrics['mask_error'] <= config.goal_mask_threshold)
@@ -148,13 +201,16 @@ def fit(policy, name, deadline):
     """One fixed set, full-replay checks after each minibatched training sweep."""
     examples = policy._examples(name)
     started = time.monotonic()
-    result = dict(reason='no_data', threshold_met=False, steps=0, checks=0,
+    result = dict(reason='no_progress' if name == 'goal' else 'no_data', threshold_met=False, steps=0, checks=0,
                   samples=len(examples), initial=None, final=None, best_loss=None,
                   restored_best=False, elapsed_seconds=0.)
     policy.diagnostics['convergence'][name] = result
     if not examples:
         policy.diagnostics['skipped'][name] += 1
         return
+    minimum_steps = int(name == 'predictor' and examples[-1][1].number == policy.history[-1].number
+                        and examples[-1][1].number > policy._predictor_adapted_through)
+    result['minimum_steps'] = minimum_steps
     groups = GROUPS[name]
     weights = policy._weights(name, examples)
     total_weight = sum(weights)
@@ -215,6 +271,8 @@ def fit(policy, name, deadline):
             if interrupted():
                 return False
             policy._update(name, groups)
+            if name == 'predictor':
+                policy._predictor_adapted_through = examples[-1][1].number
             policy.diagnostics['losses'][name] = dict(pre=total, post=None, error_pre=None, error_post=None)
             return True
         finally:
@@ -238,7 +296,7 @@ def fit(policy, name, deadline):
                     best = snapshot(policy.bank, groups)
                     result['best_loss'] = loss
                 reason = stopping_reason(name, measurement['metrics'], policy.config)
-                if reason:
+                if reason and result['steps'] >= minimum_steps:
                     result.update(reason=reason, threshold_met=reason == 'threshold')
                     return
                 if not math.isfinite(progress_loss) or loss < progress_loss - max(abs(progress_loss), 1e-8) * policy.config.plateau_min_relative_improvement:
@@ -262,7 +320,8 @@ def fit(policy, name, deadline):
             result['reason'] = 'error'
             raise
         finally:
-            if best is not None and result['reason'] not in ('threshold', 'no_change'):
+            if best is not None and result['reason'] not in ('threshold', 'no_change',
+                                                           'insufficient_rollout_history', 'no_rollout_change'):
                 restore(policy.bank, groups, best)
                 result.update(final=best_measurement, restored_best=True)
             result['elapsed_seconds'] = time.monotonic() - started

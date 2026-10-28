@@ -84,6 +84,8 @@ class KaggleAdaptationTests(unittest.TestCase):
             self.assertIn("'replay_size': None", module)
             self.assertIn("'history_half_life': 32.0", module)
             self.assertIn("'history_weight_floor': 0.25", module)
+            self.assertIn("'delta_threshold': 0.05", module)
+            self.assertIn("'rollout_delta_threshold': 0.1", module)
             self.assertIn('model/adaptation_convergence.py', scope['sources'])
             self.assertIn('"stopping": "steps"', adaptive['cells'][3]['source'])
         finally:

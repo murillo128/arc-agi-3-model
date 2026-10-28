@@ -40,16 +40,27 @@ class ConvergenceTests(unittest.TestCase):
         self.assertEqual(policy.diagnostics['convergence']['predictor']['reason'], 'no_data')
         policy.confirm_result(observed(3), action)
         fits = policy.diagnostics['convergence']
-        for name in ('representation', 'predictor', 'path', 'goal'):
+        for name in ('representation', 'path'):
             self.assertEqual(fits[name]['reason'], 'threshold', (name, fits[name]))
             self.assertTrue(fits[name]['threshold_met'])
             self.assertGreaterEqual(fits[name]['elapsed_seconds'], 0.)
-        for name in ('predictor', 'path', 'goal'):
+        self.assertEqual(fits['goal']['reason'], 'no_progress')
+        self.assertEqual(fits['predictor']['reason'], 'insufficient_rollout_history')
+        self.assertFalse(fits['predictor']['threshold_met'])
+        self.assertEqual(fits['predictor']['final']['metrics']['rollout_samples'], 0)
+        self.assertIsNone(fits['predictor']['final']['metrics']['rollout_delta_error'])
+        for name in ('predictor', 'path'):
             self.assertGreater(fits[name]['steps'], 1)
             self.assertLess(fits[name]['final']['loss'], fits[name]['initial']['loss'])
-        self.assertLessEqual(fits['predictor']['final']['metrics']['delta_error'], .10)
-        self.assertLessEqual(fits['goal']['final']['metrics']['mask_error'], .10)
+        self.assertLessEqual(fits['predictor']['final']['metrics']['delta_error'], .05)
         self.assertLessEqual(fits['path']['final']['metrics']['cost_error'], .10)
+        policy.choose_action(observed(3))
+        policy.confirm_result(observed(4, level=1))
+        goal = policy.diagnostics['convergence']['goal']
+        self.assertEqual(goal['reason'], 'threshold')
+        self.assertGreater(goal['steps'], 1)
+        self.assertLess(goal['final']['loss'], goal['initial']['loss'])
+        self.assertLessEqual(goal['final']['metrics']['mask_error'], .10)
         self.assertEqual(base_digest(shared), frozen)
         self.assertEqual(bank_digest(inactive.bank), other)
         self.assertTrue(all(p.grad is None for p in shared.engine.model.parameters()))
@@ -65,7 +76,7 @@ class ConvergenceTests(unittest.TestCase):
         empty = delta_metrics(before, before, before)
         empty_metric = summarize('predictor', [empty])
         self.assertIsNone(empty_metric['delta_error'])
-        self.assertEqual(stopping_reason('predictor', empty_metric, AdaptationConfig()), 'no_change')
+        self.assertEqual(stopping_reason('predictor', empty_metric, AdaptationConfig()), 'insufficient_rollout_history')
         # Historical success must not hide a completely wrong new transition.
         easy = dict(missed=0, invented=0, wrong_color=0, wrong=0, union=100, changed=100)
         metrics = summarize('predictor', [easy, stats])
@@ -96,12 +107,13 @@ class ConvergenceTests(unittest.TestCase):
         self.assertEqual(len(policy._examples('representation')), 4)
         pairs = policy._examples('predictor')
         self.assertEqual([(a.number, b.number) for a, b in pairs], [(2, 3), (3, 4), (4, 5)])
-        labels = policy._examples('goal')
+        self.assertEqual(policy._examples('goal'), [])  # no native success yet
+        labels = policy._examples('path')
         self.assertEqual(len({r['start'] for r in labels}), len(labels))
         self.assertTrue(any(r['end'] == 5 for r in labels))
         self.assertEqual(policy.rng.getstate(), rng)
         self.assertEqual([(r['start'], r['end']) for r in labels],
-                         [(r['start'], r['end']) for r in policy._examples('goal')])
+                         [(r['start'], r['end']) for r in policy._examples('path')])
 
     def test_plateau_restores_best_parameters_and_adam_moments(self):
         policy = AdaptivePolicy(runtime(), AdaptationConfig(learning_rate=1., exploration=1.,
