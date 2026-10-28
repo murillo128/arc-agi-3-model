@@ -31,8 +31,9 @@ let controlReply;
 let trajectoryReply={ok:true,json:async()=>({trajectory:null})};
 let trajectoryRequests=0;
 const controlRequests=[];
+let animationTick;
 let gpu={devices:[{index:0,name:'Test GPU',utilization_percent:73,temperature_c:71}]};
-const context=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(){},atob:value=>Buffer.from(value,'base64').toString('binary'),
+const context=vm.createContext({console,AbortSignal,setTimeout(callback,delay){if(delay===250)animationTick=callback;},clearTimeout(){},atob:value=>Buffer.from(value,'base64').toString('binary'),
   fixture:report,
   document:{getElementById:id=>nodes.get(id),createElement:element,createElementNS:element},
   fetch:async(url,options)=>{if(offline)throw Error('offline');if(url==='api/trajectory'){trajectoryRequests++;return trajectoryReply;}if(options?.method==='POST'){
@@ -41,6 +42,7 @@ const context=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(
 const text=id=>nodes.get(id).textContent;
 (async()=>{
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(assets,'trajectory-viewer.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(text('actions'),'32');
@@ -711,7 +713,7 @@ const text=id=>nodes.get(id).textContent;
   assert.match(text('trajectory-step'),/Action 1\/1 · ACTION4 · Planner · frame 2\/3/);
   assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#999999','#666666']);
   nodes.get('trajectory-play').listeners.click();
-  vm.runInContext('trajectoryTick()',context);
+  animationTick();
   assert.deepEqual(nodes.get('observation').context.pixels.map(p=>p.color),['#333333','#000000']);
   report.planner_trajectory={id:'two'};
   await vm.runInContext('poll()',context);
@@ -838,6 +840,7 @@ const text=id=>nodes.get(id).textContent;
       return {ok:true,json:async()=>({subgoals:{...report,historical:true,status:'historical'},
         curriculum_control:{target:{game:'sc01-v1',level:2},phase:true,level:true}})};}});
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),history);
+  vm.runInContext(fs.readFileSync(path.join(assets,'trajectory-viewer.js'),'utf8'),history);
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),history);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(text('connection'),'History · read only');
@@ -869,6 +872,7 @@ const text=id=>nodes.get(id).textContent;
     fetch:async(url,options)=>{embeddedRequests.push({url,method:options?.method});
       return {ok:true,json:async()=>({subgoals:embeddedReport})};}});
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),embedded);
+  vm.runInContext(fs.readFileSync(path.join(assets,'trajectory-viewer.js'),'utf8'),embedded);
   vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),embedded);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(embeddedNodes.get('world').hidden,false,'embedded section overrides an unrelated fragment');

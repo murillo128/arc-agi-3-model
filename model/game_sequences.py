@@ -111,6 +111,7 @@ def collect_session(factory, levels, seed, config, *, exploration=None, explorer
             env.observation = after.level_initial()
     if planner is not None:
         planner.finish(None)
+        planner.close_trajectory('session_budget')
     return session
 
 

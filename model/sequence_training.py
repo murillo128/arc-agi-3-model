@@ -529,6 +529,11 @@ def run(args):
                 if 'adopted_at_batch' in previous:
                     report['adopted_at_batch'] = previous['adopted_at_batch']
         completed_here = 0
+        from .training_telemetry import PlannerTrajectory
+        trajectories = PlannerTrajectory(output / 'planner_trajectory.json') if planning is not None else None
+        # Sidecars belong to a capture process, not to checkpointed learning state.
+        report['planner_trajectory'] = None
+        report['trajectory_error'] = None
         try:
             factories = factories_for(plan)
             # Cover the entire configured catalog in bounded GPU batches.
@@ -542,6 +547,8 @@ def run(args):
                 begin = time.perf_counter()
                 if telemetry:
                     telemetry.start_batch(batches + 1)
+                if planning is not None:
+                    planning.begin_capture(trajectories, batch=batches+1)
                 sessions = collect_batch(factories, config, batches, plan.settings['seed'],
                                          exploration=exploration, explorer=explorer,
                                          game_weights=report['game_weights'], sampling_start_batch=sampling_start_batch, planning=planning)
@@ -628,6 +635,9 @@ def run(args):
                     row['peak_gpu_gib'] = torch.cuda.max_memory_allocated(engine.device)/1024**3
                 report['history'] = (report['history'] + [row])[-200:]
                 report['progress'] = dict(batches=batches, actions=actions, updates=learner.updates)
+                if trajectories is not None:
+                    report['planner_trajectory'] = trajectories.metadata
+                    report['trajectory_error'] = trajectories.error
                 write_report(report_path, report)
                 print(json.dumps(dict(event='sequence_batch', **row), allow_nan=False), flush=True)
                 completed_here += 1

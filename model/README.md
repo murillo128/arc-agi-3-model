@@ -519,6 +519,21 @@ en desplegables **Earlier … run** dentro de su sección correspondiente, sin
 mezclar sus métricas con las actuales. Solo se cargan mientras están abiertos y
 visibles; el histórico es de solo lectura. Los enlaces antiguos a `history.html`
 abren el mismo contenido dentro de la navegación actual.
+
+**Path Planner → Real trajectory & imagination** muestra también una muestra del
+entrenamiento de secuencias actual: objetivo elegido (teacher o aprendido),
+acciones, frames reales y continuación imaginada desde cada paso. Se captura
+como máximo un episodio elegible por batch, en los juegos con teacher, usando
+los latentes ya calculados antes de actuar. No añade evaluaciones ni cambia las
+decisiones. El visor compartido conserva las filas transpuestas, animaciones y
+fijación de la muestra; las predicciones no son resultados observados.
+Las ventanas de nivel/sesión o de 128 acciones se etiquetan como parciales;
+completar los subobjetivos del teacher no se presenta como una victoria nativa.
+La muestra ocupa un único sidecar, limitado a 4 MiB de datos decodificados; un
+fallo de captura conserva la última muestra válida del proceso y muestra un
+aviso. Al reanudar se espera una muestra nueva. `/api/trajectory` verifica su
+identificador en el informe actual y nunca recurre al entrenamiento histórico.
+
 Muestra las pérdidas del encoder/decoder y sus componentes, MSE latente y pérdida
 visual del predictor, desglose del delta, diversidad/rango/coordenadas casi
 constantes, sensibilidad a cambios, deriva, ejemplos visuales y tiempos por batch.

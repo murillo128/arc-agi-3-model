@@ -260,12 +260,12 @@ function render(data) {
   $('schedule-info').textContent=`${shuffled?(weighted?'Weighted sessions per shuffled round; the last batch may be smaller':'Each game once per round in shuffled order; the last batch may be smaller'):c.game_schedule==='blocked'?'One game per batch':'Games interleaved in each batch'} · rotation every ${c.level_steps??'—'} moves in synthetic games; SDK games progress natively. Memory is preserved across levels within a session. This mode does not use thresholds to activate the planner.`;
   renderPreview(data);
 }
-function draw(id, grid) {
-  const canvas=$(id), ctx=canvas.getContext('2d');
+function draw(id, grid, mask) {
+  const canvas=typeof id==='string'?$(id):id, ctx=canvas.getContext('2d');
   if(!grid?.length){ctx.clearRect(0,0,canvas.width,canvas.height);return;}
   canvas.height=grid.length;canvas.width=grid[0].length;
   for(let y=0;y<grid.length;y++)for(let x=0;x<grid[y].length;x++){
-    const value=grid[y][x];ctx.fillStyle=typeof value==='string'?value:palette[value]||((x+y)%2?'#aaa':'#eee');ctx.fillRect(x,y,1,1);
+    const value=mask&&!mask[y]?.[x]?16:grid[y][x];ctx.fillStyle=typeof value==='string'?value:palette[value]||((x+y)%2?'#aaa':'#eee');ctx.fillRect(x,y,1,1);
   }
 }
 function renderPlanning(data, rows, all) {
@@ -333,6 +333,7 @@ function renderPreview(data) {
   kinds.forEach(([,label],i)=>{const node=document.createElement('span');node.textContent=`${label}: ${counts[i]} px`;node.style.color=colors[i];$('preview-legend').append(node);});
 }
 $('preview-game').addEventListener('change',()=>{if(displayedReport)renderPreview(displayedReport);});
+const trajectoryView=ArcTrajectory.create({getReport:()=>displayedReport,picture:draw,goalCanvas:'trajectory-goal'});
 const archiveSections=['world','path','evaluation','curriculum'];
 const archiveFrames=new Map();
 let archiveAvailable=false;
@@ -368,6 +369,8 @@ function selectTab(name) {
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));$('tab-'+tab).tabIndex=tab===name?0:-1;}
   globalThis.history?.replaceState(null,'','#'+name);
   syncArchives();
+  if(name==='path')trajectoryView.refresh(displayedReport?.planner_trajectory);
+  else trajectoryView.stop();
 }
 tabs.forEach((name,i)=>{
   $('tab-'+name).addEventListener('click',()=>selectTab(name));
@@ -415,6 +418,7 @@ async function refresh() {
     archiveAvailable=state.history_available===true;
     syncArchives();
     $('gpu-status').textContent=(state.gpu?.devices||[]).map(g=>`GPU · ${number(g.utilization_percent,0)} % · ${number(g.temperature_c,0)} °C`).join(' · ');
+    await trajectoryView.refresh(data.planner_trajectory);
   } catch { renderedRevision=null; $('status').textContent = 'Disconnected'; }
   setTimeout(refresh, 2000);
 }
