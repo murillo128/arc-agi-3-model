@@ -6,6 +6,63 @@ parameters, Adam state, RNG, replay and goals. Updates use only confirmed public
 observations from that game; ordinary `arc3.evaluation.run` remains frozen.
 This delivery uses development weights and is not the final Phase 2 benchmark.
 
+## Manual public held-out experiment
+
+`model.online_lora_experiment` is a separate, explicitly authorized online
+experiment, not `arc3.evaluation.run` or the smoke below. It runs only the
+adaptive Kaggle policy, sequentially on the five evaluation games in
+`configs/splits.public-development.json`. Its closed protocol uses seed 42,
+80 agent requests (including RESET), 10 seconds of adaptation per observation,
+300 seconds of adaptation per game and a 900-second game deadline. There is no
+automatic launch, submission, parameter search or transfer between games.
+
+With the authorized batch-8246 portable checkpoint available locally:
+
+```sh
+OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 .venv/bin/python -u \
+  -m model.online_lora_experiment \
+  --checkpoint artifacts/online-lora-20261028/checkpoint/base.pt \
+  --output-dir artifacts/online-lora-20261028/run \
+  --environments-dir artifacts/online-lora-20261028/environment_files \
+  --mode normal --threads 2
+```
+
+The runner rejects an existing output directory, changed split/defaults, a
+checkpoint hash other than
+`4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7`,
+or missing CUDA. NORMAL mode provisions each game through the official SDK at
+its single initialization. Only public observations enter the policy. Checkpoint
+and base digests, pristine per-game optimizer/replay state, an unused isolated
+adapter bank, effective precision and GPU peak allocation/reservation are recorded.
+The unused bank never chooses actions or supplies a comparison score.
+
+Predictions are materialized before `step`, and compared to the real return
+before `confirm_result` learns from it. Delta error is the sum of missed,
+invented and wrong-color changes divided by the union of real/predicted changed
+pixels; an empty union is unavailable. RESET and scene boundaries are separate.
+Reconstruction on each new observation is measured before admission; the existing
+adaptation pre/post losses describe already-seen samples. First/last windows use
+up to ten eligible transitions and expose action indices, levels and overlap.
+They are descriptive, not a causal comparison of equally difficult transitions.
+
+Every returned action is logged, including no-ops, failures, terminal results and
+level changes. The SDK's official scorecard supplies RHAE and per-level action
+counts, including failed attempts; unavailable references produce null RHAE.
+SDK 0.9.9 counts partial RESET in both actions and resets; a full initialization
+starts a scorecard run at zero actions. The experiment counts every agent request,
+including RESET, while `make`'s initial reset is reported separately. Time is checked before selection
+and again before action dispatch. Already-running GPU/SDK operations and their
+confirmation finish; measured overruns remain visible. Game time includes policy
+creation, provisioning, diagnostics and learning; initial shared-base loading and
+final integrity verification are separately timed. The adapter implementation's
+learning timer excludes outer adapter transfers, so confirmation wall time is
+also recorded. Exhausted adaptation budgets still permit inference.
+
+JSON, CSV and flushed scalar JSONL evidence stay in ignored `artifacts/`. No
+observations, adapters, weights or game sources are exported. Partial records
+survive action/adaptation failures. These development-weight public-game results
+are not official Kaggle scores.
+
 Use Python 3.12 with the repository dependencies, including `arc-agi==0.9.9` and
 PyTorch. These commands generate local artifacts; none uploads or submits them.
 
