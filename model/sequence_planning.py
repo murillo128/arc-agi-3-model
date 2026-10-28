@@ -13,7 +13,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from .data import Observation
+from .data import Episode, Observation
 from .game_sequences import EncodedSessions, memory_inputs
 from .path_planning import PathConfig, PathPlanner, PathValue
 
@@ -116,6 +116,12 @@ class SequencePlanning:
         self.rng = random.Random(seed)
         self.goal_updates = self.path_updates = self.teacher_actions = 0
         self.adopted_batch = None
+        self.trajectory = self.capture_context = None
+
+    def begin_capture(self, trajectory, *, batch):
+        """Reserve at most one supported episode in this batch, without sampling RNG."""
+        self.trajectory = trajectory
+        self.capture_context = dict(batch=batch)
 
     @property
     def learned_probability(self):
@@ -270,6 +276,9 @@ class TeacherCollection:
     """Trainer-only coordinator. The teacher never enters either learned head."""
     def __init__(self, owner, factory, session):
         self.owner, self.factory, self.session = owner, factory, session
+        self.engine = owner.engine
+        self.last_diagnostics = {}
+        self.capture = None
         self.state = self.active = self.env = None
         self.teacher = None
         self.goals, self.goal_index = (), 0
@@ -283,11 +292,28 @@ class TeacherCollection:
         counts[key] = counts.get(key, 0)+amount
 
     def start(self, env):
+        self.close_trajectory('level_budget')
         self.finish(None)
         self.env, self.teacher = env, self.factory.teacher(env)
         self.goals, self.goal_index = self.teacher.training_subgoals(), 0
         self.pending_reset = True
         self.count('episodes')
+        if self.owner.capture_context is not None:
+            self.capture_context = dict(self.owner.capture_context, game=self.session.game,
+                                        episode_seed=self.session.seed, phase='training')
+            self.owner.capture_context = None
+            self.capture = self.owner.trajectory.begin()
+            self.trace_observations, self.trace_actions, self.trace_records = [], [], []
+
+    def close_trajectory(self, reason, success=False):
+        if self.capture is None:
+            return
+        if self.trace_actions:
+            self.owner.trajectory.add(Episode(self.trace_observations, self.trace_actions), self.trace_records,
+                dict(success=success, reason=reason), **self.capture_context,
+                truncated=reason in ('level_budget', 'session_budget', 'sample_limit'))
+        self.capture = None
+        self.trace_observations, self.trace_actions, self.trace_records = [], [], []
 
     def finish(self, success):
         if self.active is None:
@@ -312,6 +338,7 @@ class TeacherCollection:
             self.state = e.initial(before, memory=None if self.state is None else self.state.h)
             self.pending_reset = False
         if self.goal_index == len(self.goals):
+            self.close_trajectory('goals_reached')
             self.count('exploration_actions')
             action = explore()
             self.session.planning['seconds'] += time.perf_counter()-begin
@@ -331,20 +358,33 @@ class TeacherCollection:
             self.active = dict(start=start, deadline=start+min(config.lifetime, remaining),
                                frame=frame, mask=mask, source=source)
             self.planner.set_goal(frame, mask)
-        if self.owner.path_updates < config.warmup_updates or rng.random() < config.exploration:
+        exploring = self.owner.path_updates < config.warmup_updates or rng.random() < config.exploration
+        self.last_diagnostics = {}
+        if exploring:
             action = explore()
             self.count('exploration_actions')
         else:
             permitted = before if allow_undo else replace(before,
                 available_actions=tuple(a for a in before.available_actions if a != 7))
-            action = self.planner.choose(self.state, permitted, rng,
+            action = self.planner.choose(self.state, permitted, rng, diagnostics=self.last_diagnostics,
                 remaining_budget=self.active['deadline']-len(self.session.transitions))
             self.count('planner_actions')
+        if self.capture is not None:
+            if not self.trace_observations:
+                self.trace_observations.append(before)
+            self.capture(self, action, exploring)
+            self.trace_actions.append(action)
+            self.trace_records.append(dict(action_source='exploration' if exploring else 'planner',
+                goal='Learned goal' if self.active['source'] == 'learned' else 'Teacher goal',
+                goal_source=self.active['source']))
         self.session.planning['seconds'] += time.perf_counter()-begin
         return action
 
     def observe(self, before, action, after):
         begin = time.perf_counter()
+        if self.capture is not None:
+            self.trace_observations.append(after)
+            self.capture_context['level'] = self.session.transitions[-1].level_number
         self.state = self.owner.engine.observe(self.state, action, after)
         self.planner.after_real_action(action, before, after)
         old = self.goal_index
@@ -366,4 +406,13 @@ class TeacherCollection:
                 self.finish(False)
             elif self.goal_index > old:
                 self.finish(None)
+        if self.capture is not None:
+            if after.state == 'WIN' or after.starts_new_level(before):
+                self.close_trajectory('success', True)
+            elif after.terminal:
+                self.close_trajectory('game_over')
+            elif self.goal_index == len(self.goals):
+                self.close_trajectory('goals_reached')
+            elif len(self.trace_actions) >= 128:
+                self.close_trajectory('sample_limit')
         self.session.planning['seconds'] += time.perf_counter()-begin

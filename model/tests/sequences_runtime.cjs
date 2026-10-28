@@ -23,14 +23,17 @@ const report = {status: 'paused', age_seconds: 2, games: ['<game>'],
       '<game>': {delta_error: .25, transitions: 512}},
     sessions: [{game: '<game>', steps: 512, boundaries: 15, end: 'budget'}]}]};
 let offline = false, historyAvailable = true;
+let trajectoryRequests=0,trajectoryReply={ok:true,json:async()=>({trajectory:null})};
 let archiveState=null,archivePayload=null,archiveRequests=0,archiveOffline=false;
 const windowListeners={};
-const context = vm.createContext({console, URLSearchParams, setTimeout() {}, fixture: report,
+const context = vm.createContext({console, URLSearchParams, AbortSignal, clearTimeout() {}, setTimeout() {}, fixture: report,
+  atob:value=>Buffer.from(value,'base64').toString('binary'),
   location:{hash:'#curriculum',origin:'https://dashboard.test'},
   addEventListener(type,handler){windowListeners[type]=handler;},
   document: {getElementById: id => nodes.get(id), createElement: element, createElementNS: element},
   fetch: async url => {
     if(offline)throw Error('offline');
+    if(url==='api/trajectory'){trajectoryRequests++;return trajectoryReply;}
     if(url==='api/sequence-history'){
       archiveRequests++;
       if(archiveOffline)throw Error('archive offline');
@@ -42,6 +45,7 @@ const text = id => nodes.get(id).textContent;
 (async () => {
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'sequence-trends.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(assets,'trajectory-viewer.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets, 'sequences.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('status'), 'Paused');
@@ -71,6 +75,44 @@ const text = id => nodes.get(id).textContent;
     'Matching a learned image must not be displayed as genuine task progress');
   assert.equal(nodes.get('planning-target').context.pixels[1].color,'#aaa');
   assert.equal(nodes.get('planning-predicted').context.pixels[0].color,'#eee');
+  const packed=(pixels,shape)=>({shape,pixels:Buffer.from(pixels).toString('base64')});
+  const liveSample={kind:'planner_trajectory',format_version:2,id:'live-one',game:'sc01-v1',level:1,
+    batch:1,episode_seed:124,phase:'training',actions:1,frame_count:3,reason:'session_budget',truncated:true,
+    initial:packed([0,1],[1,1,2]),steps:[{action:{id:6,data:{x:3,y:4}},source:'planner',
+      goal:'Learned goal',goal_source:'learned',goal_frame:packed([6,16],[1,1,2]),
+      frames:packed([2,3,4,5],[2,1,2]),imagination_status:'planned',imagination_source:'selected_route',
+      imagination:[{action:{id:6,data:{x:3,y:4}},frames:packed([7,8],[1,1,2])}]}]};
+  report.planner_trajectory={id:liveSample.id};
+  trajectoryReply={ok:true,json:async()=>({trajectory:liveSample})};
+  await vm.runInContext('refresh()',context);
+  assert.equal(trajectoryRequests,0,'current-run frames load only in Path Planner');
+  nodes.get('tab-path').listeners.click();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(trajectoryRequests,1);
+  assert.equal(nodes.get('trajectory-viewer').hidden,false);
+  assert.match(text('trajectory-info'),/training batch 1 · Partial episode/);
+  assert.match(text('goal-detail'),/Learned goal/);
+  assert.notEqual(nodes.get('trajectory-goal'),nodes.get('goal'),'goal preview does not collide with Goal Planner tab');
+  const descendants=node=>[node,...node.children.flatMap(descendants)];
+  const matrix=descendants(nodes.get('trajectory-matrix'));
+  assert.ok(matrix.some(n=>n.textContent==='A6 Click (3, 4)'));
+  assert.ok(matrix.some(n=>n.textContent==='From t = 0'));
+  assert.ok(matrix.some(n=>n.textContent==='+1 · A6 Click (3, 4)'));
+  nodes.get('trajectory-next').listeners.click();
+  assert.equal(nodes.get('trajectory-live').checked,false);
+  assert.match(text('trajectory-step'),/frame 2\/3/);
+  report.planner_trajectory={id:'live-two'};
+  const nextSample={...liveSample,id:'live-two',batch:2};
+  trajectoryReply={ok:true,json:async()=>({trajectory:nextSample})};
+  await vm.runInContext('refresh()',context);
+  assert.equal(trajectoryRequests,1,'polling preserves a pinned live sample');
+  assert.match(text('trajectory-info'),/training batch 1/);
+  nodes.get('trajectory-live').checked=true;nodes.get('trajectory-live').listeners.change();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(trajectoryRequests,2);
+  assert.match(text('trajectory-info'),/training batch 2/);
+  delete report.planner_trajectory;
+  nodes.get('tab-curriculum').listeners.click();
   report.history[0].planning.teacher_attempts=0;
   report.history[0].planning.teacher_reached=0;
   await vm.runInContext('refresh()',context);
@@ -480,11 +522,11 @@ const text = id => nodes.get(id).textContent;
   // Legacy bookmarks open their matching archive inside the current shell.
   for(const hash of ['#world','#path','#evaluation','#curriculum','']){
     const bookmarkNodes=new Map([...nodes.keys()].map(id=>[id,element()]));
-    const bookmark=vm.createContext({console,URLSearchParams,setTimeout(){},
+    const bookmark=vm.createContext({console,URLSearchParams,AbortSignal,clearTimeout(){},setTimeout(){},
       location:{hash,search:'?archive=1',origin:'https://dashboard.test'},
       document:{getElementById:id=>bookmarkNodes.get(id),createElement:element,createElementNS:element},
       fetch:async()=>({ok:true,json:async()=>({sequences:{status:'waiting'},history_available:true})})});
-    for(const file of ['chart-tools.js','sequence-trends.js','sequences.js'])
+    for(const file of ['chart-tools.js','sequence-trends.js','trajectory-viewer.js','sequences.js'])
       vm.runInContext(fs.readFileSync(path.join(assets,file),'utf8'),bookmark);
     await new Promise(resolve=>setImmediate(resolve));
     const section=hash.slice(1)||'path';

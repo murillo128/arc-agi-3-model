@@ -633,10 +633,10 @@ def subgoal_snapshot(path):
         return {'kind': 'synthetic_subgoals', 'status': 'waiting', 'message': str(error), 'progress': {}}
 
 
-def trajectory_snapshot(report_path):
+def trajectory_snapshot(report_path, *, sequence=False):
     """Only the one sidecar belonging to the report's published sample."""
     try:
-        metadata = subgoal_snapshot(report_path).get('planner_trajectory')
+        metadata = (sequence_snapshot if sequence else subgoal_snapshot)(report_path).get('planner_trajectory')
         if not metadata:
             return None
         path = report_path.with_name('planner_trajectory.json')
@@ -809,10 +809,11 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                         f'<body class="subgoal-dashboard planner-history-embedded" data-history-section="{section[0]}">')
                 data = html.encode()
                 mime = 'text/html; charset=utf-8'
-            elif route == '/api/trajectory' and subgoal_report:
-                data = json.dumps({'trajectory': trajectory_snapshot(subgoal_report)}, allow_nan=False, separators=(',', ':')).encode()
+            elif route == '/api/trajectory' and (sequence_report or subgoal_report):
+                data = json.dumps({'trajectory': trajectory_snapshot(sequence_report or subgoal_report,
+                    sequence=sequence_report is not None)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/sequence-trends.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
+            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/sequence-trends.js', '/trajectory-viewer.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
                            '/optimization.html', '/optimization.js', '/optimization.css'):
                 name = 'index.html' if route == '/' else route[1:]
                 if subgoal_report and name in ('index.html', 'campaign.html'):
