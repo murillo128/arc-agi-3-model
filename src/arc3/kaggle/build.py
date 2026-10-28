@@ -24,13 +24,15 @@ def code_cell(source: str) -> dict:
             "outputs": [], "source": source}
 
 
-def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu",
+def build_notebook(seed: int = 0, max_actions: int | None = None, *, accelerator: str = "cpu",
                    agent_checkpoint: str | None = None, adaptive: bool = False,
                    adaptation_config: dict | None = None, cpu_threads: int = 2,
                    smoke_output: str = '/kaggle/working/adaptation-smoke.json',
                    extra_wheel_dir: str | None = None) -> dict:
-    if max_actions <= 0:
-        raise ValueError("max_actions must be positive")
+    if max_actions is not None and (type(max_actions) is not int or max_actions <= 0):
+        raise ValueError("max_actions must be positive or None")
+    if max_actions is None and not adaptive:
+        max_actions = 80
     if accelerator not in ACCELERATORS:
         raise ValueError(f"Unsupported accelerator: {accelerator}")
     if type(adaptive) is not bool:
@@ -70,6 +72,9 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
             raise ValueError('Extra wheel directory must be a mounted /kaggle/input/... directory, not a wheel file')
         wheel_dirs.append(str(wheel_mount))
     accelerator_name, uses_gpu = ACCELERATORS[accelerator]
+    # Save-and-run is an explicitly bounded engineering fixture, not gameplay
+    # adaptation. The scored agent above keeps the requested convergence config.
+    smoke_config = dict(adaptation_config or {}, stopping='steps')
     sources = {
         "arc3/__init__.py": "",
         "arc3/core/__init__.py": "",
@@ -88,7 +93,7 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         names = ['__init__', 'checkpoint', 'config', 'data', 'learning', 'networks',
                  'metrics', 'planning', 'goal_observation', 'path_planning', 'spatial_adapter']
         if adaptive:
-            names += ['adaptation', 'adaptation_heads', 'adaptation_checkpoint',
+            names += ['adaptation', 'adaptation_convergence', 'adaptation_heads', 'adaptation_checkpoint',
                       'adaptation_smoke', 'lora', 'sequence_exploration']
         else:
             names += ['agent', 'agent_checkpoint', 'sequence', 'goal_planning', 'proposals']
@@ -154,7 +159,7 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
             subprocess.run([
                 sys.executable, '-m', 'model.adaptation_smoke', '--self-check',
                 '--checkpoint', {agent_checkpoint!r}, '--device', {'cuda' if uses_gpu else 'cpu'!r},
-                '--threads', {str(cpu_threads)!r}, '--config-json', {json.dumps(adaptation_config)!r},
+                '--threads', {str(cpu_threads)!r}, '--config-json', {json.dumps(smoke_config)!r},
                 '--output', {smoke_output!r},
             ], cwd=source_root, env=environment, check=True)
 
@@ -214,7 +219,7 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
             {"cell_type": "markdown", "metadata": {}, "source": (
                 ("# ARC-AGI-3 per-game LoRA smoke agent\n\n" if adaptive else
                  "# ARC-AGI-3 frozen latent agent\n\n" if agent_checkpoint else "# ARC-AGI-3 seeded random baseline\n\n")
-                + f"Generated from versioned Python source. Seed: {seed}; action budget: {max_actions}. "
+                + f"Generated from versioned Python source. Seed: {seed}; action budget: {max_actions if max_actions is not None else 'environment-controlled'}. "
                 + (f"Per-game adaptation is enabled. Save-and-run writes {smoke_output} from an offline fixture self-check; "
                    "this and the dummy parquet are not game scores. " if adaptive else
                    "This mode never updates model weights. ")
@@ -232,12 +237,12 @@ def main() -> None:
     parser.add_argument("--username", help="Explicit Kaggle handle; enables kernel metadata generation")
     parser.add_argument("--accelerator", choices=sorted(ACCELERATORS), default="cpu")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--max-actions", type=int, default=80)
+    parser.add_argument("--max-actions", type=int, help='Optional action cap; adaptive default: no cap, frozen/random: 80')
     parser.add_argument("--agent-checkpoint", help="Mounted /kaggle/input/.../agent.pt; weights are never embedded")
     parser.add_argument("--agent-dataset", help="Optional owner/dataset reference for that mounted checkpoint")
     parser.add_argument('--extra-wheel-dir', help='Mounted /kaggle/input/... directory with companion offline wheels, including arc-agi 0.9.9')
     parser.add_argument('--adaptive', action='store_true', help='Opt in to per-game LoRA using a portable adaptation base')
-    parser.add_argument('--adaptation-config', help='Local JSON object containing bounded AdaptationConfig overrides')
+    parser.add_argument('--adaptation-config', help='Local JSON object containing AdaptationConfig overrides')
     parser.add_argument('--cpu-threads', type=int, default=2)
     parser.add_argument('--smoke-output', default='/kaggle/working/adaptation-smoke.json')
     args = parser.parse_args()
@@ -246,7 +251,7 @@ def main() -> None:
         parser.error("--output must end in .ipynb")
     if args.username is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", args.username):
         parser.error("--username must be a nonempty Kaggle handle without a slash")
-    if args.max_actions <= 0:
+    if args.max_actions is not None and args.max_actions <= 0:
         parser.error("--max-actions must be positive")
     if args.agent_dataset is not None and (args.agent_checkpoint is None or
             not re.fullmatch(r'[A-Za-z0-9_-]+/[A-Za-z0-9_-]+', args.agent_dataset)):

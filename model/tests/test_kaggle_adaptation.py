@@ -72,10 +72,31 @@ def portable_spatial_base(root):
 
 
 class KaggleAdaptationTests(unittest.TestCase):
+    def test_generated_defaults_separate_unlimited_adaptation_and_bounded_self_check(self):
+        adaptive = build_notebook(adaptive=True, agent_checkpoint='/kaggle/input/probe/base.pt')
+        scope = {}
+        exec(adaptive['cells'][2]['source'], scope)
+        try:
+            module = scope['sources']['my_agent.py']
+            self.assertIn('MyAgent.MAX_ACTIONS = None', module)
+            self.assertIn("'stopping': 'convergence'", module)
+            self.assertIn("'total_seconds': None", module)
+            self.assertIn('model/adaptation_convergence.py', scope['sources'])
+            self.assertIn('"stopping": "steps"', adaptive['cells'][3]['source'])
+        finally:
+            shutil.rmtree(scope['source_root'])
+        scope = {}
+        exec(build_notebook()['cells'][2]['source'], scope)
+        try:
+            self.assertIn('MyAgent.MAX_ACTIONS = 80', scope['sources']['my_agent.py'])
+        finally:
+            shutil.rmtree(scope['source_root'])
+
     def test_sdk_return_commits_terminal_and_keeps_click_payload_private(self):
         from model import adaptation
         cls = transport_agent()
         cls.ADAPTIVE, cls.AGENT_CHECKPOINT = True, 'base.pt'
+        cls.MAX_ACTIONS = 2  # Explicit bounded mode still stops exactly here.
         confirmed = []
         selected = Action(6, {'x': 1, 'y': 0})
         policy = SimpleNamespace(choose_action=lambda observation: selected,

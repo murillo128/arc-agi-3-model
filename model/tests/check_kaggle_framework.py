@@ -92,6 +92,16 @@ class _Arcade:
         return environment
 
 
+class _LongEnvironment(_Environment):
+    """A scripted WIN after action 81; rejects an extra request after termination."""
+    def step(self, action, *, data, reasoning):
+        assert self.observation_space.state != GameState.WIN
+        assert action == GameAction.ACTION6
+        self.calls.append(dict(data))
+        self.observation_space = _raw(self.game, len(self.calls) % 3, len(self.calls) == 81)
+        return self.observation_space
+
+
 def _module(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
@@ -126,7 +136,7 @@ def check(framework):
     with tempfile.TemporaryDirectory(prefix='arc3-framework-probe-') as directory:
         root = Path(directory)
         asset = portable_spatial_base(root)
-        config = dict(exploration=1., representation_steps=1, per_observation_seconds=30., total_seconds=120.)
+        config = dict(stopping='steps', exploration=1., representation_steps=1, per_observation_seconds=30., total_seconds=120.)
         sentinel = load(asset, config=AdaptationConfig(**config), seed='sentinel')
         before, inactive_before = base_digest(sentinel.runtime), bank_digest(sentinel.bank)
         notebook = build_notebook(agent_checkpoint='/kaggle/input/probe/base.pt', adaptive=True,
@@ -146,7 +156,6 @@ def check(framework):
             agent_class = namespace['MyAgent']
             agent_class.AGENT_CHECKPOINT = str(asset)  # Relocate the input mount only.
             package.AVAILABLE_AGENTS = {'arc3': agent_class}
-            assert agent_class.main is agent_module.Agent.main
             assert agent_class._convert_raw_frame_data is agent_module.Agent._convert_raw_frame_data
             assert agent_class.take_action is agent_module.Agent.take_action
             sentinel_payload = GameAction.ACTION6.action_type(x=63, y=63)
@@ -184,6 +193,23 @@ def check(framework):
                     arc_env=_Environment(agent.game_id))
                 isolated.main()
                 assert bank_digest(isolated.policy.bank) == bank_digest(agent.policy.bank)
+            # Exercise our unlimited loop against the actual supplied Agent's
+            # initialization, conversion, take_action, recording and cleanup.
+            # No optimizer work is needed to establish this transport contract.
+            agent_class.MAX_ACTIONS = None
+            agent_class.ADAPTATION_CONFIG = config | dict(representation_steps=0,
+                predictor_steps=0, path_steps=0, goal_steps=0)
+            long_environment = _LongEnvironment('unlimited-fixture')
+            unlimited = agent_class(card_id='unlimited', game_id='unlimited-fixture',
+                agent_name='arc3', ROOT_URL='http://unused.invalid', record=False,
+                arc_env=long_environment)
+            unlimited.main()
+            assert unlimited.action_counter == unlimited.policy.actions_taken == 81
+            assert unlimited.policy.diagnostics['confirmed_transitions'] == 81
+            assert unlimited.policy.diagnostics['native_outcomes']['WIN'] == 1
+            assert unlimited.policy.pending_action is None
+            assert unlimited._cleanup is False
+            assert len(unlimited.frames) == 1
             assert base_digest(sentinel.runtime) == before
             assert bank_digest(sentinel.bank) == inactive_before
             return dict(format='arc3-competition-framework-probe', version=1, passed=True,
@@ -191,8 +217,8 @@ def check(framework):
                 adapter_source_sha256=hashlib.sha256(sources['my_agent.py'].encode()).hexdigest(),
                 ancillary_doubles=doubled, gateway='scripted public SDK FrameDataRaw; no scores',
                 network_disabled=True, real_sdk_transitions=0,
-                simulated_confirmations=sum(len(env.calls) for env in arcade.environments.values()),
-                checks=dict(supplied_agent_main=True, supplied_swarm_threads=2,
+                simulated_confirmations=sum(len(env.calls) for env in arcade.environments.values()) + len(long_environment.calls),
+                checks=dict(supplied_bounded_agent_main=True, unlimited_actions=81, supplied_swarm_threads=2,
                     exact_nonterminal_budget=True, terminal_result_committed_once=True,
                     click_payloads_isolated=True, shared_base=True, private_game_state=True,
                     concurrent_matches_isolated=True, base_immutable=True, inactive_bank_unchanged=True),

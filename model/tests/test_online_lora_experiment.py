@@ -41,6 +41,42 @@ class Policy:
 
 
 class OnlineExperimentTests(unittest.TestCase):
+    def test_unlimited_defaults_continue_past_eighty_until_win(self):
+        events = []
+        policy = Policy(None, events)
+        calls = []
+
+        def step(action, **kwargs):
+            calls.append(action.value)
+            return frame(state=GameState.WIN if len(calls) == 81 else GameState.NOT_FINISHED)
+
+        with patch('model.online_lora_experiment.time.monotonic', return_value=10000.):
+            result = run_game(SimpleNamespace(observation_space=frame(), step=step), policy,
+                started=0., emit=lambda e: None, reconstruct=lambda *a: None,
+                predict=lambda *a: (None, {}))
+        self.assertEqual(result['actions'], 81)
+        self.assertEqual(result['confirmations'], 81)
+        self.assertEqual(result['stop_reason'], 'win')
+        self.assertEqual(result['wall_overrun_seconds'], 0.)
+        self.assertIsNone(result['adaptation_limits']['total_seconds'])
+
+    def test_cancellation_during_learning_keeps_already_confirmed_real_action(self):
+        policy = Policy(None, [])
+        original = policy.confirm_result
+
+        def confirm(observation, action):
+            original(observation, action)
+            raise KeyboardInterrupt
+
+        with patch.object(policy, 'confirm_result', side_effect=confirm), \
+             patch('model.online_lora_experiment.time.monotonic', return_value=0.):
+            result = run_game(SimpleNamespace(observation_space=frame(), step=lambda *a, **k: frame(1)),
+                policy, started=0., emit=lambda e: None, reconstruct=lambda *a: None,
+                predict=lambda *a: (None, {}))
+        self.assertEqual(result['stop_reason'], 'cancelled')
+        self.assertEqual((result['actions'], result['confirmations']), (1, 1))
+        self.assertTrue(result['truncated'])
+
     def test_delta_categories_and_empty_denominator(self):
         # Missed change, invented change, wrong new color, correct change, keep.
         before = np.array([[0, 0, 0, 0, 0]])
@@ -121,7 +157,7 @@ class OnlineExperimentTests(unittest.TestCase):
 
                 with patch('model.online_lora_experiment.time.monotonic', side_effect=lambda: now[0]):
                     result = run_game(SimpleNamespace(observation_space=frame(), step=step), policy,
-                        started=0., emit=lambda e: None, predict=predict, reconstruct=lambda *a: None)
+                        started=0., emit=lambda e: None, seconds=900., predict=predict, reconstruct=lambda *a: None)
                 self.assertEqual(result['stop_reason'], 'wall_timeout')
                 self.assertEqual(result['wall_overrun_seconds'], 1.)
                 self.assertEqual(result['confirmations'], 0 if during_decision else 1)

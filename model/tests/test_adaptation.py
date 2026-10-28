@@ -36,12 +36,12 @@ def observed(column=1, *, level=0, state='NOT_FINISHED', actions=(4,)):
 
 
 def config(**kwargs):
-    return replace(AdaptationConfig(), **(dict(exploration=1., representation_steps=1,
+    return replace(AdaptationConfig(), **(dict(stopping='steps', exploration=1., representation_steps=1,
                    per_observation_seconds=30., total_seconds=300.) | kwargs))
 
 
 def no_learning(**kwargs):
-    return replace(AdaptationConfig(), exploration=1., representation_steps=0,
+    return replace(AdaptationConfig(), stopping='steps', exploration=1., representation_steps=0,
                    predictor_steps=0, path_steps=0, goal_steps=0, **kwargs)
 
 
@@ -288,7 +288,7 @@ class AdaptationTests(unittest.TestCase):
         _, error = color_macro(logits, target)
         self.assertEqual(float(error), .5)
 
-    def test_config_rejects_unbounded_or_nonfinite_values(self):
+    def test_config_rejects_invalid_or_nonfinite_values(self):
         for kwargs in ({'replay_size': 0}, {'minibatch': 5}, {'per_observation_seconds': float('nan')},
                        {'exploration': 0}, {'predictor_steps': -1}, {'allow_undo': 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):

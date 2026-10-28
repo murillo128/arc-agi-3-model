@@ -21,6 +21,7 @@ import torch
 from torch.nn import functional as F
 
 from .adaptation_heads import goal_loss, path_loss, matches
+from .adaptation_convergence import GROUPS, delta_metrics, goal_metrics, path_metrics, fit
 from .data import Action, Observation
 from .goal_observation import compose_goal_observation
 from .learning import State, visual_delta_loss
@@ -36,13 +37,21 @@ class AdaptationConfig:
     learning_rate: float = 1e-4
     replay_size: int = 32
     minibatch: int = 4
+    stopping: str = 'convergence'
+    plateau_patience: int = 8
+    plateau_min_relative_improvement: float = .001
     representation_steps: int = 2
     predictor_steps: int = 1
     path_steps: int = 1
     goal_steps: int = 1
     reconstruction_threshold: float = .10
-    per_observation_seconds: float = 10.
-    total_seconds: float = 300.
+    delta_threshold: float = .10
+    goal_color_threshold: float = .10
+    goal_mask_threshold: float = .10
+    path_reachability_threshold: float = .10
+    path_cost_threshold: float = .10
+    per_observation_seconds: float | None = None
+    total_seconds: float | None = None
     exploration: float = .25
     goal_lifetime: int = 16
     horizon: int = 2
@@ -60,20 +69,28 @@ class AdaptationConfig:
             ('rank', 1, 64), ('replay_size', 1, 256), ('minibatch', 1, 4),
             ('representation_steps', 0, 64), ('predictor_steps', 0, 64),
             ('path_steps', 0, 64), ('goal_steps', 0, 64),
+            ('plateau_patience', 1, 1000),
             ('goal_lifetime', 1, 256), ('numerical_failure_limit', 1, 8)):
             value = getattr(self, key)
             if type(value) is not int or not low <= value <= high:
                 raise ValueError(f'Invalid adaptation {key}')
         for key in ('alpha', 'learning_rate', 'per_observation_seconds', 'total_seconds'):
             value = getattr(self, key)
+            if key.endswith('seconds') and value is None:
+                continue
             if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f'Invalid adaptation {key}')
-        for key, low in (('exploration', .000001), ('reconstruction_threshold', 0.)):
+        for key, low in (('exploration', .000001), ('reconstruction_threshold', 0.),
+                         ('delta_threshold', 0.), ('goal_color_threshold', 0.),
+                         ('goal_mask_threshold', 0.), ('path_reachability_threshold', 0.),
+                         ('path_cost_threshold', 0.), ('plateau_min_relative_improvement', .000001)):
             value = getattr(self, key)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= 1:
                 raise ValueError(f'Invalid adaptation {key}')
         if type(self.allow_undo) is not bool:
             raise ValueError('allow_undo must be boolean')
+        if self.stopping not in ('convergence', 'steps'):
+            raise ValueError('stopping must be convergence or steps')
         PathConfig(horizon=self.horizon, beam=self.beam, clicks=self.clicks)
 
 
@@ -131,7 +148,7 @@ _runtimes = weakref.WeakValueDictionary()
 _runtime_lock = threading.RLock()
 
 
-def load(path, *, device='cpu', config=None, max_actions=80, seed=0):
+def load(path, *, device='cpu', config=None, max_actions=None, seed=0):
     """Load once per file identity/device, only when an adaptive game is made."""
     from .adaptation_checkpoint import load as load_base
     path = Path(path).resolve(strict=True)
@@ -168,9 +185,9 @@ class _VisibleCandidates:
 
 
 class AdaptivePolicy:
-    def __init__(self, runtime, config=AdaptationConfig(), *, max_actions=80, seed=0):
-        if type(max_actions) is not int or max_actions <= 0:
-            raise ValueError('max_actions must be positive')
+    def __init__(self, runtime, config=AdaptationConfig(), *, max_actions=None, seed=0):
+        if max_actions is not None and (type(max_actions) is not int or max_actions <= 0):
+            raise ValueError('max_actions must be positive or None')
         self.runtime, self.config, self.max_actions = runtime, config, max_actions
         self.rng = random.Random(seed)
         bank_seed = int.from_bytes(hashlib.sha256(str(seed).encode()).digest()[:8], 'little') % (2**63)
@@ -181,10 +198,11 @@ class AdaptivePolicy:
         self.pending_action = self.observation = self.state = self.goal = None
         self.actions_taken = 0
         self._lock = threading.RLock()
+        self._cancelled = threading.Event()
         self._candidates = _VisibleCandidates()
         self.diagnostics = dict(observations=0, confirmed_transitions=0, predictive_pairs=0,
             boundary_skips=0, updates=dict.fromkeys(('representation', 'predictor', 'path', 'goal'), 0),
-            losses={}, adaptation_seconds=0., numerical_failures=0, budget_stops=0,
+            losses={}, convergence={}, adaptation_seconds=0., numerical_failures=0, budget_stops=0,
             skipped=Counter(), goal_outcomes=Counter(), native_outcomes=Counter(), masks=0)
 
     def _filtered(self, obs):
@@ -194,7 +212,9 @@ class AdaptivePolicy:
     def choose_action(self, observation):
         obs = public_observation(observation)
         with self._lock:
-            if self.actions_taken >= self.max_actions:
+            if self._cancelled.is_set():
+                raise InterruptedError('Game adaptation cancelled')
+            if self.max_actions is not None and self.actions_taken >= self.max_actions:
                 raise RuntimeError('Action budget exhausted')
             if self.pending_action is not None:
                 if not same_observation(obs, self.observation):
@@ -204,6 +224,8 @@ class AdaptivePolicy:
                 self._admit(obs)
             elif not same_observation(obs, self.observation):
                 raise ValueError('New observations require confirm_result, not choose_action')
+            if self._cancelled.is_set():
+                raise InterruptedError('Game adaptation cancelled')
             if obs.state == 'WIN':
                 raise RuntimeError('No action after WIN')
             if obs.state in ('NOT_PLAYED', 'GAME_OVER'):
@@ -225,6 +247,10 @@ class AdaptivePolicy:
     def cancel_pending(self):
         with self._lock:
             self.pending_action = None
+
+    def request_stop(self):
+        """Cooperative cancellation, including from another thread during SFT."""
+        self._cancelled.set()
 
     def confirm_result(self, observation, action=None):
         obs = public_observation(observation)
@@ -284,7 +310,7 @@ class AdaptivePolicy:
                 previous = state
         return result
 
-    def _hindsight(self):
+    def _hindsight(self, *, fixed=False):
         rows = list(self.history)
         labels = []
         for end in range(1, len(rows)):
@@ -306,6 +332,15 @@ class AdaptivePolicy:
                 if rows[start].boundary:
                     break
         # Public observed success takes priority; never inspect future game state.
+        if fixed:
+            # One deterministic reached target per origin: prefer observed
+            # progress, then the latest reachable frame in that same scene.
+            # Multiple contradictory goals for one input cannot all converge.
+            labels.sort(key=lambda row: (not row['progress'], -row['end']))
+            by_origin = {}
+            for row in labels:
+                by_origin.setdefault(row['start'], row)
+            return [by_origin[key] for key in sorted(by_origin)]
         self.rng.shuffle(labels)
         labels.sort(key=lambda row: not row['progress'])
         return labels[:self.config.minibatch]
@@ -339,7 +374,8 @@ class AdaptivePolicy:
             if mask.any() and not matches(obs.final, frame, mask):
                 self.goal = dict(frame=frame, mask=mask, start=self.history[-1].number,
                     created_action=self.actions_taken,
-                    budget=min(self.config.goal_lifetime, self.max_actions-self.actions_taken))
+                    budget=(self.config.goal_lifetime if self.max_actions is None else
+                            min(self.config.goal_lifetime, self.max_actions-self.actions_taken)))
         if self.goal is not None and self.rng.random() >= self.config.exploration:
             planner = PathPlanner(self.runtime.engine, self.runtime.path,
                 PathConfig(horizon=self.config.horizon, beam=self.config.beam, clicks=self.config.clicks),
@@ -357,16 +393,30 @@ class AdaptivePolicy:
     def _adapt(self):
         start = time.monotonic()
         elapsed = self.diagnostics['adaptation_seconds']
-        deadline = start + min(self.config.per_observation_seconds, self.config.total_seconds - elapsed)
+        limits = [v for v in (self.config.per_observation_seconds,
+                  None if self.config.total_seconds is None else self.config.total_seconds - elapsed)
+                  if v is not None]
+        deadline = start + min(limits) if limits else None
+        self.diagnostics['convergence'] = {}
         if self.diagnostics['numerical_failures'] >= self.config.numerical_failure_limit:
             self.diagnostics['skipped']['learning_disabled'] += 1
+            if self.config.stopping == 'convergence':
+                self.diagnostics['convergence'] = {name: dict(reason='learning_disabled',
+                    steps=0, threshold_met=False) for name in GROUPS}
             return
         try:
-            for name, groups in (('representation', ('encoder', 'decoder')), ('predictor', ('predictor',)),
-                                 ('path', ('path',)), ('goal', ('goal',))):
+            for name, groups in GROUPS.items():
+                if self.config.stopping == 'convergence':
+                    if getattr(self.config, name + '_steps') == 0:
+                        self.diagnostics['convergence'][name] = dict(reason='disabled', steps=0, threshold_met=False)
+                        continue
+                    fit(self, name, deadline)
+                    if self.diagnostics['convergence'][name]['reason'] in ('budget', 'cancelled'):
+                        return
+                    continue
                 for _ in range(getattr(self.config, name + '_steps')):
-                    if time.monotonic() >= deadline:
-                        self.diagnostics['budget_stops'] += 1
+                    if reason := self._stop_reason(deadline):
+                        self.diagnostics['budget_stops'] += int(reason == 'budget')
                         return
                     with self.runtime.router.activate(self.bank, groups=groups):
                         objective = self._objective(name)
@@ -380,15 +430,34 @@ class AdaptivePolicy:
         finally:
             self.diagnostics['adaptation_seconds'] += time.monotonic() - start
 
-    def _objective(self, name):
+    def _stop_reason(self, deadline):
+        if self._cancelled.is_set():
+            return 'cancelled'
+        if deadline is not None and time.monotonic() >= deadline:
+            return 'budget'
+        return None
+
+    def _examples(self, name):
+        rows = list(self.history)
+        if name == 'representation':
+            return [r.observation for r in rows if r.observation.final is not None]
+        if name == 'predictor':
+            return [(before, after) for before, after in zip(rows, rows[1:])
+                    if not after.boundary and before.observation.final is not None
+                    and after.observation.final is not None]
+        labels = self._hindsight(fixed=True)
+        return list(self.path_labels) + labels if name == 'path' else labels
+
+    def _objective(self, name, *, samples=None, states=None, measured=None):
         engine = self.runtime.engine
         rows = list(self.history)
         if name == 'representation':
-            samples = [r.observation for r in rows if r.observation.final is not None]
+            if samples is None:
+                samples = [r.observation for r in rows if r.observation.final is not None]
+                if samples:
+                    samples = [samples[-1]] + self.rng.sample(samples[:-1], min(len(samples)-1, self.config.minibatch-1))
             if not samples:
                 return None
-            newest = samples[-1]
-            samples = [newest] + self.rng.sample(samples[:-1], min(len(samples)-1, self.config.minibatch-1))
 
             def objective():
                 losses, errors = [], []
@@ -399,17 +468,19 @@ class AdaptivePolicy:
                     loss, error = color_macro(logits, target)
                     losses.append(loss)
                     errors.append(error)
+                    if measured is not None:
+                        measured.append(dict(reconstruction_error=float(error)))
                 return torch.stack(losses).mean(), torch.stack(errors).mean()
             return objective
         # Re-encode all real frames and causal carries after representation and
         # every predictor update. These tensors never survive this bounded step.
-        states = self._states()
+        states = self._states() if states is None else states
         records = {r.number: r for r in rows}
         if name == 'predictor':
-            pairs = [(before, after) for before, after in zip(rows, rows[1:])
-                     if not after.boundary and before.observation.final is not None
-                     and after.observation.final is not None]
-            pairs = self.rng.sample(pairs, min(len(pairs), self.config.minibatch))
+            pairs = samples
+            if pairs is None:
+                pairs = self._examples(name)
+                pairs = self.rng.sample(pairs, min(len(pairs), self.config.minibatch))
             if not pairs:
                 return None
 
@@ -427,12 +498,15 @@ class AdaptivePolicy:
                     visual = visual_delta_loss(logits, reference, actual, engine.config.false_change_weight,
                                                mode=engine.config.prediction_delta_loss).mean()
                     losses.append(latent + visual)
+                    if measured is not None:
+                        measured.append(delta_metrics(reference, actual, logits.argmax(-1)))
                 return torch.stack(losses).mean(), None
             return objective
-        labels = self._hindsight()
-        if name == 'path':
-            labels = list(self.path_labels)[-self.config.minibatch:] + labels
-            labels = labels[:self.config.minibatch]
+        labels = samples
+        if labels is None:
+            labels = self._hindsight()
+            if name == 'path':
+                labels = (list(self.path_labels)[-self.config.minibatch:] + labels)[:self.config.minibatch]
         if not labels:
             return None
         self.diagnostics['masks'] += sum(int(row['mask'].sum()) for row in labels)
@@ -445,6 +519,8 @@ class AdaptivePolicy:
                     tensors = [torch.tensor(np.array(v), device=engine.device)[None] for v in
                                (records[row['start']].observation.final, row['frame'], row['mask'])]
                     losses.append(goal_loss(logits, mask_logits, tensors[0].long(), tensors[1].long(), tensors[2].bool()))
+                    if measured is not None:
+                        measured.append(goal_metrics(logits, mask_logits, tensors[0].long(), tensors[1].long(), tensors[2].bool()))
                 return torch.stack(losses).mean(), None
             return objective
         encoded = []
@@ -470,10 +546,12 @@ class AdaptivePolicy:
                 targets = torch.tensor([float(row['success'])], device=engine.device)
                 duration = torch.tensor([math.log1p(row['distance'])], device=engine.device)
                 losses.append(path_loss(logits, cost, targets, duration))
+                if measured is not None:
+                    measured.append(path_metrics(logits, cost, row['success'], row['distance']))
             return torch.stack(losses).mean(), None
         return objective
 
-    def _step(self, name, groups, objective):
+    def _step(self, name, groups, objective, *, check_threshold=True):
         parameters = list(self.bank.parameters(groups))
         optimizers = [self.bank.optimizers[g] for g in groups]
         for opt in optimizers:
@@ -487,7 +565,7 @@ class AdaptivePolicy:
         metrics = dict(pre=pre, post=pre, error_pre=None if error is None else float(error),
                        error_post=None if error is None else float(error))
         self.diagnostics['losses'][name] = metrics
-        if name == 'representation' and float(error) <= self.config.reconstruction_threshold:
+        if check_threshold and name == 'representation' and float(error) <= self.config.reconstruction_threshold:
             self.diagnostics['skipped']['reconstruction_threshold'] += 1
             return False
         loss.backward()
@@ -508,7 +586,7 @@ class AdaptivePolicy:
                     or any(torch.is_tensor(v) and not torch.isfinite(v).all()
                            for opt in optimizers for state in opt.state.values() for v in state.values())):
                 raise FloatingPointError('Nonfinite updated adapter')
-        except Exception:
+        except BaseException:
             with torch.no_grad():
                 for parameter, saved in zip(parameters, previous):
                     parameter.copy_(saved)
