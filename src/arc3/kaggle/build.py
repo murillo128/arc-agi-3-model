@@ -50,7 +50,7 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         # offline asset; no host path, training data or weights enter the notebook.
         for name in ('__init__', 'agent', 'agent_checkpoint', 'checkpoint', 'config',
                      'data', 'learning', 'networks', 'metrics', 'sequence', 'planning',
-                     'goal_planning', 'path_planning', 'proposals'):
+                     'goal_planning', 'goal_observation', 'path_planning', 'proposals'):
             source = files('model').joinpath(f'{name}.py')
             if name == 'proposals' and not source.is_file():
                 continue

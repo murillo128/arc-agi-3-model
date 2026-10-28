@@ -125,6 +125,7 @@ class PathTests(unittest.TestCase):
             def forward(self,z,h,goal,mask,rows,columns,remaining_budget):
                 return torch.zeros(len(z)), torch.where(z.flatten()==1,0.,5.)
         engine=SimpleNamespace(device=torch.device('cpu'),model=nn.Identity(),autocast=nullcontext,
+            encode=lambda observations:[torch.zeros(1,1) for _ in observations],
             actions=lambda actions:torch.tensor([[a.id] for a in actions]),
             predict=lambda z,h,a,height,width:(a[:,:1,None].float(),h,z))
         engine.model.config=SimpleNamespace(patch=1)
@@ -268,7 +269,8 @@ class PathTests(unittest.TestCase):
         ]
         for costs, expected_path, source in cases:
             planner = PathPlanner(engine, Value(costs), PathConfig(horizon=3, beam=2))
-            planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1, 1, 1), frame=np.zeros((1, 1)))
+            planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1, 1, 1), frame=np.zeros((1, 1)),
+                                pixel_mask=np.ones((1, 1), dtype=bool))
             rng_states = []
             for diagnostics in (None, {}):
                 calls.clear()
@@ -316,7 +318,8 @@ class PathTests(unittest.TestCase):
         chosen = []
         for horizon in (1, 2):
             planner = PathPlanner(engine, Value(), PathConfig(horizon=horizon, beam=2))
-            planner.goal = dict(z=torch.tensor([[2.]]), mask=torch.ones(1, 1, 1), frame=np.zeros((1, 1)))
+            planner.goal = dict(z=torch.tensor([[2.]]), mask=torch.ones(1, 1, 1), frame=np.zeros((1, 1)),
+                                pixel_mask=np.ones((1, 1), dtype=bool))
             chosen.append(planner.choose(initial, choices, random.Random(0)).id)
         self.assertEqual(chosen, [2, 1])
         self.assertEqual([a.id for a in planner.last_plan], [1, 1])
@@ -359,7 +362,8 @@ class PathTests(unittest.TestCase):
                 (6, 6, True, 2, 6), (6, 3, False, 1, 1)):
             with self.subTest(horizon=horizon, budget=budget, leaf_only=leaf_only):
                 planner = PathPlanner(engine, Value(), PathConfig(horizon=horizon, beam=64, leaf_only=leaf_only))
-                planner.goal = dict(z=torch.tensor([[4.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)))
+                planner.goal = dict(z=torch.tensor([[4.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)),
+                                    pixel_mask=np.ones((1,1), dtype=bool))
                 calls.clear()
                 action = planner.choose(state, observation, random.Random(0), remaining_budget=budget)
                 self.assertEqual(action.id, expected)
@@ -383,7 +387,8 @@ class PathTests(unittest.TestCase):
             predict=lambda z,h,a,height,width: (z*10+a[:,:1,None],h,z))
         engine.model.config = SimpleNamespace(patch=1)
         planner = PathPlanner(engine, Value(), PathConfig(horizon=2, beam=1))
-        planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)))
+        planner.goal = dict(z=torch.tensor([[0.]]), mask=torch.ones(1,1,1), frame=np.zeros((1,1)),
+                            pixel_mask=np.ones((1,1), dtype=bool))
         chosen = planner.choose(State(torch.tensor([[0.]]),torch.zeros(1,1),(1,1)),
             replace(obs(1),available_actions=(1,2)), random.Random(0), remaining_budget=2)
         self.assertEqual(chosen, Action(2))

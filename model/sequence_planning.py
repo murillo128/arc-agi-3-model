@@ -15,6 +15,7 @@ from torch.nn import functional as F
 
 from .data import Episode, Observation
 from .game_sequences import EncodedSessions, memory_inputs
+from .goal_observation import compose_goal_observation
 from .path_planning import PathConfig, PathPlanner, PathValue
 
 TEACHER_GAMES = ('sc01-v1', 'si01-v1')
@@ -249,7 +250,12 @@ class SequencePlanning:
         for offset in range(0, len(path_rows), self.config.minibatch):
             rows = path_rows[offset:offset+self.config.minibatch]
             z,h = (torch.stack([states[i,t,after][k] for i,t,after,_ in rows]) for k in (0,1))
-            observations = [Observation(s['frame'][None], (), 'NOT_FINISHED', 0, 0) for *_,s in rows]
+            observations = []
+            for i, t, after, segment in rows:
+                step = selected[i].transitions[t]
+                context = step.after.final if after else step.before.final
+                frame = compose_goal_observation(segment['frame'], segment['mask'], context)
+                observations.append(Observation(frame[None], (), 'NOT_FINISHED', 0, 0))
             with torch.no_grad(), e.autocast():
                 goals = torch.stack(e.encode(observations))
             height, width = observations[0].final.shape

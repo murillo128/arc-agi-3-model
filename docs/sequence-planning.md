@@ -62,6 +62,13 @@ sampled per selected attempt; later positions have smaller remaining budgets.
 Failures do not train the duration output. These are outcomes of the collection
 policy, not oracle labels for optimal reachability.
 
+Path goal encoding uses goal pixels inside the relevant-pixel mask and the
+current real observation outside it. Each real planning decision refreshes this
+composed target once and holds it fixed throughout the imagined search. During
+path-head fitting, each before/after example uses its own real frame as context.
+Raw goal images and masks remain unchanged for visual goal supervision, matching,
+telemetry and checkpoints. Full-mask goals retain their original encoding.
+
 Path search starts after the warmup, uses the current predictor, respects legal
 actions and the Undo exclusion, and replans after each real action. It ranks
 success first, then duration within the existing success margin. Click proposals
