@@ -79,7 +79,7 @@ class AdaptationSmokeTests(unittest.TestCase):
             self.assertEqual(report['runtime']['device'], 'cpu')
             self.assertEqual(report['runtime']['precision'], 'fp32')
             self.assertFalse(report['runtime']['native_bf16'])
-            self.assertEqual(report['runtime']['checkpoint_loading'], 'eager')
+            self.assertEqual(report['runtime']['checkpoint_loading'], 'staged_sequential_eager')
             self.assertEqual(report['runtime']['parameter_dtype'], 'torch.float32')
             timings = report['timings']
             self.assertTrue(all(math.isfinite(v) and v >= 0 for v in timings.values()))

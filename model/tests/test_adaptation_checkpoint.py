@@ -1,6 +1,9 @@
 """Portable exports contain only inference state and strictly load native shapes."""
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import asdict, replace
+import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -28,10 +31,87 @@ def sequence_snapshot():
                 run='/private/training/path', torch_rng=torch.get_rng_state())
 
 
+class SequentialReader:
+    """A real read-only stream with a forward-only mounted-storage contract."""
+
+    def __init__(self, stream, *, fail_after=None):
+        self.stream = stream
+        self.fail_after = fail_after
+        self.read_sizes = []
+        self.bytes_read = 0
+
+    def read(self, size=-1):
+        if not 0 < size <= 1024 * 1024:
+            raise AssertionError(f'Source read must be bounded: {size}')
+        self.read_sizes.append(size)
+        if self.fail_after is not None and self.bytes_read >= self.fail_after:
+            raise OSError('mounted source read failed')
+        # Short reads also exercise the copy loop without a large checkpoint.
+        block = self.stream.read(min(size, 4096))
+        self.bytes_read += len(block)
+        return block
+
+    def seek(self, *args):
+        raise AssertionError('mounted source cannot seek')
+
+    def tell(self):
+        raise AssertionError('mounted source cannot tell')
+
+    def fileno(self):
+        raise AssertionError('mounted source cannot expose a mapping descriptor')
+
+    def __enter__(self):
+        return self
+
+    def close(self):
+        self.stream.close()
+
+    def __exit__(self, *args):
+        self.close()
+
+
+@contextmanager
+def staging_boundary(source, local_directory, *, fail_after=None):
+    """Instrument source IO and real temporary storage, leaving torch.load real."""
+    real_open, real_temporary_file = io.open, tempfile.TemporaryFile
+    readers, temporary_files = [], []
+
+    def open_file(file, mode='r', *args, **kwargs):
+        if not isinstance(file, int) and Path(file) == source:
+            if mode != 'rb':
+                raise AssertionError('mounted source must remain read-only')
+            reader = SequentialReader(real_open(file, mode, *args, **kwargs), fail_after=fail_after)
+            readers.append(reader)
+            return reader
+        return real_open(file, mode, *args, **kwargs)
+
+    def temporary_file(*args, **kwargs):
+        stream = real_temporary_file(*args, **kwargs)
+        temporary_files.append((stream, stream.fileno()))
+        return stream
+
+    with patch('builtins.open', open_file), patch('io.open', open_file), \
+            patch.object(tempfile, 'tempdir', str(local_directory)), \
+            patch.object(tempfile, 'TemporaryFile', temporary_file), \
+            patch.object(torch.UntypedStorage, 'from_file',
+                         side_effect=AssertionError('input filesystem cannot map storage')):
+        yield readers, temporary_files
+
+
 class AdaptationCheckpointTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
+
+    def assert_staging_cleaned(self, readers, temporary_files, local_directory):
+        self.assertEqual(len(readers), 1)
+        self.assertTrue(readers[0].stream.closed)
+        self.assertEqual(len(temporary_files), 1)
+        for stream, descriptor in temporary_files:
+            self.assertTrue(stream.closed)
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        self.assertEqual(list(local_directory.iterdir()), [])
 
     def test_export_roundtrip_excludes_training_data_and_preserves_source(self):
         torch.manual_seed(5)
@@ -66,6 +146,8 @@ class AdaptationCheckpointTests(unittest.TestCase):
     def test_malformed_schema_shapes_and_nonfinite_weights_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            local_directory = Path(directory) / 'local'
+            local_directory.mkdir()
             torch.save(sequence_snapshot(), source)
             export(source, output)
             original = torch.load(output, weights_only=True)
@@ -90,20 +172,30 @@ class AdaptationCheckpointTests(unittest.TestCase):
                 payload = deepcopy(original)
                 mutation(payload)
                 torch.save(payload, output)
-                with self.subTest(mutation=mutation), self.assertRaises((ValueError, TypeError)):
-                    load(output)
+                before = output.read_bytes()
+                with self.subTest(mutation=mutation):
+                    with staging_boundary(output, local_directory) as (readers, temporary_files):
+                        with self.assertRaises((ValueError, TypeError)):
+                            load(output)
+                    self.assert_staging_cleaned(readers, temporary_files, local_directory)
+                    self.assertEqual(readers[0].bytes_read, len(before))
+                    self.assertEqual(output.read_bytes(), before)
 
-    def test_read_only_asset_loads_without_filesystem_mapping_and_matches_mmap(self):
+    def test_read_only_asset_loads_sequentially_and_matches_mmap(self):
         with tempfile.TemporaryDirectory() as directory:
             source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            local_directory = Path(directory) / 'local'
+            local_directory.mkdir()
             torch.save(sequence_snapshot(), source)
             export(source, output)
             before = output.read_bytes()
             reference = from_payload(torch.load(output, weights_only=True, mmap=True))
             output.chmod(0o444)
-            with patch.object(torch.UntypedStorage, 'from_file',
-                              side_effect=OSError('input filesystem cannot map storage')):
+            with staging_boundary(output, local_directory) as (readers, temporary_files):
                 actual = load(output)
+            self.assert_staging_cleaned(readers, temporary_files, local_directory)
+            self.assertGreater(len(readers[0].read_sizes), 2)
+            self.assertEqual(readers[0].bytes_read, len(before))
             for expected_module, actual_module in ((reference.engine.model, actual.engine.model),
                                                    (reference.goal, actual.goal),
                                                    (reference.path, actual.path)):
@@ -114,6 +206,32 @@ class AdaptationCheckpointTests(unittest.TestCase):
                 self.assertTrue(all(not p.requires_grad for p in actual_module.parameters()))
             self.assertEqual(actual.metadata, reference.metadata)
             self.assertEqual(output.read_bytes(), before)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o444)
+
+    def test_truncated_payload_and_source_read_failure_clean_up_staging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            local_directory = Path(directory) / 'local'
+            local_directory.mkdir()
+            torch.save(sequence_snapshot(), source)
+            export(source, output)
+            complete = output.read_bytes()
+            for failure in ('truncated', 'source-read'):
+                with self.subTest(failure=failure):
+                    output.chmod(0o644)
+                    output.write_bytes(complete[:-64] if failure == 'truncated' else complete)
+                    output.chmod(0o444)
+                    before = output.read_bytes()
+                    fail_after = 4096 if failure == 'source-read' else None
+                    error = OSError if failure == 'source-read' else RuntimeError
+                    message = 'mounted source read failed' if failure == 'source-read' else 'central directory'
+                    with staging_boundary(output, local_directory, fail_after=fail_after) as boundary:
+                        readers, temporary_files = boundary
+                        with self.assertRaisesRegex(error, message):
+                            load(output)
+                    self.assert_staging_cleaned(readers, temporary_files, local_directory)
+                    self.assertEqual(readers[0].bytes_read, fail_after or len(before))
+                    self.assertEqual(output.read_bytes(), before)
 
 
 if __name__ == '__main__':

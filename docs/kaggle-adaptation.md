@@ -21,13 +21,17 @@ PyTorch. These commands generate local artifacts; none uploads or submits them.
    inference configuration and compact provenance, without trainer optimizers,
    replay, recorded frames, RNG or paths. Optional ChangeHead export is not part
    of version 1. Replace `base.pt` with a future compatible export to change
-   weights without changing notebook source. Portable runtime loading reads
-   weights eagerly on CPU, so mounted inputs do not need memory mapping. Strict
-   key, shape, dtype and finite-value checks still precede use. The temporary
-   payload is released after copying into the frozen base; allow host memory for
-   that payload plus one base and per-tensor validation scratch. There is no
-   staging file or persistent weight cache. Games continue to share one base
-   per checkpoint/device while their adapters remain independent.
+   weights without changing notebook source. Portable runtime loading copies the
+   read-only source in one sequential pass with a 1 MiB buffer into a local
+   `TemporaryFile`, then deserializes that file eagerly on CPU. The mounted source
+   needs neither seeking nor memory mapping. Strict key, shape, dtype and
+   finite-value checks still precede use. Allow local temporary disk space roughly
+   equal to the source size; temporary storage is closed/deleted on success and
+   failure, without writes to the input directory or a persistent weight cache.
+   The deserialized payload is released after copying into the frozen base; allow
+   host memory for that payload plus one base and per-tensor validation scratch.
+   Games continue to share one base keyed by the original source identity and
+   device while their adapters remain independent.
 
 2. Run the local public-SDK smoke on CPU, separately from any GPU trainer:
 
@@ -47,9 +51,11 @@ PyTorch. These commands generate local artifacts; none uploads or submits them.
    Flushed stderr events distinguish `loading`, `loaded`, `checking`, `learning`,
    `verifying` and `complete`; the public-SDK path identifies each learning game.
    The report's `runtime` records the selected device, PyTorch version, effective
-   precision, native BF16 selection, parameter dtype and eager loading mode.
-   `timings.load_seconds` measures the first policy load, including validation,
-   device transfer and its adapter creation when the base is not already live.
+   precision, native BF16 selection, parameter dtype and
+   `checkpoint_loading="staged_sequential_eager"`.
+   `timings.load_seconds` measures the first policy load, including sequential
+   staging, deserialization, validation, device transfer and its adapter creation
+   when the base is not already live.
    `startup_seconds` includes that load plus initial integrity/isolation checks;
    `interaction_seconds` covers inference, adaptation and SDK/game setup where
    applicable; `verification_seconds` covers the final integrity/isolation checks.
@@ -129,20 +135,25 @@ Omit `--adaptive` to preserve the existing frozen `arc3-agent` checkpoint mode;
 omit both it and `--agent-checkpoint` for the seeded random baseline. Portable
 adaptation bases and frozen-agent checkpoints have different validated formats.
 
-The eager loader was compared with the previous mapped path using five alternating
-CPU runs per mode on a small deterministic fixture: all world/goal/path tensors
-matched exactly. Median load plus validation/materialization was 15.07 ms eager
-versus 14.69 ms mapped. This local warm-cache result establishes equivalence,
-not a mounted-filesystem or production-weight speedup. Eager loading trades lazy
-storage residency for explicit bounded host allocation and avoids mapping-dependent
-input access; see [PyTorch's loading semantics](https://docs.pytorch.org/docs/stable/generated/torch.load.html).
-Focused regressions also cover read-only input with mapping unavailable, malformed
-serialized assets (including missing/extra keys, shape, dtype, NaN and infinities),
-native versus emulated BF16 on a selected device, CPU fallback and diagnostics in
-the isolated offline generated package. Accelerator capability checks use CPU
-test doubles; actual remote accelerator/mount checks remain a separate controller
-operation. The LoRA learning design and the earlier engineering evidence below
-are unchanged.
+The earlier direct-eager loader was compared with the previous mapped path using
+five alternating CPU runs per mode on a small deterministic fixture: all
+world/goal/path tensors matched exactly. Median load plus
+validation/materialization was 15.07 ms direct eager versus 14.69 ms mapped. These
+historical local warm-cache timings do not measure staged loading or establish a
+mounted-filesystem or production-weight speedup. Eager loading materializes tensor
+storages before validation; see [PyTorch's loading semantics](https://docs.pytorch.org/docs/stable/generated/torch.load.html).
+Sequential staging now keeps the deserializer's seek-based reads on the local
+temporary file. Its focused boundary regressions use a source reader that forbids
+seeking/mapping and records bounded reads, checking equivalent loaded weights,
+source immutability and temporary-storage cleanup for valid, malformed, nonfinite
+and truncated payloads.
+
+Existing regressions retain portable schema rejection (including missing/extra
+keys, shape, dtype, NaN and infinities), native versus emulated BF16 on a selected
+device, CPU fallback and diagnostics in the isolated offline generated package.
+Accelerator capability checks use CPU test doubles; actual remote
+accelerator/mount checks remain a separate controller operation. The LoRA learning
+design and the earlier engineering evidence below are unchanged.
 
 The transport follows the inspected official
 [Agent lifecycle](https://github.com/arcprize/ARC-AGI-3-Agents/blob/4743e7d0aaae0ded0d98a89a7e282e63564cd58b/agents/agent.py)
