@@ -2,12 +2,13 @@
 from types import SimpleNamespace
 from pathlib import Path
 import json
+import logging
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import numpy as np
-from arcengine import FrameData, GameState
+from arcengine import ActionInput, FrameData, FrameDataRaw, GameAction, GameState
 
 from model.data import Action
 from model.adaptation import AdaptationConfig
@@ -51,17 +52,60 @@ class OnlineExperimentTests(unittest.TestCase):
         required = ['--checkpoint', 'base.pt', '--output-dir', 'unused']
         _, original = parse_args(required)
         self.assertEqual(original.checkpoint_batch, 8246)
+        self.assertFalse(original.sdk_recording)
         self.assertEqual(original.checkpoint_sha256,
             '4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7')
         _, current = parse_args(required + ['--checkpoint-batch', '8458', '--checkpoint-sha256',
             '918016ed000669f7bd17b241565f816ad6861aea484cb6c8876791440cf50787',
-            '--checkpoint-release', 'https://github.com/murillo128/arc-agi-3-model/releases/tag/lora-base-b8458-20261028'])
+            '--checkpoint-release', 'https://github.com/murillo128/arc-agi-3-model/releases/tag/lora-base-b8458-20261028',
+            '--sdk-recording'])
         self.assertEqual(current.checkpoint_batch, 8458)
         self.assertEqual(current.checkpoint_sha256,
             '918016ed000669f7bd17b241565f816ad6861aea484cb6c8876791440cf50787')
         self.assertIsNone(current.max_actions)
         self.assertIsNone(current.max_game_seconds)
         self.assertIsNone(current.report_issue)
+        self.assertTrue(current.sdk_recording)
+
+    def test_sdk_recording_keeps_initial_frames_noop_and_terminal_action_locally(self):
+        from arc_agi.models import EnvironmentInfo
+        from arc_agi.wrapper import EnvironmentWrapper
+        from arc3.envs.sdk import open_arcade
+
+        # Exercise the installed SDK writer with public response fixtures only;
+        # no game instance, model, GPU or remote API is needed.
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'sdk-recordings'
+            arcade = open_arcade('offline', str(Path(directory) / 'empty-environments'),
+                                 recordings_dir=str(target))
+            self.assertEqual(arcade.recordings_dir, str(target))
+            wrapper = EnvironmentWrapper(EnvironmentInfo(game_id='recording-fixture'),
+                logging.getLogger('recording-test'), 'test-card', save_recording=True,
+                include_frame_data=True, recordings_dir=arcade.recordings_dir)
+            wrapper._guid = 'test-run'
+            wrapper._setup_recording_file()
+            responses = [
+                FrameData(frame=[[[0]], [[1]]], full_reset=True,
+                          action_input=ActionInput(id=GameAction.RESET)),
+                FrameData(frame=[[[1]]], action_input=ActionInput(id=GameAction.ACTION6, data={'x': 0, 'y': 0})),
+                FrameData(frame=[[[2]]], state=GameState.WIN, levels_completed=1, win_levels=1,
+                          action_input=ActionInput(id=GameAction.ACTION4)),
+            ]
+            for response in responses:
+                raw = FrameDataRaw(state=response.state, action_input=response.action_input,
+                    full_reset=response.full_reset, levels_completed=response.levels_completed,
+                    win_levels=response.win_levels)
+                raw.frame = [np.array(layer, dtype=np.uint8) for layer in response.frame]
+                wrapper._set_last_response(raw)
+            paths = list(target.rglob('*.jsonl'))
+            self.assertEqual(len(paths), 1)
+            records = [json.loads(line)['data'] for line in paths[0].read_text().splitlines()]
+            self.assertEqual([r['frame'] for r in records], [[[[0]], [[1]]], [[[1]]], [[[2]]]])
+            self.assertEqual([r['action_input']['id'] for r in records], ['RESET', 'ACTION6', 'ACTION4'])
+            self.assertEqual(records[1]['action_input']['data'], {'x': 0, 'y': 0})
+            self.assertTrue(records[0]['full_reset'])
+            self.assertEqual(records[2]['state'], 'WIN')
+            self.assertEqual(records[2]['levels_completed'], 1)
 
     def test_identity_checks_real_file_hash_then_portable_metadata(self):
         # Standard SHA-256 test vector; model deserialization has its own integration test.
