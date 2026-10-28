@@ -205,13 +205,15 @@ const text = id => nodes.get(id).textContent;
   assert.equal(nodes.get('path').hidden,false);
   assert.equal(nodes.get('world').hidden,true);
   assert.equal(nodes.get('tab-path')['aria-selected'],'true');
-  assert.equal(nodes.get('archive-path-content').children.length,0,'closed archives load nothing');
-  nodes.get('archive-path').open=true;nodes.get('archive-path').listeners.toggle();
-  const archiveFrame=nodes.get('archive-path-content').children[0];
-  assert.equal(archiveFrame.src,'history.html?section=path');
+  assert.equal(nodes.has('archive-path'),false,'Path Planner has only the current viewer');
+  nodes.get('tab-world').listeners.click();
+  assert.equal(nodes.get('archive-world-content').children.length,0,'closed archives load nothing');
+  nodes.get('archive-world').open=true;nodes.get('archive-world').listeners.toggle();
+  const archiveFrame=nodes.get('archive-world-content').children[0];
+  assert.equal(archiveFrame.src,'history.html?section=world');
   archiveFrame.contentWindow={};
   const resize={origin:'https://dashboard.test',source:archiveFrame.contentWindow,
-    data:{type:'arc-archive-height',section:'path',height:1400.2}};
+    data:{type:'arc-archive-height',section:'world',height:1400.2}};
   windowListeners.message({...resize,origin:'https://untrusted.test'});
   windowListeners.message({...resize,source:{}});
   windowListeners.message({...resize,data:{...resize.data,height:Infinity}});
@@ -222,18 +224,19 @@ const text = id => nodes.get(id).textContent;
   windowListeners.message({...resize,data:{...resize.data,height:1e9}});
   assert.equal(archiveFrame.style.height,'50000px','archive dimensions are bounded');
   await vm.runInContext('refresh()',context);
-  assert.equal(nodes.get('archive-path-content').children[0],archiveFrame,'polling preserves an open archive');
+  assert.equal(nodes.get('archive-world-content').children[0],archiveFrame,'polling preserves an open archive');
   nodes.get('tab-goal').listeners.click();
-  assert.equal(nodes.get('archive-path-content').children.length,0,'switching panels unloads old polling');
-  nodes.get('tab-path').listeners.click();
-  assert.notEqual(nodes.get('archive-path-content').children[0],archiveFrame);
-  nodes.get('archive-path').open=false;nodes.get('archive-path').listeners.toggle();
-  assert.equal(nodes.get('archive-path-content').children.length,0,'collapsing an archive unloads it');
+  assert.equal(nodes.get('archive-world-content').children.length,0,'switching panels unloads old polling');
+  nodes.get('tab-world').listeners.click();
+  assert.notEqual(nodes.get('archive-world-content').children[0],archiveFrame);
+  nodes.get('archive-world').open=false;nodes.get('archive-world').listeners.toggle();
+  assert.equal(nodes.get('archive-world-content').children.length,0,'collapsing an archive unloads it');
   historyAvailable=false;
   await vm.runInContext('refresh()',context);
-  assert.equal(nodes.get('archive-path').hidden,true);
-  assert.equal(nodes.get('archive-path-empty').hidden,false);
+  assert.equal(nodes.get('archive-world').hidden,true);
+  assert.equal(nodes.get('archive-world-empty').hidden,false);
   historyAvailable=true;
+  nodes.get('tab-path').listeners.click();
   report.history[0].predictor_terms={latent:.25,visual:.75};
   report.history[0].reconstruction_loss=0;
   report.history[0].representation_terms={color_ce:0};
@@ -519,7 +522,7 @@ const text = id => nodes.get(id).textContent;
     assert.equal(text('trend-change'),'—','no previous window is inherited from the old run');
     assert.match(text('history-scope'),/100 retained batches, starting at 101/);
   }
-  // Legacy bookmarks open their matching archive inside the current shell.
+  // Legacy path/default bookmarks show the current planner; retained archives still open.
   for(const hash of ['#world','#path','#evaluation','#curriculum','']){
     const bookmarkNodes=new Map([...nodes.keys()].map(id=>[id,element()]));
     const bookmark=vm.createContext({console,URLSearchParams,AbortSignal,clearTimeout(){},setTimeout(){},
@@ -531,7 +534,16 @@ const text = id => nodes.get(id).textContent;
     await new Promise(resolve=>setImmediate(resolve));
     const section=hash.slice(1)||'path';
     assert.equal(bookmarkNodes.get(section).hidden,false);
-    assert.equal(bookmarkNodes.get('archive-'+section).open,true);
-    assert.equal(bookmarkNodes.get('archive-'+section+'-content').children[0].src,`history.html?section=${section}`);
+    assert.equal(bookmarkNodes.get('status').textContent,'Waiting');
+    for(const retained of ['world','evaluation','curriculum']){
+      const frames=bookmarkNodes.get('archive-'+retained+'-content').children;
+      if(retained===section){
+        assert.equal(bookmarkNodes.get('archive-'+retained).open,true);
+        assert.equal(frames[0].src,`history.html?section=${retained}`);
+      }else{
+        assert.notEqual(bookmarkNodes.get('archive-'+retained).open,true);
+        assert.equal(frames.length,0,'unselected archives load nothing');
+      }
+    }
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

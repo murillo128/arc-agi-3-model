@@ -334,7 +334,7 @@ function renderPreview(data) {
 }
 $('preview-game').addEventListener('change',()=>{if(displayedReport)renderPreview(displayedReport);});
 const trajectoryView=ArcTrajectory.create({getReport:()=>displayedReport,picture:draw,goalCanvas:'trajectory-goal'});
-const archiveSections=['world','path','evaluation','curriculum'];
+const archiveSections=['world','evaluation','curriculum'];
 const archiveFrames=new Map();
 let archiveAvailable=false;
 function syncArchives() {
