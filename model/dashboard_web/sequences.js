@@ -100,7 +100,7 @@ function phaseThresholds(data, key, label, color) {
     label:groups.size>1?`${label} · ${scope.join(', ')}`:label}));
 }
 const timingLabels = {collection_seconds:'Game',representation_seconds:'Representation',encode_seconds:'Encoding',
-  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',save_seconds:'Saving'};
+  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',planning_seconds:'Goal and path heads',save_seconds:'Saving'};
 function availableHistory(data) {
   const live=data.history||[], latest=live.at(-1)?.batch;
   if(!Number.isFinite(latest))return [];
@@ -149,6 +149,7 @@ function render(data) {
     ?`Showing ${number(rows[0].batch,0)}–${number(rows.at(-1).batch,0)} · ${number(all.length,0)} retained batches, starting at ${number(all[0].batch,0)}${gaps?` · ${gaps} gaps`:''}. ${historyMetadata?.enabled?`Archive limit: ${number(historyMetadata.limit,0)}; older discarded batches cannot be recovered.`:'Only the trainer’s retained history is available; persistence is not enabled.'}${historyError||historyMetadata?.error?` ${historyError||historyMetadata.error}`:''}`
     :'Waiting for recorded batches.';
   renderTrend(data,all,rows);
+  renderPlanning(data,rows,all);
   const training=data.measurement_source==='training_pre_update', control=data.phase_control;
   const frozen=Number.isInteger(control?.representation_frozen_at_batch);
   $('phase-status').textContent=control?`Phase: ${frozen?`Predictor · representation frozen after batch ${number(control.representation_frozen_at_batch,0)}`:control.phase==='predictor'?'Predictor · reduced representation LR':'Representation · predictor waiting'}${last.phase&&last.phase!==control.phase?' · Change takes effect next batch':''}`:'';
@@ -266,6 +267,36 @@ function draw(id, grid) {
   for(let y=0;y<grid.length;y++)for(let x=0;x<grid[y].length;x++){
     const value=grid[y][x];ctx.fillStyle=typeof value==='string'?value:palette[value]||((x+y)%2?'#aaa':'#eee');ctx.fillRect(x,y,1,1);
   }
+}
+function renderPlanning(data, rows, all) {
+  const state=data.planning;
+  $('planning-details').hidden=!state;
+  $('planning-title').textContent=state?'Teacher-guided goal and path learning':'Exploration in this run';
+  $('planning-description').textContent=state
+    ?'Follow the Cross and its interaction variant supply training goals. The goal head proposes images and masks; the path head estimates success before action cost. Other games continue predictor training and exploration. Encoder and decoder remain frozen.'
+    :'This run trains the encoder, decoder and predictor with memory. The exploration head estimates visible change, not goal success. Goal and path learning are not enabled.';
+  $('planning-status').textContent=state?`Goal updates: ${number(state.goal_updates,0)} · Path updates: ${number(state.path_updates,0)} · Learned-goal share: ${number(pct(state.learned_probability),1)}% · At least ${number(pct(state.config?.exploration),0)}% exploration · Search: ${number(state.config?.horizon,0)} steps × ${number(state.config?.beam,0)} branches`:'';
+  if(!state)return;
+  chart('planning-loss',rows,[series('Goal',r=>r.planning?.goal_loss),series('Path',r=>r.planning?.path_loss,{color:colors[2]})]);
+  chart('planning-error',rows,[series('Goal color %',r=>pct(r.planning?.goal_color_error)),series('Goal mask %',r=>pct(r.planning?.goal_mask_error),{color:colors[2]})],100);
+  const sources=[['teacher','Teacher'],['learned','Learned image match']];
+  const ratio=(r,source,numerator,denominator)=>{
+    const p=r.planning,n=p?.[`${source}_${numerator}`],d=p?.[`${source}_${denominator}`];
+    return Number.isFinite(n)&&d>0?n/d:null;
+  };
+  chart('planning-success',rows,sources.map(([s,label],i)=>series(`${label} %`,r=>pct(ratio(r,s,'reached','attempts')),{color:colors[i*2]})),100);
+  chart('planning-steps',rows,sources.map(([s,label],i)=>series(label,r=>ratio(r,s,'steps','reached'),{color:colors[i*2]})));
+  const recent=all.findLast(r=>(r.planning?.teacher_actions??0)>0&&(r.planning?.episodes??0)>0),p=recent?.planning;
+  $('planning-task-info').textContent=p?`Batch ${number(recent.batch,0)} · ${number(p.episodes,0)} episodes · ${number(p.censored,0)} interrupted attempts. These are training outcomes, not held-out evaluation results.`:'Waiting for teacher-game interactions.';
+  table('planning-outcomes',sources.map(([s,label])=>[label,...['attempts','reached','task_progress','level_successes'].map(k=>number(p?.[`${s}_${k}`],0))]));
+  $('planning-cost').textContent=p?`Planner actions: ${number(p.planner_actions,0)} · Exploration actions: ${number(p.exploration_actions,0)} · Invalid-goal fallbacks: ${number(p.fallbacks,0)} · Planning during collection: ${number(p.collection_seconds)} s · Learning heads and rebuilding memory: ${number(p.seconds)} s`:'';
+  const sample=data.planning_sample;
+  $('planning-preview').hidden=!sample;
+  $('planning-sample-info').textContent=sample?`${sample.game} · before head updates in batch ${number(sample.batch,0)}`:'Waiting for a teacher-supervised sample.';
+  const masked=(frame,mask)=>frame?.map((row,y)=>row.map((v,x)=>mask?.[y]?.[x]?v:16));
+  draw('planning-before',sample?.before);
+  draw('planning-target',masked(sample?.target,sample?.mask));
+  draw('planning-predicted',masked(sample?.predicted,sample?.predicted_mask));
 }
 function renderPreview(data) {
   const samples=data.prediction_samples||[], select=$('preview-game'), previous=select.value;

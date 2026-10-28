@@ -14,8 +14,8 @@ SCALARS = ('batch', 'actions', 'recent_tps', 'examples_per_second', 'peak_gpu_gi
            'loss', 'reconstruction_loss', 'macro_delta_error', 'total_seconds',
            'collection_seconds', 'representation_seconds', 'encode_seconds',
            'predictor_seconds', 'evaluation_seconds', 'drift_seconds',
-           'exploration_seconds', 'save_seconds', 'diagnostics_seconds')
-SECTIONS = ('quality', 'diagnostics', 'predictor_terms', 'representation_terms', 'learning_rates')
+           'exploration_seconds', 'planning_seconds', 'save_seconds', 'diagnostics_seconds')
+SECTIONS = ('quality', 'diagnostics', 'predictor_terms', 'representation_terms', 'learning_rates', 'planning')
 
 
 def history_run(report_path, report):
@@ -42,6 +42,8 @@ def compact_row(row):
     for key in ('phase', 'measurement_source'):
         if isinstance(row.get(key), str):
             result[key] = row[key][:80]
+    if isinstance((row.get('planning') or {}).get('identity'), str):
+        result['planning']['identity'] = row['planning']['identity'][:120]
     exploration = row.get('exploration') or {}
     result['exploration'] = numeric_tree({k: v for k, v in exploration.items() if k != 'games'})
     for key in ('policy', 'identity'):

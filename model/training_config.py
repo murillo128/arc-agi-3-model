@@ -79,7 +79,7 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration', 'sequence_game_weights'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration', 'sequence_game_weights', 'sequence_planning'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
@@ -198,6 +198,12 @@ def load_plan(path):
         if control.decoder_learning_rate_after_predictor > settings['representation_learning_rate']:
             raise ValueError('Post-predictor decoder LR must not exceed representation LR')
         payload['sequence_control'] = asdict(control)
+    if 'sequence_planning' in value:
+        from .sequence_planning import SequencePlanningConfig, TEACHER_GAMES
+        if 'sequence_control' not in payload or not any(s['game'] in TEACHER_GAMES for s in stages):
+            raise ValueError('sequence_planning requires controlled sequences and bundled teacher games')
+        payload['sequence_planning'] = asdict(SequencePlanningConfig(**object_keys(
+            value['sequence_planning'], SequencePlanningConfig.__dataclass_fields__, 'sequence_planning')))
     return TrainingPlan(initial_path, settings, tuple(stages), payload)
 
 
