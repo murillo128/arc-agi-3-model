@@ -220,10 +220,23 @@ learning timer excludes outer adapter transfers, so confirmation wall time is
 also recorded. Optional exhausted adaptation budgets still permit inference.
 Cancellation saves partial scalar results and prevents starting the next game.
 
-JSON, CSV and flushed scalar JSONL evidence stay in ignored `artifacts/`. No
-observations, adapters, weights or game sources are exported. Partial records
+JSON, CSV and flushed scalar JSONL evidence stay in ignored `artifacts/`.
+By default the runner does not save observations; adapters, weights and game
+sources are never exported. Partial records
 survive action/adaptation failures. These development-weight public-game results
 are not official Kaggle scores.
+
+For visual debugging, add `--sdk-recording` at launch. This enables the SDK's
+native `save_recording=True, include_frame_data=True` and stores JSONL under
+`<output-dir>/sdk-recordings/<scorecard-id>/`. It captures the initial RESET and
+subsequent returned actions with all returned frames, including no-ops, partial
+resets and terminal responses, before model adaptation. `summary.json` records
+whether recording was enabled and its directory. Keep these files in ignored
+`artifacts/`; issue publication remains scalar and never uploads recordings.
+This is distinct from the policy's CPU replay history. An already-running
+process has no live recording toggle, and adding the flag to the source does not
+recover past frames or enable recording in that process. Recordings have to be
+enabled when a new experiment starts; do not restart a run merely to add them.
 
 `progress.json` preserves the latest returned/measured/completed action while a
 game is running. Completed actions include CPU-history extent, stage stopping

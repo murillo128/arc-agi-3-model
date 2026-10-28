@@ -1,8 +1,9 @@
 """Manual public held-out LoRA experiment, separate from frozen evaluation.
 
 Only the existing Kaggle AdaptivePolicy learns. Diagnostic predictions precede
-SDK.step; returned frames are measured before confirm_result admits them. No
-frames, replay, adapters or checkpoints are written by this runner.
+SDK.step; returned frames are measured before confirm_result admits them.
+Optional SDK recordings retain returned frames locally; adapters and checkpoints
+are never written by this runner.
 """
 import argparse
 from collections import Counter
@@ -381,6 +382,8 @@ def parse_args(argv=None):
     parser.add_argument('--checkpoint-release', help='Provenance URL, independent of the code revision')
     parser.add_argument('--report-issue', type=int,
                         help='Explicit opt-in: publish scalar game/final reports to this repository issue')
+    parser.add_argument('--sdk-recording', action='store_true',
+                        help='Save SDK actions and frames locally under output-dir/sdk-recordings')
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--split', default='configs/splits.public-development.json')
     parser.add_argument('--environments-dir', default='environment_files')
@@ -423,6 +426,7 @@ def main():
     np.random.seed(42)
     args.output_dir.mkdir(parents=True)
     output = args.output_dir
+    recordings_dir = output / 'sdk-recordings' if args.sdk_recording else None
     logging.basicConfig(filename=output / 'runner.log', level=logging.INFO, force=True)
     started = time.monotonic()
     report = dict(format='arc3-online-lora-experiment-v1', manual=True,
@@ -432,7 +436,9 @@ def main():
         max_game_seconds=args.max_game_seconds, config=asdict(config), games=[], status='preparing',
         checkpoint=dict(path=str(args.checkpoint), expected_sha256=args.checkpoint_sha256,
                         expected_source_batches=args.checkpoint_batch,
-                        release=args.checkpoint_release), threads=args.threads)
+                        release=args.checkpoint_release), threads=args.threads,
+        sdk_recording=dict(enabled=args.sdk_recording, include_frame_data=args.sdk_recording,
+                           directory=str(recordings_dir) if recordings_dir is not None else None))
     arcade = None
     try:
         # An unused bank retains the shared base and checks isolation, without
@@ -450,7 +456,8 @@ def main():
         report.update(base_sha256_before=base_before, base_bytes=base_bytes,
                       startup_seconds=time.monotonic()-started, status='running')
         save_report(output, report)
-        arcade = open_arcade(args.mode, args.environments_dir)
+        arcade = open_arcade(args.mode, args.environments_dir,
+                             recordings_dir=str(recordings_dir) if recordings_dir is not None else None)
         for game_id in GAMES:
             print(json.dumps(dict(event='game_start', game=game_id)), flush=True)
             game_started = time.monotonic()
@@ -468,7 +475,8 @@ def main():
                     raise RuntimeError('New-game isolation invariant failed')
                 adapter_before = bank_digest(policy.bank)
                 groups_before = group_digests(policy.bank)
-                wrapper = arcade.make(game_id, seed=42, save_recording=False)
+                wrapper = arcade.make(game_id, seed=42, save_recording=args.sdk_recording,
+                                      include_frame_data=True)
                 if wrapper is None:
                     raise RuntimeError(f'Official SDK could not provision {game_id}')
                 with (output / f'{game_id}.jsonl').open('x') as stream:

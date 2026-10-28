@@ -10,7 +10,7 @@ from arc3.core.policy import Action, Observation
 SDK_VERSION = "0.9.9"
 
 
-def open_arcade(mode: str, environments_dir: str) -> Any:
+def open_arcade(mode: str, environments_dir: str, *, recordings_dir: str | None = None) -> Any:
     if mode not in {"offline", "normal"}:
         raise ValueError("Local mode must be offline or normal")
     if os.getenv("OPERATION_MODE", "").lower() in {"online", "competition"}:
@@ -24,6 +24,7 @@ def open_arcade(mode: str, environments_dir: str) -> Any:
         operation_mode=OperationMode[mode.upper()],
         environments_dir=environments_dir,
         logger=logger,
+        **({"recordings_dir": recordings_dir} if recordings_dir is not None else {}),
     )
     if arcade.operation_mode not in {OperationMode.OFFLINE, OperationMode.NORMAL}:
         raise RuntimeError("Local lifecycle cannot use a competition/remote override")
