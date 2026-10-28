@@ -853,6 +853,41 @@ const text=id=>nodes.get(id).textContent;
   assert.ok(historyRequests.every(r=>r.method!=='POST'));
   assert.ok(historyRequests.some(r=>r.url==='api/history/state'));
   assert.ok(historyRequests.every(r=>r.url!=='api/state'));
+  // Embedded archives own one section, use only archived data and fit their contents.
+  let resized, measuredHeight=900;
+  const messages=[],embeddedRequests=[];
+  const embeddedReport={...report,historical:true,status:'historical'};
+  const embeddedNodes=new Map([...nodes.keys()].map(id=>[id,element()]));
+  embeddedNodes.get('history-content').getBoundingClientRect=()=>({height:measuredHeight});
+  const embedded=vm.createContext({console,AbortSignal,setTimeout(){},clearTimeout(){},
+    location:{pathname:'/arc3-training/history.html',hash:'#path',origin:'https://dashboard.test'},
+    document:{body:{dataset:{historySection:'world'}},getElementById:id=>embeddedNodes.get(id),
+      createElement:element,createElementNS:element},
+    ResizeObserver:class {constructor(callback){resized=callback;}
+      observe(target){assert.equal(target,embeddedNodes.get('history-content'));}},
+    parent:{postMessage(message,origin){messages.push({message,origin});}},
+    fetch:async(url,options)=>{embeddedRequests.push({url,method:options?.method});
+      return {ok:true,json:async()=>({subgoals:embeddedReport})};}});
+  vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),embedded);
+  vm.runInContext(fs.readFileSync(path.join(assets,'subgoals.js'),'utf8'),embedded);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(embeddedNodes.get('world').hidden,false,'embedded section overrides an unrelated fragment');
+  assert.equal(embeddedNodes.get('path').hidden,true);
+  assert.match(embeddedNodes.get('archive-context').textContent,/Previous run.*read only/);
+  assert.equal(embeddedNodes.get('advance-phase').disabled,true);
+  assert.equal(embeddedNodes.get('advance-level').disabled,true);
+  await vm.runInContext("advanceCurriculum('phase')",embedded);
+  assert.ok(embeddedRequests.every(r=>r.method!=='POST'&&r.url.startsWith('api/history/')));
+  resized();resized();
+  assert.equal(messages.length,1,'unchanged height does not trigger another resize');
+  assert.equal(messages[0].origin,'https://dashboard.test');
+  assert.equal(messages[0].message.section,'world');
+  assert.equal(messages[0].message.height,916);
+  measuredHeight=1200;resized();
+  assert.equal(messages[1].message.height,1216);
+  embeddedReport.status='waiting';
+  await vm.runInContext('poll()',embedded);
+  assert.match(embeddedNodes.get('archive-context').textContent,/Archived data unavailable/);
   vm.runInContext("plot('speed',[{name:'Prueba',points:[[0,0],[1,10],[2,20]]}])",context);
   const legendButton=nodes.get('speed-legend').children[0];
   const lastGuide=()=>nodes.get('speed').children.find(n=>n.class==='series-guide');

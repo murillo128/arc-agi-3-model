@@ -270,14 +270,18 @@ function draw(id, grid) {
 }
 function renderPlanning(data, rows, all) {
   const state=data.planning;
-  $('planning-details').hidden=!state;
-  $('planning-title').textContent=state?'Teacher-guided goal and path learning':'Exploration in this run';
-  $('planning-description').textContent=state
-    ?'Follow the Cross and its interaction variant supply training goals. The goal head proposes images and masks; the path head estimates success before action cost. Other games continue predictor training and exploration. Encoder and decoder remain frozen.'
-    :'This run trains the encoder, decoder and predictor with memory. The exploration head estimates visible change, not goal success. Goal and path learning are not enabled.';
-  $('planning-status').textContent=state?`Goal updates: ${number(state.goal_updates,0)} · Path updates: ${number(state.path_updates,0)} · Learned-goal share: ${number(pct(state.learned_probability),1)}% · At least ${number(pct(state.config?.exploration),0)}% exploration · Search: ${number(state.config?.horizon,0)} steps × ${number(state.config?.beam,0)} branches`:'';
+  $('goal-details').hidden=$('path-details').hidden=!state;
+  $('goal-description').textContent=state
+    ?'Propose a target image and its relevant pixels from the observed state and causal memory. Follow the Cross and its interaction variant provide teacher targets during training.'
+    :'Goal learning is not enabled in this run. Available measurements will appear here when it starts.';
+  $('path-description').textContent=state
+    ?'Choose actions with the predictor, prioritizing the probability of reaching the chosen goal before action cost. Real outcomes train the path head; imagined routes guide search.'
+    :'Path learning is not enabled in this run. Actions are collected by the exploration policy, which estimates visible change rather than goal success.';
+  $('goal-status').textContent=state?`Goal updates: ${number(state.goal_updates,0)} · Learned-goal share: ${number(pct(state.learned_probability),1)}%`:'';
+  $('path-status').textContent=state?`Path updates: ${number(state.path_updates,0)} · At least ${number(pct(state.config?.exploration),0)}% exploration · Search: ${number(state.config?.horizon,0)} steps × ${number(state.config?.beam,0)} branches`:'';
   if(!state)return;
-  chart('planning-loss',rows,[series('Goal',r=>r.planning?.goal_loss),series('Path',r=>r.planning?.path_loss,{color:colors[2]})]);
+  chart('goal-loss',rows,[series('Goal',r=>r.planning?.goal_loss,{color:colors[2]})]);
+  chart('path-learning-loss',rows,[series('Path',r=>r.planning?.path_loss)]);
   chart('planning-error',rows,[series('Goal color %',r=>pct(r.planning?.goal_color_error)),series('Goal mask %',r=>pct(r.planning?.goal_mask_error),{color:colors[2]})],100);
   const sources=[['teacher','Teacher'],['learned','Learned image match']];
   const ratio=(r,source,numerator,denominator)=>{
@@ -329,10 +333,41 @@ function renderPreview(data) {
   kinds.forEach(([,label],i)=>{const node=document.createElement('span');node.textContent=`${label}: ${counts[i]} px`;node.style.color=colors[i];$('preview-legend').append(node);});
 }
 $('preview-game').addEventListener('change',()=>{if(displayedReport)renderPreview(displayedReport);});
-const tabs=['world','path','evaluation','curriculum'];
+const archiveSections=['world','path','evaluation','curriculum'];
+const archiveFrames=new Map();
+let archiveAvailable=false;
+function syncArchives() {
+  for(const section of archiveSections){
+    const disclosure=$('archive-'+section), content=$('archive-'+section+'-content');
+    disclosure.hidden=!archiveAvailable;
+    $('archive-'+section+'-empty').hidden=archiveAvailable;
+    const visible=archiveAvailable&&disclosure.open&&!$(section).hidden;
+    if(visible&&!archiveFrames.has(section)){
+      const frame=document.createElement('iframe');
+      frame.title=`Earlier ${section==='world'?'representation and prediction':section} run · read only`;
+      frame.src=`history.html?section=${section}`;
+      frame.className='archive-frame';
+      content.replaceChildren(frame);
+      archiveFrames.set(section,frame);
+    }else if(!visible&&archiveFrames.has(section)){
+      content.replaceChildren();
+      archiveFrames.delete(section);
+    }
+  }
+}
+for(const section of archiveSections)$('archive-'+section).addEventListener('toggle',syncArchives);
+globalThis.addEventListener?.('message',event=>{
+  if(event.origin!==globalThis.location?.origin||event.data?.type!=='arc-archive-height')return;
+  const frame=archiveFrames.get(event.data.section), height=event.data.height;
+  if(!frame||event.source!==frame.contentWindow||!Number.isFinite(height)||height<0)return;
+  frame.style.height=`${Math.max(240,Math.min(50000,Math.ceil(height)))}px`;
+});
+const tabs=['world','goal','path','evaluation','curriculum'];
 function selectTab(name) {
   if(!tabs.includes(name))return;
   for(const tab of tabs){$(tab).hidden=tab!==name;$('tab-'+tab).setAttribute('aria-selected',String(tab===name));$('tab-'+tab).tabIndex=tab===name?0:-1;}
+  globalThis.history?.replaceState(null,'','#'+name);
+  syncArchives();
 }
 tabs.forEach((name,i)=>{
   $('tab-'+name).addEventListener('click',()=>selectTab(name));
@@ -341,7 +376,12 @@ tabs.forEach((name,i)=>{
     if(next===null)return;event.preventDefault();selectTab(tabs[next]);$('tab-'+tabs[next]).focus();
   });
 });
-selectTab(globalThis.location?.hash?.slice(1)||'world');
+const openArchive=new URLSearchParams(globalThis.location?.search||'').get('archive')==='1';
+const requestedTab=globalThis.location?.hash?.slice(1);
+const initialTab=tabs.includes(requestedTab)?requestedTab:openArchive?'path':'world';
+if(openArchive&&archiveSections.includes(initialTab))$('archive-'+initialTab).open=true;
+selectTab(initialTab);
+globalThis.addEventListener?.('hashchange',()=>selectTab(globalThis.location?.hash?.slice(1)||'world'));
 for(const id of ['history-range','trend-window','trend-zoom'])$(id).addEventListener('change',()=>{
   if(displayedReport)render(displayedReport);
 });
@@ -372,8 +412,8 @@ async function refresh() {
       displayedReport=data;
       $('freshness').textContent=Number.isFinite(data.age_seconds)?`Updated ${number(data.age_seconds,0)} s ago`:'';
     }
-    $('history-link').hidden=$('planner-history-link').hidden=!state.history_available;
-    $('planner-history-status').textContent=state.history_available?'Earlier charts are preserved in a separate history view.':'Planner history is not configured on this server.';
+    archiveAvailable=state.history_available===true;
+    syncArchives();
     $('gpu-status').textContent=(state.gpu?.devices||[]).map(g=>`GPU · ${number(g.utilization_percent,0)} % · ${number(g.temperature_c,0)} °C`).join(' · ');
   } catch { renderedRevision=null; $('status').textContent = 'Disconnected'; }
   setTimeout(refresh, 2000);

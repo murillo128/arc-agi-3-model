@@ -512,6 +512,13 @@ train the goal planner in sequence mode.
 
 El dashboard de secuencias conserva las secciones de representación/predictor,
 planner, evaluación congelada y currículo, junto a las vistas de optimización.
+La navegación separa **Goal Planner** (propuestas, imágenes y error del objetivo)
+y **Path Planner** (rutas, éxito, pasos y coste). Cuando se configura
+`--history-subgoal-report`, las gráficas del entrenamiento anterior se conservan
+en desplegables **Earlier … run** dentro de su sección correspondiente, sin
+mezclar sus métricas con las actuales. Solo se cargan mientras están abiertos y
+visibles; el histórico es de solo lectura. Los enlaces antiguos a `history.html`
+abren el mismo contenido dentro de la navegación actual.
 Muestra las pérdidas del encoder/decoder y sus componentes, MSE latente y pérdida
 visual del predictor, desglose del delta, diversidad/rango/coordenadas casi
 constantes, sensibilidad a cambios, deriva, ejemplos visuales y tiempos por batch.

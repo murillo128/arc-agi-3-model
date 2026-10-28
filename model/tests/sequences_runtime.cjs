@@ -22,9 +22,12 @@ const report = {status: 'paused', age_seconds: 2, games: ['<game>'],
     macro_delta_error: .25, loss: 0, quality: {early: {delta_error: 0}, late: {delta_error: .5},
       '<game>': {delta_error: .25, transitions: 512}},
     sessions: [{game: '<game>', steps: 512, boundaries: 15, end: 'budget'}]}]};
-let offline = false;
+let offline = false, historyAvailable = true;
 let archiveState=null,archivePayload=null,archiveRequests=0,archiveOffline=false;
-const context = vm.createContext({console, setTimeout() {}, fixture: report, location:{hash:'#curriculum'},
+const windowListeners={};
+const context = vm.createContext({console, URLSearchParams, setTimeout() {}, fixture: report,
+  location:{hash:'#curriculum',origin:'https://dashboard.test'},
+  addEventListener(type,handler){windowListeners[type]=handler;},
   document: {getElementById: id => nodes.get(id), createElement: element, createElementNS: element},
   fetch: async url => {
     if(offline)throw Error('offline');
@@ -33,7 +36,7 @@ const context = vm.createContext({console, setTimeout() {}, fixture: report, loc
       if(archiveOffline)throw Error('archive offline');
       return {ok:true,status:200,headers:{get:()=>archiveState.revision},json:async()=>archivePayload};
     }
-    return {ok:true,json:async()=>({sequences:report,history_available:true,sequence_history:archiveState})};
+    return {ok:true,json:async()=>({sequences:report,history_available:historyAvailable,sequence_history:archiveState})};
   }});
 const text = id => nodes.get(id).textContent;
 (async () => {
@@ -45,7 +48,8 @@ const text = id => nodes.get(id).textContent;
   assert.equal(text('exploration-policy'), 'Uniform exploration');
   assert.equal(text('exploration-head-info'), 'No learned-head measurements yet');
   assert.equal(nodes.get('interaction-change-legend').children[0].textContent,'Changed actions %: —');
-  assert.equal(nodes.get('planning-details').hidden,true);
+  assert.equal(nodes.get('goal-details').hidden,true);
+  assert.equal(nodes.get('path-details').hidden,true);
   report.planning={goal_updates:16,path_updates:12,learned_probability:.125,
     config:{exploration:.25,horizon:2,beam:4}};
   report.history[0].planning={identity:'0',teacher_actions:8,episodes:2,censored:1,
@@ -55,8 +59,12 @@ const text = id => nodes.get(id).textContent;
   report.planning_sample={batch:1,game:'sc01-v1',before:[[0,1]],target:[[2,3]],mask:[[true,false]],
     predicted:[[4,5]],predicted_mask:[[false,true]]};
   await vm.runInContext('refresh()',context);
-  assert.equal(nodes.get('planning-details').hidden,false);
-  assert.match(text('planning-status'),/Learned-goal share: 12.5%/);
+  assert.equal(nodes.get('goal-details').hidden,false);
+  assert.equal(nodes.get('path-details').hidden,false);
+  assert.match(text('goal-status'),/Learned-goal share: 12.5%/);
+  assert.match(text('path-status'),/Path updates: 12/);
+  assert.deepEqual(nodes.get('goal-loss-legend').children.map(n=>n.textContent),['Goal: 2']);
+  assert.deepEqual(nodes.get('path-learning-loss-legend').children.map(n=>n.textContent),['Path: 0.5']);
   assert.equal(nodes.get('planning-success-legend').children[0].textContent,'Teacher %: 50');
   assert.equal(nodes.get('planning-success-legend').children[1].textContent,'Learned image match %: 100');
   assert.equal(nodes.get('planning-outcomes').children[1].children[3].textContent,'0',
@@ -68,9 +76,15 @@ const text = id => nodes.get(id).textContent;
   await vm.runInContext('refresh()',context);
   assert.equal(nodes.get('planning-success-legend').children[0].textContent,'Teacher %: —');
   assert.equal(nodes.get('planning-steps-legend').children[0].textContent,'Teacher: —');
+  report.history[0].planning.goal_loss=null;
+  report.history[0].planning.path_loss=0;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('goal-loss-legend').children[0].textContent,'Goal: —');
+  assert.equal(nodes.get('path-learning-loss-legend').children[0].textContent,'Path: 0');
   delete report.planning;delete report.planning_sample;delete report.history[0].planning;
   await vm.runInContext('refresh()',context);
-  assert.equal(nodes.get('planning-details').hidden,true);
+  assert.equal(nodes.get('goal-details').hidden,true);
+  assert.equal(nodes.get('path-details').hidden,true);
   report.exploration_config={policy:'learned',uniform_probability:.25};
   report.exploration_adoptions=[{batch:0}];
   report.history[0].exploration={policy:'learned',identity:'new',eligible_transitions:100,changed_actions:40,
@@ -99,6 +113,14 @@ const text = id => nodes.get(id).textContent;
   nodes.get('tab-curriculum').listeners.keydown({key:'Home',preventDefault(){}});
   assert.equal(nodes.get('world').hidden, false);
   assert.equal(nodes.get('tab-world')['aria-selected'], 'true');
+  nodes.get('tab-world').listeners.keydown({key:'ArrowRight',preventDefault(){}});
+  assert.equal(nodes.get('goal').hidden,false);
+  assert.equal(nodes.get('tab-goal').tabIndex,0);
+  assert.equal(nodes.get('tab-world').tabIndex,-1);
+  nodes.get('tab-goal').listeners.keydown({key:'ArrowRight',preventDefault(){}});
+  assert.equal(nodes.get('path').hidden,false);
+  context.location.hash='#goal';windowListeners.hashchange();
+  assert.equal(nodes.get('goal').hidden,false,'goal deep links activate their own panel');
   nodes.get('tab-world').listeners.keydown({key:'End',preventDefault(){}});
   assert.equal(nodes.get('curriculum').hidden, false);
   assert.equal(text('batches'), '1 completed batches');
@@ -137,12 +159,39 @@ const text = id => nodes.get(id).textContent;
   assert.equal(text('macro-error'), 'Average across games: 25 %');
   assert.equal(nodes.get('sessions').children[0].children[1].textContent, '<game>');
   assert.equal(nodes.get('game-quality').children[0].children[1].textContent, '25 %');
-  assert.equal(nodes.get('history-link').hidden,false);
   nodes.get('tab-path').listeners.click();
   assert.equal(nodes.get('path').hidden,false);
   assert.equal(nodes.get('world').hidden,true);
   assert.equal(nodes.get('tab-path')['aria-selected'],'true');
-  assert.equal(nodes.get('planner-history-link').hidden,false);
+  assert.equal(nodes.get('archive-path-content').children.length,0,'closed archives load nothing');
+  nodes.get('archive-path').open=true;nodes.get('archive-path').listeners.toggle();
+  const archiveFrame=nodes.get('archive-path-content').children[0];
+  assert.equal(archiveFrame.src,'history.html?section=path');
+  archiveFrame.contentWindow={};
+  const resize={origin:'https://dashboard.test',source:archiveFrame.contentWindow,
+    data:{type:'arc-archive-height',section:'path',height:1400.2}};
+  windowListeners.message({...resize,origin:'https://untrusted.test'});
+  windowListeners.message({...resize,source:{}});
+  windowListeners.message({...resize,data:{...resize.data,height:Infinity}});
+  windowListeners.message({...resize,data:{...resize.data,height:'1400'}});
+  assert.equal(archiveFrame.style.height,undefined,'foreign or malformed messages cannot resize an archive');
+  windowListeners.message(resize);
+  assert.equal(archiveFrame.style.height,'1401px');
+  windowListeners.message({...resize,data:{...resize.data,height:1e9}});
+  assert.equal(archiveFrame.style.height,'50000px','archive dimensions are bounded');
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('archive-path-content').children[0],archiveFrame,'polling preserves an open archive');
+  nodes.get('tab-goal').listeners.click();
+  assert.equal(nodes.get('archive-path-content').children.length,0,'switching panels unloads old polling');
+  nodes.get('tab-path').listeners.click();
+  assert.notEqual(nodes.get('archive-path-content').children[0],archiveFrame);
+  nodes.get('archive-path').open=false;nodes.get('archive-path').listeners.toggle();
+  assert.equal(nodes.get('archive-path-content').children.length,0,'collapsing an archive unloads it');
+  historyAvailable=false;
+  await vm.runInContext('refresh()',context);
+  assert.equal(nodes.get('archive-path').hidden,true);
+  assert.equal(nodes.get('archive-path-empty').hidden,false);
+  historyAvailable=true;
   report.history[0].predictor_terms={latent:.25,visual:.75};
   report.history[0].reconstruction_loss=0;
   report.history[0].representation_terms={color_ce:0};
@@ -427,5 +476,20 @@ const text = id => nodes.get(id).textContent;
     assert.equal(text('trend-balanced'),'100 %');
     assert.equal(text('trend-change'),'—','no previous window is inherited from the old run');
     assert.match(text('history-scope'),/100 retained batches, starting at 101/);
+  }
+  // Legacy bookmarks open their matching archive inside the current shell.
+  for(const hash of ['#world','#path','#evaluation','#curriculum','']){
+    const bookmarkNodes=new Map([...nodes.keys()].map(id=>[id,element()]));
+    const bookmark=vm.createContext({console,URLSearchParams,setTimeout(){},
+      location:{hash,search:'?archive=1',origin:'https://dashboard.test'},
+      document:{getElementById:id=>bookmarkNodes.get(id),createElement:element,createElementNS:element},
+      fetch:async()=>({ok:true,json:async()=>({sequences:{status:'waiting'},history_available:true})})});
+    for(const file of ['chart-tools.js','sequence-trends.js','sequences.js'])
+      vm.runInContext(fs.readFileSync(path.join(assets,file),'utf8'),bookmark);
+    await new Promise(resolve=>setImmediate(resolve));
+    const section=hash.slice(1)||'path';
+    assert.equal(bookmarkNodes.get(section).hidden,false);
+    assert.equal(bookmarkNodes.get('archive-'+section).open,true);
+    assert.equal(bookmarkNodes.get('archive-'+section+'-content').children[0].src,`history.html?section=${section}`);
   }
 })().catch(error => { console.error(error); process.exitCode = 1; });

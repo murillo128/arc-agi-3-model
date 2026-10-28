@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ARC · Memory across levels</title><link rel="stylesheet" href="dashboard.css"><script src="chart-tools.js" defer></script><script src="sequence-trends.js" defer></script><script src="sequences.js" defer></script></head>
-<body class="subgoal-dashboard">
+<body class="subgoal-dashboard sequence-dashboard">
 <div class="dashboard-header"><header class="compact-header"><a class="app-brand" href="index.html" aria-label="ARC Lab home">ARC<span>LAB</span></a><div class="run-heading"><p class="eyebrow">ARC · SEQUENCE LEARNING</p><h1>Sequence training</h1>
 </div><div class="connection"><p class="run-context" id="phase-status"></p><span id="status" role="status">Waiting</span><small id="freshness"></small><p id="gpu-status" class="gpu-status"></p></div></header><div class="metrics summary-metrics compact-metrics">
 <article><h2>Real actions</h2><strong id="actions">—</strong><small id="batches"></small></article>
@@ -10,9 +10,10 @@
 <article><h2>GPU memory</h2><strong id="memory">—</strong><small>Peak allocation by PyTorch in this process.</small></article>
 </div><nav class="dashboard-tabs" aria-label="Dashboard navigation"><div class="local-tabs" role="tablist" aria-label="Training monitoring">
 <button id="tab-world" role="tab" aria-controls="world" aria-selected="true">Representation & prediction</button>
-<button id="tab-path" role="tab" aria-controls="path" aria-selected="false" tabindex="-1">Subgoals & planner</button>
-<button id="tab-evaluation" role="tab" aria-controls="evaluation" aria-selected="false" tabindex="-1">Fixed evaluation</button>
-<button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false" tabindex="-1">Curriculum</button></div><a href="optimization.html">Optimization</a><a id="history-link" href="history.html#path" hidden>Planner history</a></nav></div>
+<button id="tab-goal" role="tab" aria-controls="goal" aria-selected="false" tabindex="-1">Goal Planner</button>
+<button id="tab-path" role="tab" aria-controls="path" aria-selected="false" tabindex="-1">Path Planner</button>
+<button id="tab-evaluation" role="tab" aria-controls="evaluation" aria-selected="false" tabindex="-1">Training measurements</button>
+<button id="tab-curriculum" role="tab" aria-controls="curriculum" aria-selected="false" tabindex="-1">Curriculum</button></div><a href="optimization.html">Optimization</a></nav></div>
 <main>
 <details id="run-configuration" class="run-details"><summary>Run configuration <span id="run-info" class="muted">Waiting for data…</span></summary><p class="run-context" id="configuration"></p><p class="run-context" id="learning-rates"></p></details>
 <div class="history-toolbar"><label>Chart history<select id="history-range"><option value="200">Last 200 batches</option><option value="1000" selected>Last 1,000 batches</option><option value="all">All retained batches</option></select></label><p id="history-scope" class="muted">Waiting for history…</p></div>
@@ -91,29 +92,38 @@
 <article class="chart-card"><h3>Exploration head <span>auxiliary change probability</span></h3><p>Predicts whether an action changes the observation. Reset, terminal and level-boundary images are excluded from its targets. Goal success remains a separate planner objective.</p><p id="exploration-head-info"></p><div id="exploration-loss-legend" class="legend"></div><svg id="exploration-loss" viewBox="0 0 700 260" role="img" aria-label="Exploration head binary loss"></svg></article>
 <article class="chart-card"><h3>Recent speed <span>actions / second</span></h3><p>Measured per complete batch, including evaluation and saving. Not a cumulative average; evaluation actions are excluded from the numerator.</p><div id="speed-legend" class="legend"></div><svg id="speed" viewBox="0 0 700 260" role="img" aria-label="Recent speed"></svg></article>
 <article class="chart-card"><h3>Where time is spent <span>seconds / batch</span></h3><p>Collection, representation, encoding, predictor, evaluation, exploration-head learning and saving. Diagnostics are included in evaluation time.</p><div id="timing-chart-legend" class="legend"></div><svg id="timing-chart" viewBox="0 0 700 260" role="img" aria-label="Where time is spent"></svg></article>
-</div><article class="chart-card section-card"><h3>Latest batch timing</h3><p>Predictor time includes rebuilding memory with the current weights at the start of each block.</p><div id="timings" class="legend"></div></article></section>
-<section id="path" role="tabpanel" aria-labelledby="tab-path" hidden>
-<article class="chart-card planner-availability"><p class="eyebrow">GOALS AND PATHS</p><h3 id="planning-title">Exploration in this run</h3><p id="planning-description">This run trains the encoder, decoder and predictor with memory. The exploration head estimates visible change, not goal success. Goal and path learning are not enabled.</p><p id="planning-status"></p><p id="planner-history-status">Planner history is not configured on this server.</p><a id="planner-history-link" class="history-action" href="history.html#path" hidden>View historical planner results <span aria-hidden="true">→</span></a></article>
-<div id="planning-details" hidden>
+</div><article class="chart-card section-card"><h3>Latest batch timing</h3><p>Predictor time includes rebuilding memory with the current weights at the start of each block.</p><div id="timings" class="legend"></div></article><div class="archive-section"><details id="archive-world" class="archive-disclosure" hidden><summary>Earlier representation and prediction run <span class="archive-badge">Archived</span></summary><p class="muted">Previous run · read only. These measurements are kept separate from the current training above.</p><div id="archive-world-content" class="archive-content"></div></details><p id="archive-world-empty" class="archive-empty muted" hidden>No earlier representation and prediction run is configured.</p></div>
+</section>
+<section id="goal" role="tabpanel" aria-labelledby="tab-goal" hidden>
+<article class="chart-card planner-intro" data-tone="latent"><p class="eyebrow">GOAL PLANNER</p><h3>Learning what to aim for</h3><p id="goal-description">Waiting for goal learning status.</p><p id="goal-status" class="planner-status"></p></article>
+<div id="goal-details" hidden>
 <article class="chart-card section-card"><h3>Learning to propose a goal</h3><p id="planning-sample-info">Waiting for a teacher-supervised sample.</p><div id="planning-preview" class="preview-delta-grid" hidden>
 <figure class="preview-frame"><figcaption>Current observation</figcaption><div class="preview-canvas"><canvas id="planning-before" class="goal-image" aria-label="Observation used to propose a goal"></canvas></div></figure>
 <figure class="preview-frame"><figcaption>Teacher goal</figcaption><div class="preview-canvas"><canvas id="planning-target" class="goal-image" aria-label="Teacher goal and relevant pixels"></canvas></div></figure>
 <figure class="preview-frame" data-tone="latent"><figcaption>Learned goal</figcaption><div class="preview-canvas"><canvas id="planning-predicted" class="goal-image" aria-label="Learned goal and predicted relevant pixels"></canvas></div></figure>
 </div><p>Checkerboard: pixels outside the goal mask. Proposals use the observed state and causal memory. The teacher is used only during synthetic training.</p></article>
 <div class="charts">
-<article class="chart-card"><h3>Goal and path learning <span>loss</span></h3><p>Goal: balanced color and mask losses. Path: success within the remaining budget, plus duration on successful real attempts.</p><div id="planning-loss-legend" class="legend"></div><svg id="planning-loss" viewBox="0 0 700 260" role="img" aria-label="Goal and path training losses"></svg></article>
+<article class="chart-card"><h3>Goal learning <span>loss</span></h3><p>Balanced color and mask losses. Measured while fitting teacher-provided targets; lower is better.</p><div id="goal-loss-legend" class="legend"></div><svg id="goal-loss" viewBox="0 0 700 260" role="img" aria-label="Goal learning"></svg></article>
 <article class="chart-card"><h3>Goal prediction quality <span>% error · before learning</span></h3><p>Color error over the union of actual and predicted changes inside the teacher mask. Mask error balances included and excluded pixels.</p><div id="planning-error-legend" class="legend"></div><svg id="planning-error" viewBox="0 0 700 260" role="img" aria-label="Goal color and mask prediction errors"></svg></article>
+</div></div>
+</section>
+<section id="path" role="tabpanel" aria-labelledby="tab-path" hidden>
+<article class="chart-card planner-intro"><p class="eyebrow">PATH PLANNER</p><h3>Learning how to reach a goal</h3><p id="path-description">Waiting for path learning status.</p><p id="path-status" class="planner-status"></p></article>
+<div id="path-details" hidden><div class="charts">
+<article class="chart-card"><h3>Path learning <span>loss</span></h3><p>Success within the remaining budget, plus duration on successful real attempts. Lower loss does not by itself establish better completion rates.</p><div id="path-learning-loss-legend" class="legend"></div><svg id="path-learning-loss" viewBox="0 0 700 260" role="img" aria-label="Path learning"></svg></article>
 <article class="chart-card"><h3>Reaching the chosen goal <span>% of completed attempts</span></h3><p>Teacher success is verified by the game. Learned-goal success means its proposed pixels match; it is not necessarily task progress. Interrupted attempts are excluded.</p><div id="planning-success-legend" class="legend"></div><svg id="planning-success" viewBox="0 0 700 260" role="img" aria-label="Teacher and learned goal completion rates"></svg></article>
 <article class="chart-card"><h3>Steps to the goal <span>successful attempts only</span></h3><p>Real actions, including exploration and ineffective clicks. No successful attempts means no measurement.</p><div id="planning-steps-legend" class="legend"></div><svg id="planning-steps" viewBox="0 0 700 260" role="img" aria-label="Steps per successful goal attempt"></svg></article>
 </div>
 <article class="chart-card section-card"><h3>Real task progress <span>latest batch with teacher games</span></h3><p id="planning-task-info"></p><div class="table-scroll"><table><thead><tr><th>Goal source</th><th>Attempts</th><th>Goal reached</th><th>Actual subgoals reached</th><th>Levels solved</th></tr></thead><tbody id="planning-outcomes"></tbody></table></div><p id="planning-cost"></p></article>
 </div>
+<div class="archive-section"><details id="archive-path" class="archive-disclosure" hidden><summary>Earlier planner run <span class="archive-badge">Archived</span></summary><p class="muted">Previous run · read only. These measurements are kept separate from the current training above.</p><div id="archive-path-content" class="archive-content"></div></details><p id="archive-path-empty" class="archive-empty muted" hidden>No earlier planner run is configured.</p></div>
 </section>
 <section id="evaluation" role="tabpanel" aria-labelledby="tab-evaluation" hidden>
 <article class="chart-card section-card"><h3>Latest exploration by game</h3><p>Actual training interactions. Visible changes and observed wins are separate counts; clicks without effect are retained.</p><div class="table-scroll"><table><thead><tr><th>Game</th><th>Changed actions / measured</th><th>Changed clicks / measured</th><th>Click change rate</th><th>Observed wins</th></tr></thead><tbody id="exploration-games"></tbody></table></div></article>
 <article class="chart-card"><h3>Prediction by game</h3><p id="evaluation-description">Separate seeds, frozen weights and causal memory rebuilt from the start of each session.</p><p id="macro-error"></p>
 <div class="table-scroll"><table><thead><tr><th>Game</th><th>Delta error</th><th>Transitions</th></tr></thead><tbody id="game-quality"></tbody></table></div></article>
 <article class="chart-card section-card"><h3 id="evaluations-title">Fixed evaluations</h3><p id="evaluations-description">One record per batch. Gaps do not mean zero.</p><div class="table-scroll evaluation-history" tabindex="0" role="region" aria-label="Measurement history"><table><thead><tr><th>Action</th><th>Batch</th><th>Delta error</th><th>Global reconstruction</th><th>3-step prediction</th><th>Transitions</th><th>Diagnostic sample</th></tr></thead><tbody id="evaluations"></tbody></table></div></article>
+<div class="archive-section"><details id="archive-evaluation" class="archive-disclosure" hidden><summary>Earlier evaluation run <span class="archive-badge">Archived</span></summary><p class="muted">Previous run · read only. These measurements are kept separate from the current training above.</p><div id="archive-evaluation-content" class="archive-content"></div></details><p id="archive-evaluation-empty" class="archive-empty muted" hidden>No earlier evaluation run is configured.</p></div>
 </section>
 <section id="curriculum" role="tabpanel" aria-labelledby="tab-curriculum" hidden>
 <article id="sampling-card" class="chart-card section-card" hidden><h3>Game exposure</h3><p id="sampling-info"></p><div class="table-scroll"><table><thead><tr><th>Game</th><th>Sessions / round</th><th>Planned session share</th><th>Collected sessions</th><th>Collected transitions</th></tr></thead><tbody id="sampling-games"></tbody></table></div></article>
@@ -121,6 +131,7 @@
 <article class="chart-card"><h3>Configured games and levels</h3><p id="schedule-info"></p><p id="curriculum-games" class="game-list"></p><div class="table-scroll"><table><thead><tr><th>Order</th><th>Game</th><th>Level</th><th>Source</th><th>Training</th></tr></thead><tbody id="schedule"></tbody></table></div></article>
 <article class="chart-card section-card"><h3>Batch sessions</h3><p>Each row has independent memory. Level changes and resets retain context; a new memory starts when the session ends.</p>
 <div class="table-scroll"><table><thead><tr><th>Session</th><th>Game</th><th>Moves</th><th>Boundaries</th><th>End</th></tr></thead><tbody id="sessions"></tbody></table></div></article>
+<div class="archive-section"><details id="archive-curriculum" class="archive-disclosure" hidden><summary>Earlier curriculum run <span class="archive-badge">Archived</span></summary><p class="muted">Previous run · read only. These measurements are kept separate from the current training above.</p><div id="archive-curriculum-content" class="archive-content"></div></details><p id="archive-curriculum-empty" class="archive-empty muted" hidden>No earlier curriculum run is configured.</p></div>
 </section>
 <footer>Real transitions only · predictions are never stored as verified experience. Optimization views supplement training monitoring.</footer>
 </main></body></html>
