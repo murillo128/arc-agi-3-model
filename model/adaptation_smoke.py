@@ -38,7 +38,7 @@ def _runtime_diagnostics(runtime):
     return dict(device=str(engine.device), torch_version=str(torch.__version__),
                 precision='bf16' if engine.amp else 'fp32', native_bf16=bool(engine.amp),
                 parameter_dtype=str(next(engine.model.parameters()).dtype),
-                checkpoint_loading='eager')
+                checkpoint_loading='staged_sequential_eager')
 
 
 def _tensor_digest(named_tensors):

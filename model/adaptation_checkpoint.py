@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from collections import OrderedDict
 import hashlib
 from pathlib import Path
+import shutil
+import tempfile
 
 import torch
 
@@ -116,10 +118,15 @@ def from_payload(payload, *, device='cpu'):
 
 
 def load(path, *, device='cpu'):
-    # Mounted offline inputs need not support efficient memory mapping. Read the
-    # storages eagerly before validation/copying; do not retain a payload/cache.
+    # Keep PyTorch's seek-based ZIP reads off mounted offline inputs. Only this
+    # bounded sequential copy touches the source; staging is never a disk cache.
+    with tempfile.TemporaryFile(mode='w+b') as staged:
+        with Path(path).open('rb') as source:
+            shutil.copyfileobj(source, staged, length=1024 * 1024)
+        staged.seek(0)
+        payload = torch.load(staged, map_location='cpu', weights_only=True, mmap=False)
     # Peak host storage is the payload plus one base and per-tensor check scratch.
-    return from_payload(torch.load(path, map_location='cpu', weights_only=True, mmap=False), device=device)
+    return from_payload(payload, device=device)
 
 
 def _digest(path):
