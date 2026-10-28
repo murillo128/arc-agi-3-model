@@ -33,6 +33,7 @@ from .metrics import delta_counts
 GAMES = ('ar25-0c556536', 'cn04-2fe56bfb', 'lf52-271a04aa',
          'tn36-ef4dde99', 'vc33-5430563c')
 CHECKPOINT_SHA256 = '4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7'
+CHECKPOINT_BATCH = 8246
 CONFIG = AdaptationConfig()
 COUNT_KEYS = ('wrong', 'union', 'changed', 'missed', 'invented', 'wrong_color',
               'correct', 'samples', 'unchanged_samples')
@@ -48,6 +49,39 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + '.tmp')
     temporary.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
     temporary.replace(path)
+
+
+def verified_checkpoint(path, identity, *, config, max_actions):
+    """Check the selected asset before the portable loader checks compatibility."""
+    identity['sha256_before'] = file_digest(path)
+    if identity['sha256_before'] != identity['expected_sha256']:
+        raise ValueError('Portable checkpoint SHA-256 does not match the requested asset')
+    sentinel = load(path, device='cuda:0', config=config, max_actions=max_actions, seed='isolation')
+    identity['source_batches'] = sentinel.runtime.metadata['source_batches']
+    identity['source_sha256'] = sentinel.runtime.metadata.get('source_sha256')
+    if identity['source_batches'] != identity['expected_source_batches']:
+        raise ValueError('Checkpoint source batch mismatch')
+    return sentinel
+
+
+def convergence_report(diagnostics, config):
+    """Annotate existing measurements; never control or repeat an optimizer step."""
+    thresholds = {
+        'representation': {'reconstruction_error': config.reconstruction_threshold,
+                           'latest_reconstruction_error': config.reconstruction_threshold},
+        'predictor': {'delta_error': config.delta_threshold,
+                      'latest_delta_error': config.delta_threshold},
+        'goal': {'color_error': config.goal_color_threshold, 'mask_error': config.goal_mask_threshold},
+        'path': {'reachability_error': config.path_reachability_threshold,
+                 'cost_error': config.path_cost_threshold},
+    }
+    stages = deepcopy(diagnostics.get('convergence', {}))
+    for name, stage in stages.items():
+        metrics = (stage.get('final') or {}).get('metrics', {})
+        stage['pending_thresholds'] = {key: dict(value=metrics[key], threshold=limit)
+            for key, limit in thresholds[name].items()
+            if metrics.get(key) is not None and metrics[key] > limit}
+    return stages
 
 
 def counts(before, actual, predicted):
@@ -128,6 +162,14 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
     reason, error = 'action_budget', None
     diagnostic_failures = 0
     initial_reconstruction = None
+    fit_stops = {name: Counter() for name in ('representation', 'predictor', 'path', 'goal')}
+    config = getattr(policy, 'config', CONFIG)
+
+    def record_fits():
+        stages = convergence_report(policy.diagnostics, config)
+        for name, stage in stages.items():
+            fit_stops[name][stage['reason']] += 1
+        return stages
     try:
         observation = Observation.from_sdk(wrapper.observation_space)
         initial_reconstruction = reconstruct(policy, observation)
@@ -152,6 +194,7 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
             decision_seconds = time.monotonic() - decision_started
             selection_adaptation = (policy.diagnostics['adaptation_seconds'] -
                                     before_diagnostics['adaptation_seconds'])
+            selection_fits = record_fits() if selection_adaptation > 0 else {}
             if seconds is not None and time.monotonic() - started >= seconds:
                 policy.cancel_pending()
                 reason = 'wall_timeout'
@@ -163,7 +206,8 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
                 level_before=observation.levels_completed + 1, state_before=observation.state,
                 decision_seconds=decision_seconds, selection_adaptation_seconds=selection_adaptation,
                 prediction_precision=precision, prediction_counts=None, confirmed=False,
-                returned=False, selection_updates=deepcopy(policy.diagnostics['updates']))
+                returned=False, selection_updates=deepcopy(policy.diagnostics['updates']),
+                selection_fits=selection_fits)
             rows.append(row)
             emit(dict(event='request', **row))
             sdk_started = time.monotonic()
@@ -185,6 +229,11 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
                 or observation.final.shape != result.final.shape
                 or observation.levels_completed != result.levels_completed)
             row['boundary'] = boundary
+            row['prediction_exclusion'] = ('reset' if action.id == 0 else
+                'missing_frame' if observation.final is None or result.final is None else
+                'geometry_change' if observation.final.shape != result.final.shape else
+                'level_change' if observation.levels_completed != result.levels_completed else
+                'missing_prediction' if predicted is None else None)
             row['no_visual_effect'] = bool(observation.final is not None and result.final is not None
                 and np.array_equal(observation.final, result.final))
             if predicted is not None and result.final is not None and predicted.shape == result.final.shape:
@@ -213,7 +262,8 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
                 row['confirmed'] = policy.actions_taken == admitted_before + 1
             row.update(confirmed=True, confirm_wall_seconds=time.monotonic() - confirm_started,
                 result_adaptation_seconds=policy.diagnostics['adaptation_seconds'] - before_adaptation,
-                elapsed_seconds=time.monotonic() - started, diagnostics=deepcopy(policy.diagnostics))
+                elapsed_seconds=time.monotonic() - started, diagnostics=deepcopy(policy.diagnostics),
+                result_fits=record_fits(), fit_stop_counts=deepcopy(fit_stops))
             observation = result
             emit(dict(event='action', **row))
             if observation.state == 'WIN':
@@ -246,7 +296,6 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
     adaptation_calls = [r[key] for r in rows for key in
         ('selection_adaptation_seconds', 'result_adaptation_seconds') if key in r and r[key] > 0]
     updates = policy.diagnostics['updates']
-    config = getattr(policy, 'config', CONFIG)
     return dict(stop_reason=reason, error=error, truncated=reason != 'win',
         requests=requests, actions=returned, confirmations=confirmations, resets=resets,
         sdk_initializations=1, levels_completed=max([0] + [r.get('levels_completed', 0) for r in rows]),
@@ -267,6 +316,9 @@ def run_game(wrapper, policy, *, started, emit, seconds=None,
             decoder=updates.get('representation', 0), predictor=updates.get('predictor', 0),
             path=updates.get('path', 0), goal=updates.get('goal', 0)),
         diagnostic_failures=diagnostic_failures, initial_reconstruction=initial_reconstruction,
+        fit_stop_counts=fit_stops, final_fits=convergence_report(policy.diagnostics, config),
+        prediction_exclusions=dict(Counter(r.get('prediction_exclusion') or 'measurement_unavailable'
+            for r in rows if r['returned'] and r.get('prediction_counts') is None)),
         diagnostics=deepcopy(policy.diagnostics), rows=rows)
 
 
@@ -319,9 +371,16 @@ def save_report(output, report):
             writer.writerow(row)
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint', required=True, type=Path)
+    parser.add_argument('--checkpoint-sha256', default=CHECKPOINT_SHA256,
+                        help='Expected portable asset SHA-256 (default: batch 8246)')
+    parser.add_argument('--checkpoint-batch', type=int, default=CHECKPOINT_BATCH,
+                        help='Expected source_batches metadata (default: 8246)')
+    parser.add_argument('--checkpoint-release', help='Provenance URL, independent of the code revision')
+    parser.add_argument('--report-issue', type=int,
+                        help='Explicit opt-in: publish scalar game/final reports to this repository issue')
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--split', default='configs/splits.public-development.json')
     parser.add_argument('--environments-dir', default='environment_files')
@@ -330,7 +389,14 @@ def main():
     parser.add_argument('--max-actions', type=int, help='Optional cap; default: until WIN or external stop')
     parser.add_argument('--max-game-seconds', type=float, help='Optional wall cap; default: none')
     parser.add_argument('--adaptation-config', type=Path, help='JSON AdaptationConfig overrides')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    args.checkpoint_sha256 = args.checkpoint_sha256.lower()
+    if len(args.checkpoint_sha256) != 64 or any(c not in '0123456789abcdef' for c in args.checkpoint_sha256):
+        parser.error('--checkpoint-sha256 must contain 64 hexadecimal characters')
+    if args.checkpoint_batch < 0:
+        parser.error('--checkpoint-batch must be nonnegative')
+    if args.report_issue is not None and args.report_issue <= 0:
+        parser.error('--report-issue must be positive')
     if not 1 <= args.threads <= 16:
         parser.error('--threads must be in 1..16')
     if tuple(load_split(args.split).evaluation) != GAMES:
@@ -339,6 +405,11 @@ def main():
         parser.error('--max-actions must be positive')
     if args.max_game_seconds is not None and (not np.isfinite(args.max_game_seconds) or args.max_game_seconds <= 0):
         parser.error('--max-game-seconds must be finite and positive')
+    return parser, args
+
+
+def main():
+    parser, args = parse_args()
     try:
         config = AdaptationConfig(**(json.loads(args.adaptation_config.read_text()) if args.adaptation_config else {}))
     except (OSError, ValueError, TypeError) as exc:
@@ -359,20 +430,16 @@ def main():
         command=[sys.executable, '-m', 'model.online_lora_experiment', *sys.argv[1:]],
         sdk=version('arc-agi'), seed=42, policy_seed='42:<game_id>', max_actions=args.max_actions,
         max_game_seconds=args.max_game_seconds, config=asdict(config), games=[], status='preparing',
-        checkpoint=dict(expected_sha256=CHECKPOINT_SHA256, dataset='sergiogarciamurillo/arc3-lora-smoke-base',
-                        dataset_version=1, source_batches=8246), threads=args.threads)
+        checkpoint=dict(path=str(args.checkpoint), expected_sha256=args.checkpoint_sha256,
+                        expected_source_batches=args.checkpoint_batch,
+                        release=args.checkpoint_release), threads=args.threads)
     arcade = None
     try:
-        digest = file_digest(args.checkpoint)
-        report['checkpoint']['sha256_before'] = digest
-        if digest != CHECKPOINT_SHA256:
-            raise ValueError('Portable checkpoint SHA-256 does not match the authorized batch-8246 asset')
         # An unused bank retains the shared base and checks isolation, without
         # running a second policy or producing a frozen gameplay comparison.
-        sentinel = load(args.checkpoint, device='cuda:0', config=config, max_actions=args.max_actions, seed='isolation')
+        sentinel = verified_checkpoint(args.checkpoint, report['checkpoint'],
+                                       config=config, max_actions=args.max_actions)
         runtime = sentinel.runtime
-        if runtime.metadata['source_batches'] != 8246:
-            raise ValueError('Checkpoint source batch mismatch')
         report['runtime'] = _runtime_diagnostics(runtime) | dict(
             gpu=torch.cuda.get_device_name(), capability=torch.cuda.get_device_capability(),
             cuda_version=torch.version.cuda, tf32_matmul=torch.backends.cuda.matmul.allow_tf32,
@@ -406,13 +473,34 @@ def main():
                     raise RuntimeError(f'Official SDK could not provision {game_id}')
                 with (output / f'{game_id}.jsonl').open('x') as stream:
                     def emit(event):
+                        if event['event'] == 'action':
+                            event['history'] = dict(records=len(policy.history),
+                                first=policy.history[0].number, last=policy.history[-1].number,
+                                maxlen=policy.history.maxlen,
+                                numpy_frames=all(isinstance(r.observation.final, (np.ndarray, type(None)))
+                                                 for r in policy.history))
+                            if event['action_number'] == 1 or event['action_number'] % 10 == 0:
+                                digest, _ = base_digest(runtime)
+                                report['live_integrity'] = dict(game=game_id, action=event['action_number'],
+                                    base_sha256=digest, base_immutable=digest == base_before,
+                                    inactive_bank_unchanged=bank_digest(sentinel.bank) == inactive_before,
+                                    base_frozen=all(not p.requires_grad and p.grad is None
+                                        for module in runtime.router.modules.values() for p in module.parameters()))
+                            event['integrity'] = report.get('live_integrity')
+                            event['peak_gpu_allocated_bytes'] = torch.cuda.max_memory_allocated()
+                            event['peak_gpu_reserved_bytes'] = torch.cuda.max_memory_reserved()
                         stream.write(json.dumps(event, allow_nan=False) + '\n')
                         stream.flush()
+                        if event['event'] in ('sdk_result', 'measured_before_learning', 'action'):
+                            write_json(output / 'progress.json', dict(game=game_id, **event))
                         if event['event'] == 'action':
                             print(json.dumps(dict(event='progress', game=game_id,
                                 action=event['action_number'], levels=event['levels_completed'],
                                 elapsed=round(event['elapsed_seconds'], 2),
                                 adaptation=round(event['diagnostics']['adaptation_seconds'], 2))), flush=True)
+                            if not all(event['integrity'][key] for key in
+                                       ('base_immutable', 'inactive_bank_unchanged', 'base_frozen')):
+                                raise RuntimeError('Live integrity failure; stop this game')
                     game.update(run_game(wrapper, policy, started=game_started, emit=emit,
                                          seconds=args.max_game_seconds))
                 game.update(fresh_private_state=pristine, adapter_sha256_before=adapter_before,
@@ -437,6 +525,9 @@ def main():
             write_json(output / f'{game_id}.json', game)
             report['games'].append({key: value for key, value in game.items() if key != 'rows'})
             save_report(output, report)
+            if args.report_issue is not None:
+                from .online_lora_reporting import publish_report
+                publish_report(output, report, args.report_issue, game)
             print(json.dumps(dict(event='game_end', game=game_id,
                 actions=game.get('actions'), levels=game.get('levels_completed'), reason=game['stop_reason'])), flush=True)
             if not all(game[key] for key in ('base_immutable', 'inactive_bank_unchanged', 'base_frozen')):
@@ -463,6 +554,9 @@ def main():
                 report['status'] = 'failed'
         report['total_wall_seconds'] = time.monotonic()-started
         save_report(output, report)
+        if args.report_issue is not None:
+            from .online_lora_reporting import publish_report
+            publish_report(output, report, args.report_issue)
     if report['status'] != 'finished' or not report['checkpoint']['file_immutable']:
         raise SystemExit('Experiment incomplete or integrity failed; inspect partial report')
 

@@ -131,10 +131,17 @@ caps; both default to no limit. To reproduce the previous bounded protocol,
 combine `--max-actions 80 --max-game-seconds 900` with configuration
 `{"stopping":"steps","replay_size":32,"per_observation_seconds":10,"total_seconds":300}`.
 
-The runner rejects an existing output directory, changed split, a
-checkpoint hash other than
-`4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7`,
-or missing CUDA. NORMAL mode provisions each game through the official SDK at
+The runner rejects an existing output directory, changed split, mismatched
+checkpoint hash or source batch, incompatible portable metadata, or missing CUDA.
+`--checkpoint-sha256` and `--checkpoint-batch` select the expected identity;
+their defaults remain batch 8246 and
+`4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7`.
+`--checkpoint-release URL` records weight provenance without changing the code revision.
+For batch 8458, pass batch `8458`, SHA-256
+`918016ed000669f7bd17b241565f816ad6861aea484cb6c8876791440cf50787`, and release
+`https://github.com/murillo128/arc-agi-3-model/releases/tag/lora-base-b8458-20261028`.
+The report records the actual portable metadata, not an assumed Kaggle dataset.
+NORMAL mode provisions each game through the official SDK at
 its single initialization. Only public observations enter the policy. Checkpoint
 and base digests, pristine per-game optimizer/replay state, an unused isolated
 adapter bank, effective precision and GPU peak allocation/reservation are recorded.
@@ -167,6 +174,15 @@ JSON, CSV and flushed scalar JSONL evidence stay in ignored `artifacts/`. No
 observations, adapters, weights or game sources are exported. Partial records
 survive action/adaptation failures. These development-weight public-game results
 are not official Kaggle scores.
+
+`progress.json` preserves the latest returned/measured/completed action while a
+game is running. Completed actions include CPU-history extent, stage stopping
+reasons and remaining thresholds. Exact base/unused-bank digests are checked
+after the first action, every ten actions, and at each game end; these checks do
+not cap adaptation. `--report-issue N` explicitly enables scalar per-game and
+final comments on that issue, using the host's existing `gh` authentication.
+Report text and publication receipts remain local if publication fails. This
+option does not launch another experiment or change issue labels.
 
 Use Python 3.12 with the repository dependencies, including `arc-agi==0.9.9` and
 PyTorch. These commands generate local artifacts; none uploads or submits them.
