@@ -96,6 +96,9 @@ class OptimizationTests(unittest.TestCase):
         for _ in range(5):
             still.append([0, 0])
         self.assertIsNone(still.project()[-1]['coverage'])
+        still.append([1, 0])
+        self.assertAlmostEqual(still.project()[-1]['coverage'], 1.)
+        self.assertNotEqual(still.project()[-1]['x'], still.project()[-2]['x'])
 
     def test_temporal_probe_matches_analytic_derivative_and_preserves_state(self):
         e, row = scalar_engine(), session()

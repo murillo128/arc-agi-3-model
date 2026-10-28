@@ -629,6 +629,8 @@ Ampliar el catálogo inicia un nuevo segmento de parámetros, que necesita cuatr
 muestras para calibrarse. La reanudación conserva la identidad del historial de
 métricas del entrenamiento (`history_identity`), separado de la nueva identidad
 de telemetría; los cambios de cohorte siguen invalidando el historial anterior.
+Si las primeras muestras son idénticas, la base nula se calibra al llegar el
+primer cambio de pesos; una base con direcciones medidas permanece fija.
 
 ```sh
 .venv/bin/python -u -m model.sequence_training \
