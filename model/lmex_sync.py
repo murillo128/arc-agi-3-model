@@ -19,6 +19,40 @@ from safetensors.torch import save_file
 
 
 PRODUCER = 'arc3-lmex-sync'
+EXPORT_VERSION = 2  # Sequence goal/path tensors were absent from older packages.
+
+
+def planning_export(saved, network):
+    """Validate head inventories on meta; return only weights and public metadata."""
+    from dataclasses import asdict
+    from .sequence_planning import SequencePlanningConfig, VisualGoal
+    from .path_planning import PathValue
+
+    if not isinstance(saved, dict) or saved.get('version') != 1:
+        raise ValueError('Unsupported sequence planning checkpoint version')
+    try:
+        settings = SequencePlanningConfig(**saved['config'])
+        with torch.device('meta'):
+            modules = {
+                'goal': ('goal_planner', VisualGoal(network['latent'], network['memory'], network['patch'], settings.width)),
+                'path': ('path_evaluator', PathValue(network['latent'], network['memory'], settings.width)),
+            }
+        weights = {}
+        for key, (prefix, module) in modules.items():
+            actual, expected = saved[key], module.state_dict()
+            if not isinstance(actual, dict) or actual.keys() != expected.keys():
+                raise ValueError(f'Incomplete sequence planning {key} state_dict')
+            for name, tensor in actual.items():
+                if (not isinstance(tensor, torch.Tensor) or tensor.device.type != 'cpu'
+                        or tensor.shape != expected[name].shape or not tensor.is_floating_point()):
+                    raise ValueError(f'Invalid sequence planning tensor: {key}.{name}')
+                weights[f'{prefix}.{name}'] = tensor
+        metadata = {key: saved[key] for key in ('goal_updates', 'path_updates', 'teacher_actions',
+                                               'learned_probability', 'adopted_batch')}
+        metadata.update(version=1, config=asdict(settings))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f'Invalid sequence planning checkpoint: {error}') from error
+    return weights, metadata
 
 
 def stamp(path):
@@ -61,7 +95,8 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
         if not isinstance(document, dict) or document.get('schema_version') != 1:
             raise ValueError('Expected a model-owned architecture document')
         digest = hashlib.sha256(raw).hexdigest()
-        weights_changed = previous_manifest.get('checkpoint_stamp') != source_stamp
+        weights_changed = (previous_manifest.get('checkpoint_stamp') != source_stamp
+                           or previous_manifest.get('export_version') != EXPORT_VERSION)
         if not weights_changed and previous_manifest.get('architecture_sha256') == digest:
             return None
 
@@ -73,6 +108,7 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                 # The file is atomically replaced by the trainer. mmap avoids
                 # materializing optimizer states or moving anything onto the GPU.
                 payload = torch.load(checkpoint, map_location='cpu', weights_only=True, mmap=True)
+                planning_metadata = None
                 if payload.get('format') == 'arc3-agent':
                     if payload.get('version') != 1:
                         raise ValueError('Unsupported portable agent checkpoint version')
@@ -96,6 +132,11 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                         if exploration.get('version') != 1:
                             raise ValueError('Unsupported exploration checkpoint version')
                         weights.update({f'exploration.{k}': t for k, t in exploration['weights'].items()})
+                    if payload.get('kind') == 'game_sequences' and payload.get('planning') is not None:
+                        heads, planning_metadata = planning_export(payload['planning'], network)
+                        if weights.keys() & heads.keys():
+                            raise ValueError('Sequence planning tensor names collide with world weights')
+                        weights.update(heads)
                 if not weights or any(not isinstance(t, torch.Tensor) or t.device.type != 'cpu'
                                       for t in weights.values()):
                     raise ValueError('Expected CPU state_dict tensors')
@@ -116,6 +157,9 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                     config['training_mode'] = 'game_sequences'
                     if exploration is not None:
                         config['architectures'].append('ChangeHead')
+                    if planning_metadata is not None:
+                        config['architectures'].extend(['VisualGoal', 'PathValue'])
+                        config['sequence_planning'] = planning_metadata
                 dtypes = {str(t.dtype).removeprefix('torch.') for t in weights.values()}
                 if len(dtypes) == 1:
                     config['torch_dtype'] = dtypes.pop()
@@ -127,7 +171,7 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
 
             (stage / 'config.json').write_text(json.dumps(config, indent=2, allow_nan=False) + '\n')
             (stage / 'architecture.json').write_bytes(raw)
-            manifest = {'producer': PRODUCER, 'checkpoint_stamp': source_stamp,
+            manifest = {'producer': PRODUCER, 'export_version': EXPORT_VERSION, 'checkpoint_stamp': source_stamp,
                         'architecture_sha256': digest}
             (stage / '.sync.json').write_text(json.dumps(manifest) + '\n')
             if stamp(checkpoint) != source_stamp or stamp(architecture) != architecture_stamp:

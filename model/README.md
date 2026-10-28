@@ -121,7 +121,8 @@ last value. Dashboard metadata reports the fixed width.
 
 The old report is archived at the adaptation boundary; new charts start with the
 new action population. The dashboard reports adapter width and actual Undo counts.
-`architecture.json` describes the width-16 example and includes its tensor bindings.
+`architecture.json` describes the active width-16 adapter with fixed click sigma
+1.5, together with the sequence goal/path heads, and includes their tensor bindings.
 
 ## Secuencias con memoria entre niveles
 
@@ -2680,21 +2681,33 @@ El sincronizador nunca reemplaza una carpeta o enlace ajeno silenciosamente.
 Copia `architecture.json` byte por byte y exporta `weights` de `latest.pt` en CPU
 con los mismos nombres, formas, tipos y valores. En checkpoints de secuencias
 incluye los pesos de `ChangeHead` con el prefijo `exploration.`, sin su replay ni
-optimizador, y conserva el contador de batches. No carga optimizadores en GPU ni
+optimizador, y conserva el contador de batches. Si existe `planning`, exporta
+`goal` como `goal_planner.*` y `path` como `path_evaluator.*`; `config.json` conserva
+su configuración y contadores públicos bajo `sequence_planning`. Valida nombres y
+formas de ambas cabezas en dispositivo meta y rechaza estados incompletos o versiones
+desconocidas sin sustituir el paquete anterior. No exporta RNG, optimizadores ni
+targets privados del profesor. No carga optimizadores en GPU ni
 ejecuta el modelo. Construye el paquete completo dentro de la raíz de LMEX y
 cambia atómicamente un enlace interno. Conserva solo el paquete activo; si cambia
 solo la arquitectura, reutiliza el archivo inmutable de pesos sin otra exportación.
+La versión del formato del exportador invalida una vez los paquetes antiguos,
+incluso si el checkpoint no ha cambiado, para incorporar las nuevas cabezas.
 Un error o un checkpoint sustituido durante la conversión conserva el paquete
 anterior y se reintenta. El entrenamiento sigue independiente.
 
 Los pesos de LMEX son los del **último checkpoint guardado**, no los parámetros
 en RAM tras cada actualización. La configuración exportada incluye los contadores
 de ese checkpoint. El refresco normal de LMEX detecta el cambio sin reiniciar su
-backend. La arquitectura describe el perfil de secuencias de `subgoal_config.json`:
+backend. La arquitectura describe el perfil activo de secuencias:
 una invocación compartida del encoder, memoria recurrente, predictor global/local,
-decoder y cabeza de exploración. Sus 497 tensores tienen bindings exactos; no
-requiere los pesos del antiguo `PathValue`, ausente en este entrenamiento. La
-cobertura parcial se refiere al detalle de scheduling, pérdidas y optimizadores.
+decoder, cabeza de exploración, `VisualGoal` y `PathValue` normalizado (objetivo v4).
+Usa el adaptador espacial de ancho 16, sigma fijo 1.5 y cabezas de ancho 64;
+sus 536 tensores tienen bindings exactos. Encoder y decoder están congelados;
+predictor y cabezas se entrenan por separado. El grafo distingue los objetivos del
+profesor, las propuestas aprendidas, la búsqueda por probabilidad de éxito y las
+acciones reales. Alcanzar una imagen propuesta no equivale a ganar el juego.
+La cobertura parcial se refiere al control de la búsqueda repetida, scheduling,
+pérdidas y optimizadores; no presenta un agente de evaluación empaquetado.
 Los pesos reales también se pueden inspeccionar en Tensor Explorer. Otros perfiles
 necesitan su propia descripción mediante `--architecture`. Los paquetes exportados,
 pesos y logs quedan fuera de Git.
