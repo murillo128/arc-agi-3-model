@@ -32,7 +32,7 @@ class PageStructure(HTMLParser):
 
 
 class DashboardRestorationTests(unittest.TestCase):
-    def test_goal_and_path_have_separate_content_and_inline_archives(self):
+    def test_goal_and_path_have_separate_content_and_only_retained_inline_archives(self):
         html = (Path(__file__).parents[1] / 'dashboard_web' / 'sequences.html').read_text()
         page = PageStructure(html)
         nodes = {n['attrs']['id']: n for n in page.nodes if 'id' in n['attrs']}
@@ -45,10 +45,12 @@ class DashboardRestorationTests(unittest.TestCase):
             for content in contents:
                 with self.subTest(content=content):
                     self.assertIn(owner, [p['attrs'].get('id') for p in nodes[content]['parents']])
-        for section in ('world', 'path', 'evaluation', 'curriculum'):
+        for section in ('world', 'evaluation', 'curriculum'):
             archive = nodes[f'archive-{section}']
             self.assertEqual(archive['tag'], 'details')
             self.assertIn(section, [p['attrs'].get('id') for p in archive['parents']])
+        for removed in ('archive-path', 'archive-path-content', 'archive-path-empty'):
+            self.assertNotIn(removed, set(nodes))
         self.assertNotIn('history-link', set(nodes))
         self.assertNotIn('planner-history-link', set(nodes))
         self.assertNotIn('planning-loss', set(nodes))
@@ -130,7 +132,9 @@ class DashboardRestorationTests(unittest.TestCase):
                     self.assertFalse(json.load(response)['history_available'])
                 with urlopen(url+'/history.html') as response:
                     self.assertEqual(response.url, url+'/index.html?archive=1')
-                    self.assertIn('No earlier planner run is configured.', response.read().decode())
+                    redirected = response.read().decode()
+                    self.assertIn('id="trajectory-matrix"', redirected)
+                    self.assertNotIn('No earlier planner run is configured.', redirected)
                 from urllib.error import HTTPError
                 with self.assertRaises(HTTPError) as failure:
                     urlopen(url+'/history.html?section=path')
