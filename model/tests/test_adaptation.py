@@ -1,5 +1,6 @@
 """Public confirmation, isolated learning and causal label contracts."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 import unittest
@@ -48,6 +49,44 @@ class AdaptationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
+
+    def test_adaptive_precision_uses_native_support_on_the_selected_device(self):
+        # Simulate an engine whose training policy accepts BF16 emulation.
+        # No CUDA allocation: only the capability-selection boundary is doubled.
+        for native in (False, True):
+            with self.subTest(native=native):
+                bundle = runtime()
+                bundle.engine.device = torch.device('cuda:1')
+                bundle.engine.amp = True
+                selected = []
+
+                @contextmanager
+                def device_scope(device):
+                    selected.append(device)
+                    try:
+                        yield
+                    finally:
+                        selected.pop()
+
+                def supported(including_emulation=True):
+                    return including_emulation or (selected == [torch.device('cuda:1')] and native)
+
+                with patch('torch.cuda.device', side_effect=device_scope), \
+                     patch('torch.cuda.is_bf16_supported', side_effect=supported):
+                    adapted = Runtime(bundle)
+                self.assertEqual(adapted.engine.amp, native)
+                self.assertEqual(selected, [])
+                with patch('torch.autocast') as autocast:
+                    with adapted.engine.autocast():
+                        pass
+                if native:
+                    autocast.assert_called_once_with('cuda', dtype=torch.bfloat16)
+                else:
+                    autocast.assert_not_called()
+
+    def test_adaptive_cpu_precision_does_not_probe_cuda(self):
+        with patch('torch.cuda.is_bf16_supported', side_effect=AssertionError('CUDA probe on CPU')):
+            self.assertFalse(runtime().engine.amp)
 
     def test_initial_only_representation_then_all_groups_learn_from_real_confirmation(self):
         shared = runtime()

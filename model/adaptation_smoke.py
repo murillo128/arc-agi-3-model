@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 import time
 
 import numpy as np
@@ -22,6 +23,22 @@ from .data import Observation
 FORMAT = 'arc3-adaptation-smoke'
 VERSION = 1
 TRAINING_GAMES = ('sc01-v1', 'si01-v1')
+
+
+def _progress(stage, started, **details):
+    # Flush before expensive work so a slow mount cannot look like slow learning.
+    # No checkpoint paths, account information or host identifiers are emitted.
+    print(json.dumps(dict(event=FORMAT, stage=stage,
+                          elapsed_seconds=time.perf_counter() - started, **details),
+                     allow_nan=False), file=sys.stderr, flush=True)
+
+
+def _runtime_diagnostics(runtime):
+    engine = runtime.engine
+    return dict(device=str(engine.device), torch_version=str(torch.__version__),
+                precision='bf16' if engine.amp else 'fp32', native_bf16=bool(engine.amp),
+                parameter_dtype=str(next(engine.model.parameters()).dtype),
+                checkpoint_loading='eager')
 
 
 def _tensor_digest(named_tensors):
@@ -95,7 +112,8 @@ def _config(config):
     return config
 
 
-def _report(kind, started, config, policies, before, after, isolation, observations):
+def _report(kind, started, config, policies, before, after, isolation, observations,
+            timings, runtime):
     rows = []
     for game_id, policy, extra in policies:
         rows.append(dict(game=game_id, adapter_bytes=policy.bank.bytes,
@@ -105,6 +123,7 @@ def _report(kind, started, config, policies, before, after, isolation, observati
     result = dict(format=FORMAT, version=VERSION, kind=kind,
                   purpose='engineering smoke; no competition score or final Phase 2 benchmark',
                   elapsed_seconds=time.perf_counter() - started,
+                  timings=timings, runtime=_runtime_diagnostics(runtime),
                   config=asdict(config), base_bytes=before[1],
                   base_sha256_before=before[0], base_sha256_after=after[0],
                   base_immutable=before == after, isolation=isolation,
@@ -126,25 +145,40 @@ def self_check(checkpoint, *, device='cpu', config=None):
     from .adaptation import load
 
     started, config = time.perf_counter(), _config(config)
+    _progress('loading', started)
+    load_started = time.perf_counter()
     active = load(checkpoint, device=device, config=config, max_actions=2, seed=145)
+    timings = dict(load_seconds=time.perf_counter() - load_started)
+    _progress('loaded', started, load_seconds=timings['load_seconds'],
+              runtime=_runtime_diagnostics(active.runtime))
+    _progress('checking', started)
     inactive = load(checkpoint, device=device, config=config, max_actions=2, seed=146)
     fixture = _fixture()
     before = base_digest(active.runtime)
     active_before, inactive_before = bank_digest(active.bank), bank_digest(inactive.bank)
     probe_before = _probe(inactive, fixture[0])
+    _progress('learning', started, kind='offline-fixture-self-check', real_sdk_transitions=0)
+    interaction_started = time.perf_counter()
+    timings['startup_seconds'] = interaction_started - started
     for prior, result in zip(fixture, fixture[1:]):
         action = active.choose_action(prior)
         active.confirm_result(result, action=action)
+    verification_started = time.perf_counter()
+    timings['interaction_seconds'] = verification_started - interaction_started
+    _progress('verifying', started)
     after = base_digest(active.runtime)
     isolation = dict(shared_runtime=active.runtime is inactive.runtime,
                      inactive_bank_unchanged=inactive_before == bank_digest(inactive.bank),
                      inactive_inference_unchanged=torch.equal(probe_before, _probe(inactive, fixture[0])),
                      active_bank_updated=active_before != bank_digest(active.bank))
+    timings['verification_seconds'] = time.perf_counter() - verification_started
     report = _report('offline-fixture-self-check', started, config,
                      [('simulated-palette-fixture', active, dict(real_sdk_transitions=0,
-                         simulated_confirmations=2))], before, after, isolation, 3)
+                         simulated_confirmations=2))], before, after, isolation, 3,
+                     timings, active.runtime)
     report['real_sdk_transitions'] = 0
     report['targets'] = active.runtime.router.report
+    _progress('complete', started, passed=report['passed'])
     return report
 
 
@@ -164,13 +198,22 @@ def local_smoke(checkpoint, *, device='cpu', config=None, environments_dir='game
         raise ValueError('Smoke action budget must be an integer in 1..32 per game')
     started, config = time.perf_counter(), _config(config)
     arcade = open_arcade('offline', str(environments_dir))
+    _progress('loading', started)
+    load_started = time.perf_counter()
     sentinel = load(checkpoint, device=device, config=config, max_actions=actions, seed=seed + 100)
+    timings = dict(load_seconds=time.perf_counter() - load_started)
+    _progress('loaded', started, load_seconds=timings['load_seconds'],
+              runtime=_runtime_diagnostics(sentinel.runtime))
+    _progress('checking', started)
     before = base_digest(sentinel.runtime)
     inactive_before = bank_digest(sentinel.bank)
     probe = _fixture()[0]
     probe_before = _probe(sentinel, probe)
     rows, observations, real_transitions = [], 0, 0
+    interaction_started = time.perf_counter()
+    timings['startup_seconds'] = interaction_started - started
     for index, game_id in enumerate(TRAINING_GAMES):
+        _progress('learning', started, kind='public-sdk-level1-smoke', game=game_id)
         environment = SDKEnvironment(arcade, game_id, seed)
         initial = environment.observation
         if not _training_level_one(initial):
@@ -207,16 +250,21 @@ def local_smoke(checkpoint, *, device='cpu', config=None, environments_dir='game
         rows.append((game_id, policy, dict(real_sdk_transitions=committed,
                     executed_sdk_actions=executed, excluded_level_boundary_results=excluded,
                     native_terminal=terminal, active_bank_updated=raw_before != bank_digest(policy.bank))))
+    verification_started = time.perf_counter()
+    timings['interaction_seconds'] = verification_started - interaction_started
+    _progress('verifying', started)
     after = base_digest(sentinel.runtime)
     isolation = dict(shared_runtime=all(policy.runtime is sentinel.runtime for _, policy, _ in rows),
                      inactive_bank_unchanged=inactive_before == bank_digest(sentinel.bank),
                      inactive_inference_unchanged=torch.equal(probe_before, _probe(sentinel, probe)))
+    timings['verification_seconds'] = time.perf_counter() - verification_started
     report = _report('public-sdk-level1-smoke', started, config, rows,
-                     before, after, isolation, observations)
+                     before, after, isolation, observations, timings, sentinel.runtime)
     report['real_sdk_transitions'] = real_transitions
     report['training_boundary'] = 'Only sc01-v1/si01-v1 native level 1; every level-crossing result excluded before adaptation'
     report['targets'] = sentinel.runtime.router.report
     report['passed'] &= real_transitions > 0 and all(row[2]['active_bank_updated'] for row in rows)
+    _progress('complete', started, passed=report['passed'])
     return report
 
 
