@@ -68,6 +68,38 @@ test('live, pin, selectors, controls and missing data',async()=>{
   click('tab-path');assert.equal(nodes.get('path').hidden,true,'missing run must not reveal stale metrics on tab selection');
 });
 
+test('planner modules expose their matrices, projections and own losses without replacing legacy NLL',async()=>{
+  const {nodes,state,text,click,change,input,flush}=await dashboard();
+  assert(!nodes.get('module').options.some(o=>o.value==='goal_planner'),'legacy runs have no planner modules');
+  const captured=structuredClone(state.report.events.at(-1).matrices[state.report.selected]);
+  for(const name of ['goal_planner','path_planner']){
+    state.report.catalog.push({name:name+'.output.weight',module:name,shape:[2,2],size:4});
+    state.report.planes[name]=structuredClone(state.report.planes.dynamics);
+    state.report.planes[name].projections.forEach((p,i)=>{p.z=i*.1;p.coverage_3d=i?.5:null;});
+  }
+  state.report.events.push({...structuredClone(state.report.events.at(-1)),id:5,phase:'goal_planner',detail:null,
+    matrices:{'goal_planner.output.weight':captured}});
+  state.report.tick=5;state.report.updated_at++;
+  state.report.points.forEach((p,i)=>{p.module_losses={goal_planner:i===3?null:2+i,path_planner:10+i};});
+  await state.polling();click('tab-path');
+  for(const [name,label,expected] of [['goal_planner','Goal Planner','4'],['path_planner','Path Planner','12']]){
+    change('module',name);input('point-scrubber',2);
+    assert.equal(text('reference-value'),expected);
+    assert.equal(text('reference-label'),`${label} loss · batch mean`);
+    assert.equal(text('path-loss-label'),`Point color · ${label} loss`);
+    assert.match(text('path-loss-note'),/without head updates have no loss/);
+    assert.equal(nodes.get('matrix').value,name+'.output.weight');
+    click('view-2d');assert.equal(nodes.get('view-2d')['aria-pressed'],'true');
+    click('view-3d');assert.equal(nodes.get('view-3d')['aria-pressed'],'true');
+  }
+  change('module','goal_planner');input('point-scrubber',3);
+  assert.equal(text('reference-value'),'—');assert.equal(text('loss-change'),'—');
+  click('tab-pulse');click('capture-matrix');await flush();
+  assert.deepEqual(JSON.parse(state.posts.at(-1).body),{operation:'matrix',matrix:'goal_planner.output.weight'});
+  change('module','dynamics');click('tab-path');
+  assert.equal(text('reference-value'),'1');assert.equal(text('reference-label'),'Reference visual NLL');
+});
+
 test('a retained trajectory point never borrows an evicted optimizer capture',async()=>{
   const {nodes,state,text,click,change,input}=await dashboard();
   click('tab-path');input('point-scrubber',1); // batch 2 has a point, but no retained optimizer event.

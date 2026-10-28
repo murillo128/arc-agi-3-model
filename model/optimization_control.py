@@ -39,7 +39,7 @@ def _validate_snapshot(state, session_count):
     names = {}
     for meta in catalog:
         _require(isinstance(meta, dict) and isinstance(meta['name'], str) and bool(meta['name']))
-        _require(meta['name'] not in names and meta['module'] in ('encoder', 'decoder', 'dynamics'))
+        _require(meta['name'] not in names and meta['module'] in ('encoder', 'decoder', 'dynamics', 'goal_planner', 'path_planner'))
         _require(isinstance(meta['shape'], list) and len(meta['shape']) <= 64 and all(_integer(n, 1) for n in meta['shape']))
         _require(_integer(meta['size'], 1) and math.prod(meta['shape']) == meta['size'])
         names[meta['name']] = meta
@@ -52,7 +52,7 @@ def _validate_snapshot(state, session_count):
     for event in events:
         _require(isinstance(event, dict) and _integer(event['id'], last_id + 1) and event['id'] <= state['tick'])
         _require(_integer(event['batch'], max(1, last_batch)) and event['batch'] <= state['batch'])
-        _require(event['phase'] in ('predictor', 'representation') and _number(event['clip_scale'], 0, 1))
+        _require(event['phase'] in ('predictor', 'representation', 'goal_planner', 'path_planner') and _number(event['clip_scale'], 0, 1))
         _require(isinstance(event['matrices'], dict) and event['matrices'].keys() <= names.keys())
         for row in event['matrices'].values():
             _require(isinstance(row, dict) and row['status'] in ('measured', 'no_gradient', 'frozen'))
@@ -87,6 +87,9 @@ def _validate_snapshot(state, session_count):
         _require(isinstance(point, dict) and _integer(point['batch'], last_batch + 1) and point['batch'] <= state['batch'])
         _require(_integer(point['event_id']) and point['event_id'] <= state['tick'])
         _require(_number(point['reference_loss'], 0, nullable=True))
+        losses = point.get('module_losses', {})
+        _require(isinstance(losses, dict) and losses.keys() <= {meta['module'] for meta in catalog})
+        _require(all(_number(value, 0, nullable=True) for value in losses.values()))
         # Evicted events are deliberately absent, not reassigned to a newer batch.
         _require(point['event_id'] not in event_batches or event_batches[point['event_id']] <= point['batch'])
         last_batch = point['batch']

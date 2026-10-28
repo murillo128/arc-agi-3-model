@@ -30,18 +30,21 @@ def block_rms(tensor):
 
 
 class OptimizationTelemetry:
-    def __init__(self, model, directory, *, every=8, restored_batch=0, identity=''):
+    def __init__(self, model, directory, *, every=8, restored_batch=0, identity='', extra_modules=None):
         if type(every) is not int or every < 1:
             raise ValueError('Optimization sampling interval must be positive')
         self.model, self.directory, self.every = model, Path(directory), every
         self.params = dict(model.named_parameters())
+        for module, head in (extra_modules or {}).items():
+            self.params.update((f'{module}.{name}', p) for name, p in head.named_parameters())
+        self.modules = tuple(dict.fromkeys(n.split('.')[0] for n in self.params))
         self.catalog = [dict(name=n, module=n.split('.')[0], shape=list(p.shape), size=p.numel())
                         for n, p in self.params.items()]
         self.identity = hashlib.sha256((identity + json.dumps(self.catalog)).encode()).hexdigest()
         self.indices = {n: torch.linspace(0, p.numel()-1, min(256, p.numel()), device=p.device).long()
                         for n, p in self.params.items()}
         self.events, self.points, self.planes = [], [], {}
-        self.tick, self.batch, self.predictor_ticks = 0, restored_batch, 0
+        self.tick, self.batch, self.phase_ticks = 0, restored_batch, {}
         self.selected = next((n for n in self.params if n == 'dynamics.cell.gates.weight'), next(iter(self.params)))
         self.probe, self.probe_requested, self.probe_session = None, True, 0
         self.recalibrate, self.seconds, self.last_request = False, 0., None
@@ -59,7 +62,7 @@ class OptimizationTelemetry:
                 if int(saved['batch']) != state['batch']:
                     return
                 planes = {}
-                for name in ('encoder', 'decoder', 'dynamics'):
+                for name in self.modules:
                     if name in saved:
                         planes[name] = ParameterPlane(saved[name], saved.get(name+'_basis'),
                             saved.get(name+'_origin'), state.get('planes', {}).get(name, {}).get('basis_id', 0))
@@ -104,9 +107,9 @@ class OptimizationTelemetry:
     def before_step(self, phase, optimizer, **metadata):
         start = time.perf_counter()
         self.tick += 1
-        if phase == 'predictor':
-            self.predictor_ticks += 1
-            if (self.predictor_ticks - 1) % self.every and not metadata.get('last'):
+        if phase in ('predictor', 'goal_planner', 'path_planner'):
+            self.phase_ticks[phase] = self.phase_ticks.get(phase, 0) + 1
+            if (self.phase_ticks[phase] - 1) % self.every and not metadata.get('last'):
                 return None
         rates = {id(p): float(g['lr']) for g in optimizer.param_groups for p in g['params']}
         active, scalars = {}, []
@@ -172,9 +175,9 @@ class OptimizationTelemetry:
         self.seconds += time.perf_counter() - start
 
     @torch.no_grad()
-    def finish_batch(self, reference_loss, actions):
+    def finish_batch(self, reference_loss, actions, *, module_losses=None):
         start = time.perf_counter()
-        for module in ('encoder', 'decoder', 'dynamics'):
+        for module in self.modules:
             values = [p.detach().flatten()[self.indices[n]].float()
                       for n, p in self.params.items() if n.split('.')[0] == module]
             if values:
@@ -184,7 +187,9 @@ class OptimizationTelemetry:
                     self.planes[module].calibrate()
         self.recalibrate = False
         self.points.append(dict(batch=self.batch, actions=actions, event_id=self.tick,
-                                reference_loss=finite(reference_loss)))
+                                reference_loss=finite(reference_loss),
+                                module_losses={name: finite(value) if value is not None else None
+                                               for name, value in (module_losses or {}).items()}))
         self.points = self.points[-96:]
         self.seconds += time.perf_counter() - start
         self.publish()

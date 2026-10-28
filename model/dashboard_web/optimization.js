@@ -4,12 +4,16 @@
   const C = {mint: '#8fd8bf', lilac: '#bcaafa', amber: '#e9b86c', text: '#e7efec', muted: '#9db2a8', grid: '#2b4038', dark: '#152321'};
   const fmt = (v, d = 3) => Number.isFinite(v) ? v.toLocaleString('en-US', {maximumFractionDigits: d}) : '—';
   const sci = v => !Number.isFinite(v) ? '—' : v === 0 ? '0' : Math.abs(v) < .001 ? v.toExponential(2) : fmt(v, 4);
-  const moduleName = m => ({encoder: 'Visual encoder', decoder: 'Decoder', dynamics: 'Predictor'})[m] || m;
+  const moduleNames = {encoder: 'Visual encoder', decoder: 'Decoder', dynamics: 'Predictor', goal_planner: 'Goal Planner', path_planner: 'Path Planner'};
+  const moduleName = m => moduleNames[m] || m;
   const shortName = n => n.split('.').slice(1).join('.');
   const defaultCamera = () => ({yaw: -.6, pitch: .45, roll: 0, zoom: 1});
   let camera = defaultCamera();
   let latest = null, pinned = null, eventIndex = 0, pointIndex = 0, tab = 'pulse', dimension = 3, playing = null, requestId = null, revision = null;
   let selection = 'dynamics.cell.gates.weight', module = 'dynamics', drawHits = [];
+  const plannerModule = () => module === 'goal_planner' || module === 'path_planner';
+  const pointLoss = p => plannerModule() ? p?.module_losses?.[module] ?? null : p?.reference_loss;
+  const lossName = () => plannerModule() ? `${moduleName(module)} loss` : 'Visual NLL';
   const data = () => pinned || latest;
   const text = (id, value) => { $(id).textContent = value; };
   function node(tag, value, cls) { const e = document.createElement(tag); if (value != null) e.textContent = value; if (cls) e.className = cls; return e; }
@@ -36,7 +40,7 @@
           !integer(s.session_count,1) || !Number.isFinite(s.age_seconds) || typeof s.running !== 'boolean' ||
           !object(s.control) || typeof s.control.enabled !== 'boolean' || typeof s.control.token !== 'string') return false;
       if (!list(s.catalog, m => object(m) && typeof m.name === 'string' && m.name.length > 0 &&
-          ['encoder','decoder','dynamics'].includes(m.module) && list(m.shape, n => integer(n,1)) && integer(m.size,1) &&
+          Object.hasOwn(moduleNames,m.module) && list(m.shape, n => integer(n,1)) && integer(m.size,1) &&
           m.shape.reduce((a,b)=>a*b,1) === m.size) || !s.catalog.length) return false;
       const names = new Set(s.catalog.map(m=>m.name));
       if (names.size !== s.catalog.length || !names.has(s.selected)) return false;
@@ -51,6 +55,8 @@
             list(e.detail.histogram.edges,Number.isFinite) && e.detail.histogram.edges.length === e.detail.histogram.counts.length+1)),64)) return false;
       if (!list(s.points, (p,i) => object(p) && integer(p.batch,1) && p.batch <= s.batch &&
           (!i || p.batch > s.points[i-1].batch) && integer(p.event_id) && number(p.reference_loss) &&
+          (p.module_losses === undefined || (object(p.module_losses) && Object.entries(p.module_losses).every(([name,value]) =>
+            s.catalog.some(m=>m.module===name) && (value === null || (Number.isFinite(value) && value >= 0))))) &&
           !s.events.some(e=>e.id === p.event_id && e.batch > p.batch),96) || !object(s.planes)) return false;
       if (!Object.entries(s.planes).every(([name,p]) => s.catalog.some(m=>m.module===name) && object(p) && integer(p.basis_id) &&
           list(p.projections, v => object(v) && Number.isFinite(v.x) && Number.isFinite(v.y) &&
@@ -141,6 +147,12 @@
     render();
   }
   function populateSelects(s) {
+    const modules=Object.keys(moduleNames).filter(name=>s.catalog.some(m=>m.module===name));
+    if(!modules.includes(module))module=modules.includes('dynamics')?'dynamics':modules[0];
+    if(Array.from($('module').options).map(o=>o.value).join('|')!==modules.join('|')){
+      $('module').replaceChildren(...modules.map(name=>{const o=node('option',moduleName(name));o.value=name;return o;}));
+    }
+    $('module').value=module;
     const names=s.catalog.filter(m=>m.module===module);
     if(!names.some(m=>m.name===selection)) selection=names.find(m=>m.name===s.selected)?.name || names.find(m=>m.shape.length>1)?.name || names[0]?.name || '';
     const current=Array.from($('matrix').options).map(o=>o.value).join('|');
@@ -167,7 +179,7 @@
     text('capture-note',!event?'No optimization capture is retained for the selected batch.':detail?'These maps correspond to this matrix and update. Each cell summarizes an entire block.':'Matrix detail was not saved at this point. Request a capture for a future update.');
     const measure=$('measure').value, rows=s.catalog.filter(m=>m.module===module && m.shape.length>1);
     const table=$('activity'), head=node('tr');head.append(node('th','Matrix / update'));
-    s.events.forEach((e,i)=>{const th=node('th'),b=node('button',String(e.id));b.dataset.event=i;b.title=`Batch ${e.batch} · ${e.phase==='predictor'?'Predictor':'Representation'}`;th.append(b);head.append(th);});
+    s.events.forEach((e,i)=>{const th=node('th'),b=node('button',String(e.id));b.dataset.event=i;b.title=`Batch ${e.batch} · ${{predictor:'Predictor',representation:'Representation'}[e.phase]||moduleName(e.phase)}`;th.append(b);head.append(th);});
     table.querySelector('thead').replaceChildren(head);
     const fragment=document.createDocumentFragment();
     rows.forEach(meta=>{const tr=node('tr'),th=node('th'),b=node('button',shortName(meta.name));b.dataset.matrix=meta.name;b.title=meta.name;th.append(b);tr.append(th);tr.dataset.selected=String(meta.name===selection);
@@ -228,14 +240,14 @@
     return '#'+[143,216,191].map((v,i)=>Math.round(v+([233,184,108][i]-v)*t).toString(16).padStart(2,'0')).join('');
   }
   function lossScale(points) {
-    const values=points.map(p=>p.reference_loss).filter(Number.isFinite);
+    const values=points.map(pointLoss).filter(Number.isFinite), unit=plannerModule()?'loss':'NLL';
     const low=values.length?Math.min(...values):null, high=values.length?Math.max(...values):null;
-    text('path-loss-low',values.length?`Lower NLL · ${sci(low)}`:'NLL unavailable');
-    text('path-loss-high',values.length?(high>low?`Higher NLL · ${sci(high)}`:'Constant NLL'):'');
+    text('path-loss-low',values.length?`Lower ${unit} · ${sci(low)}`:`${lossName()} unavailable`);
+    text('path-loss-high',values.length?(high>low?`Higher ${unit} · ${sci(high)}`:`Constant ${unit}`):'');
     $('path-loss-scale').style.background=high>low
       ? `linear-gradient(to right, ${lossColor(low,low,high)}, ${lossColor(high,low,high)})`
       : lossColor(low,low,high);
-    $('path-loss-scale').title=values.length?`Visual NLL: ${low} to ${high}`:'Visual NLL unavailable';
+    $('path-loss-scale').title=values.length?`${lossName()}: ${low} to ${high}`:`${lossName()} unavailable`;
     return value=>lossColor(value,low,high);
   }
   function rotate(x,y,z) {
@@ -279,7 +291,7 @@
     g.lineWidth=2;
     drawHits.forEach((hit,i)=>{if(i)segment(drawHits[i-1].position,hit.position,C.muted);});
     function bubble(hit,i) {
-      const p=hit.position, radius=hit.radius, color=pointColor(points[i]?.reference_loss);
+      const p=hit.position, radius=hit.radius, color=pointColor(pointLoss(points[i]));
       if(radius>3){g.fillStyle=`${color}24`;g.strokeStyle=`${color}70`;g.lineWidth=1;g.beginPath();g.arc(...p,radius,0,2*Math.PI);g.fill();g.stroke();}
       g.fillStyle=color;g.beginPath();g.arc(...p,3,0,2*Math.PI);g.fill();
       if(i===pointIndex){g.lineWidth=2;g.strokeStyle=C.text;g.beginPath();g.arc(...p,radius+4,0,2*Math.PI);g.stroke();g.textAlign='left';g.fillStyle=C.text;g.fillText(`Batch ${points[i].batch}`,Math.min(w-100,p[0]+radius+8),Math.max(18,p[1]-radius-8));}
@@ -295,9 +307,10 @@
     $('view-2d').setAttribute('aria-pressed',String(dims===2));$('view-3d').setAttribute('aria-pressed',String(dims===3));
     $('view-3d').disabled=!hasThirdAxis(s);
     text('basis-note',plane?.basis_id?`Fixed basis ${plane.basis_id} · ${moduleName(module)} · ${s.points.length} measured batches · module-wide fixed sample.${legacy?' 2D fallback: this capture has no PC3. Follow training for updated telemetry.':''}`:'Waiting for four batches to establish the PCA basis.');
-    text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',Number.isFinite(p?.reference_loss)?String(p.reference_loss):'—');
-    $('reference-value').title=Number.isFinite(p?.reference_loss)?String(p.reference_loss):'Visual NLL unavailable';
-    const change=Number.isFinite(p?.reference_loss)&&Number.isFinite(previous?.reference_loss)?p.reference_loss-previous.reference_loss:null;
+    const loss=pointLoss(p), previousLoss=pointLoss(previous);
+    text('point-title',p?`Batch ${p.batch}`:'Waiting for batches');text('reference-value',Number.isFinite(loss)?String(loss):'—');
+    $('reference-value').title=Number.isFinite(loss)?String(loss):`${lossName()} unavailable`;
+    const change=Number.isFinite(loss)&&Number.isFinite(previousLoss)?loss-previousLoss:null;
     text('loss-change',Number.isFinite(change)?`${change>0?'+':''}${fmt(change,4)}`:'—');
     text('coverage-label',`Squared movement captured by the ${space}`);text('outside-step-label',`Step outside the ${space}`);
     $('coverage').setAttribute('aria-label',`Fraction of squared step length captured by the ${space}`);
@@ -310,7 +323,7 @@
     const ratio=pointIndex>0?relativeStep(projection,dims):null;
     text('relative-step-value',ratio==null?'—':ratio===Infinity?'∞ · no projected step'
       : `${fmt(ratio)} ×${ratio>bubbleRatioLimit?' · size capped at 1,000×':''}`);
-    trajectory(s);line('reference-history',s.points,p=>p.reference_loss,{label:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
+    trajectory(s);line('reference-history',s.points,pointLoss,{label:plannerModule()?`${lossName()} · batch mean`:s.reference_source==='training_pre_update'?'Visual NLL · batch before learning':'Visual NLL · fixed reference',color:C.lilac,selected:pointIndex});
     line('turn-history',s.points,(p)=>plane?.projections?.[s.points.indexOf(p)]?.angle,{label:'Angle between updates (°)',selected:pointIndex,ceiling:180});
     $('point-scrubber').max=Math.max(0,s.points.length-1);$('point-scrubber').value=Math.max(0,pointIndex);
   }
@@ -356,14 +369,21 @@
   function render() {
     const s=data();if(!s || s.status!=='ready') return;
     eventIndex=Math.min(eventIndex,Math.max(0,s.events.length-1));pointIndex=Math.min(pointIndex,Math.max(0,s.points.length-1));
-    text('reference-label',s.reference_source==='training_pre_update'?'Visual NLL before learning':'Reference visual NLL');
-    const lossSource=s.reference_source==='training_pre_update'
+    populateSelects(s);
+    text('reference-label',plannerModule()?`${lossName()} · batch mean`:s.reference_source==='training_pre_update'?'Visual NLL before learning':'Reference visual NLL');
+    text('path-loss-label',`Point color · ${lossName()}`);
+    text('path-loss-unavailable',plannerModule()?'Unavailable loss':'Unavailable NLL');
+    $('parameter-path').setAttribute('aria-label',`Weight PCA trajectory: PC1, PC2 and PC3; color shows ${lossName()} and bubble radius shows outside versus projected step length`);
+    $('reference-history').setAttribute('aria-label',`${lossName()} by batch`);
+    const lossSource=plannerModule()
+      ? `${moduleName(module)} training loss, averaged across this batch's head updates. Weights are measured after the batch. Batches without head updates have no loss value.`
+      :s.reference_source==='training_pre_update'
       ? 'New data from each batch: visual NLL is measured before learning; weights at each point are from after the update.'
       : 'Visual NLL uses the same real reference observations across batches.';
     text('reference-source',lossSource);text('path-loss-note',`${lossSource} Colors span the retained window; they do not describe a loss landscape.`);
-    populateSelects(s);text('sample-note',`Up to ${s.sample_per_tensor} coefficients / tensor · fixed sample`);
+    text('sample-note',`Up to ${s.sample_per_tensor} coefficients / tensor · fixed sample`);
     text('optimization-status',pinned?'Pinned instant':s.running?'Measuring training':'Training stopped');
-    text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensors · capture every ${s.every} predictor updates`);
+    text('optimization-summary',`${moduleName(module)} · batch ${s.batch} · ${s.catalog.length} tensors · capture every ${s.every} predictor/planner updates`);
     const enabled=latest?.control?.enabled === true;
     for(const id of ['capture-matrix','capture-probe','recalibrate'])$(id).disabled=!enabled;
     $('event-scrubber').max=Math.max(0,s.events.length-1);$('event-scrubber').value=Math.max(0,eventIndex);

@@ -24,6 +24,8 @@ from model.tests.test_agent import make_agent, obs
 from model.tests.test_training_config import config
 from model.training_config import load_plan
 from model.data import Action
+from model.optimization_telemetry import OptimizationTelemetry
+from model.optimization_control import OptimizationControl
 
 
 class SequencePlanningTests(unittest.TestCase):
@@ -163,6 +165,8 @@ class SequencePlanningTests(unittest.TestCase):
         engine.model.zero_grad(set_to_none=True)
         before = deepcopy(engine.model.state_dict())
         goal_before, path_before = deepcopy(heads.goal.state_dict()), deepcopy(heads.path.state_dict())
+        observed = deepcopy(heads)
+        rng_before = torch.get_rng_state().clone()
         measured_versions = []
         versions = tuple(p._version for p in heads.goal.parameters())
         def measured(module, inputs):
@@ -170,6 +174,7 @@ class SequencePlanningTests(unittest.TestCase):
                 measured_versions.append(tuple(p._version for p in module.parameters()))
         hook = heads.goal.register_forward_pre_hook(measured)
         metrics, sample = heads.fit(sessions)
+        rng_after = torch.get_rng_state().clone()
         hook.remove()
         self.assertEqual(measured_versions, [versions, versions],
                          'All diagnostic minibatches must use the same pre-update head')
@@ -184,6 +189,45 @@ class SequencePlanningTests(unittest.TestCase):
             self.assertTrue(all(torch.isfinite(p.grad).all() for p in module.parameters() if p.grad is not None))
         self.assertIsNone(heads.collector(SimpleNamespace(game_id='sdk', reserve_final_level=True), GameSession('sdk', 0)))
         self.assertIsNone(heads.collector(SimpleNamespace(game_id='sc01-v1', reserve_final_level=True), GameSession('sc01-v1', 0)))
+        with tempfile.TemporaryDirectory() as directory:
+            modules = dict(goal_planner=observed.goal, path_planner=observed.path)
+            telemetry = OptimizationTelemetry(observed.engine.model, directory, every=2, extra_modules=modules)
+            telemetry.start_batch(1)
+            telemetry.finish_batch(.25, 0)
+            telemetry.start_batch(2)
+            torch.set_rng_state(rng_before)
+            measured, _ = observed.fit(sessions, telemetry=telemetry)
+            torch.testing.assert_close(torch.get_rng_state(), rng_after, rtol=0, atol=0)
+            self.assertEqual(observed.rng.getstate(), heads.rng.getstate())
+            for name in ('goal', 'path'):
+                for key, value in getattr(heads, name).state_dict().items():
+                    torch.testing.assert_close(getattr(observed, name).state_dict()[key], value, rtol=0, atol=0)
+                expected = getattr(heads, name+'_optimizer').state_dict()
+                actual = getattr(observed, name+'_optimizer').state_dict()
+                self.assertEqual(actual['param_groups'], expected['param_groups'])
+                for key, state in expected['state'].items():
+                    for field, value in state.items():
+                        torch.testing.assert_close(actual['state'][key][field], value, rtol=0, atol=0)
+            losses = {name+'_planner': measured[name+'_loss'] for name in ('goal', 'path')}
+            telemetry.finish_batch(.2, 8, module_losses=losses)
+            for batch in (3, 4):
+                telemetry.start_batch(batch)
+                telemetry.finish_batch(.2, 8, module_losses=dict.fromkeys(modules))
+            self.assertEqual({e['phase'] for e in telemetry.events}, set(modules))
+            for name in modules:
+                self.assertTrue(any(e['matrices'] and all(k.startswith(name+'.') for k in e['matrices'])
+                                    for e in telemetry.events if e['phase'] == name))
+                self.assertGreater(telemetry.planes[name].project()[1]['step_norm'], 0)
+                self.assertEqual(telemetry.points[1]['module_losses'][name], metrics[name.split('_')[0]+'_loss'])
+                self.assertIsNone(telemetry.points[-1]['module_losses'][name])
+            restored = OptimizationTelemetry(observed.engine.model, directory, every=2, restored_batch=4, extra_modules=modules)
+            self.assertEqual(restored.points, telemetry.points)
+            for name in modules:
+                np.testing.assert_array_equal(restored.planes[name].samples, telemetry.planes[name].samples)
+            report = Path(directory)/'report.json'
+            report.write_text(json.dumps(dict(kind='game_sequences',status='running',optimization_identity=telemetry.identity,
+                config=dict(batch_games=1),progress=dict(batches=4))))
+            self.assertEqual(OptimizationControl(report).snapshot()['status'], 'ready')
 
     def test_evaluation_collection_never_receives_teacher_or_head(self):
         planning = Mock()

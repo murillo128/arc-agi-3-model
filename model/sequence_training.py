@@ -478,7 +478,9 @@ def run(args):
         if getattr(args, 'optimization', False):
             from .optimization_telemetry import OptimizationTelemetry
             telemetry = OptimizationTelemetry(engine.model, output, every=args.optimization_every,
-                restored_batch=batches, identity=json.dumps(
+                restored_batch=batches,
+                extra_modules=dict(goal_planner=planning.goal, path_planner=planning.path) if planning else None,
+                identity=json.dumps(
                     {k:v for k,v in plan.payload.items() if k not in ('sequence_exploration', 'sequence_game_weights', 'sequence_planning')}, sort_keys=True))
         stop = False
         def interrupt(signum, frame):
@@ -521,6 +523,9 @@ def run(args):
                 if adopt:
                     report['adopted_at_batch'] = batches
             else:
+                # Adding telemetry modules starts a new parameter-space segment,
+                # but does not start a new training run or discard metric history.
+                report['history_identity'] = previous.get('history_identity', previous.get('optimization_identity'))
                 report['history'] = [r for r in previous.get('history', []) if r['batch'] <= batches][-200:]
                 report['prediction_samples'] = previous.get('prediction_samples', [])
                 report['prediction_sample_batch'] = previous.get('prediction_sample_batch')
@@ -592,7 +597,7 @@ def run(args):
                     **sum_counts(interaction_rows), head=head_metrics,
                     games=[dict(game=session.game, **counts) for session, counts in zip(sessions, interaction_rows)])
                 if planning is not None:
-                    measured['planning'], sample = planning.fit(sessions)
+                    measured['planning'], sample = planning.fit(sessions, telemetry=telemetry)
                     measured['planning_seconds'] = measured['planning']['seconds']
                     measured['planning']['identity'] = str(planning.adopted_batch)
                     report['planning'] = dict(config=asdict(planning.config), **planning.status())
@@ -611,7 +616,9 @@ def run(args):
                     telemetry_start = time.perf_counter()
                     capture_seconds = telemetry.seconds
                     telemetry.reference_source = report['measurement_source']
-                    telemetry.finish_batch(quality['reference']['nll'], actions)
+                    telemetry.finish_batch(quality['reference']['nll'], actions,
+                        module_losses={name+'_planner': measured['planning'][name+'_loss']
+                                       for name in ('goal', 'path')} if planning else None)
                     measured['telemetry_seconds'] = capture_seconds + time.perf_counter() - telemetry_start
                 seconds = time.perf_counter() - begin
                 row = dict(batch=batches, actions=actions, recent_tps=real_actions/seconds,

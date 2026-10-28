@@ -20,7 +20,8 @@ SECTIONS = ('quality', 'diagnostics', 'predictor_terms', 'representation_terms',
 
 def history_run(report_path, report):
     """Bind a snapshot to its source, training process and game cohort."""
-    return hashlib.sha256(json.dumps([str(Path(report_path).resolve()), report.get('optimization_identity'),
+    return hashlib.sha256(json.dumps([str(Path(report_path).resolve()),
+        report.get('history_identity', report.get('optimization_identity')),
         sorted(report.get('games', []))], sort_keys=True).encode()).hexdigest()[:24]
 
 
