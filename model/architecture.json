@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-sequence-learned-click-width-v1",
-  "name": "ARC-AGI-3 · Spatial residual with learned click width",
-  "scope": "sequence_world_model_and_exploration",
+  "architecture_revision": "arc3-sequence-goal-path-fixed-click-v1",
+  "name": "ARC-AGI-3 · World model, visual goals and success-first paths",
+  "scope": "sequence_world_model_exploration_goal_and_path",
   "coverage": "partial",
   "symbols": [
     {
@@ -110,7 +110,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Shared VisualEncoder from model/networks.py. Encode native observations into spatial latents; animation recurrence is local to one SDK response. Representation updates enable gradients; sequence prediction consumes freshly encoded detached observations after those updates.",
+      "description": "Shared frozen VisualEncoder from model/networks.py. Encode native observations into spatial latents; animation recurrence is local to one SDK response. The active run performs no representation updates. Predictor training and the independent goal/path heads consume detached real encodings.",
       "children": [
         "world.encoder.live.frames",
         "world.encoder.live.deltas",
@@ -44548,7 +44548,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "The checkpoint decoder weights are shared by prediction and real reconstruction. Representation optimization updates them separately; the predictor optimizer updates only dynamics."
+      "description": "Frozen checkpoint decoder weights are shared by real reconstruction and next-observation prediction. Gradients still pass through decoder operations to predicted latents during predictor learning, without updating encoder or decoder parameters."
     },
     {
       "id": "sequence.prediction",
@@ -45111,7 +45111,7 @@
       "parameter_ids": [],
       "references": [],
       "attributes": [],
-      "description": "Independent game sessions are batched together. Memory survives levels within each session. Representation updates run first; the predictor then trains on fixed encoded observations in truncated blocks with a differentiable context suffix. Readiness comes from ordinary training batches, not fixed evaluation games. Encoder/decoder use their configured lower rates after predictor admission. Real resets and cross-level boundaries carry context but are excluded from next-frame targets. Optimizer/backpropagation details are outside this static neural view."
+      "description": "Independent game sessions share a batch; causal memory survives levels and is rebuilt with current predictor weights before each truncated block. Encoder and decoder stay frozen. Predictor updates use verified real transitions. The separate ChangeHead and goal/path optimizers never update world-model weights. Real resets and cross-level boundaries carry context but are excluded from next-frame targets. Scheduling and optimizer details are outside this static graph."
     },
     {
       "id": "predictor.latent.real.rotation_adapter",
@@ -45448,7 +45448,7 @@
       "references": [],
       "attributes": [],
       "formula": "out = masked_click_gaussian_and_relative_xy(action, metadata, sigma)",
-      "description": "Recover integer 0..63 SDK coordinates before native bounds checks. Unit-peak Gaussian with learned width in native pixels; relative x/y are divided by 63. Non-click, absent/out-of-frame coordinates and padding produce zero maps."
+      "description": "Recover integer 0..63 SDK coordinates before native bounds checks. Unit-peak Gaussian with fixed width of 1.5 in native pixels; relative x/y are divided by 63. Non-click, absent/out-of-frame coordinates and padding produce zero maps."
     },
     {
       "id": "predictor.latent.real.rotation_adapter.click",
@@ -45969,8 +45969,8 @@
       "id": "predictor.latent.real.rotation_adapter.click_width",
       "parent_id": "predictor.latent.real.rotation_adapter",
       "kind": "operation",
-      "label": "Learned Gaussian click width",
-      "operation": "bounded_gaussian_sigma",
+      "label": "Fixed Gaussian click width",
+      "operation": "constant_gaussian_sigma",
       "ports": [
         {
           "id": "sigma",
@@ -45984,30 +45984,2779 @@
           ]
         }
       ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "sigma_pixels",
+          "value": 1.5
+        }
+      ],
+      "formula": "sigma = 1.5 native pixels",
+      "description": "Fixed click sigma in the active checkpoint (learnable_click_sigma=false). No parameter or optimizer state belongs to this constant."
+    },
+    {
+      "id": "planning.state",
+      "label": "Detached current state",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "shape": null,
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
+        },
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "output",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "detach_and_batch_current_state",
+      "description": "Current observed z and causal h before the next action. Supervised heads receive detached values, never future frames, teacher rules or a game identifier."
+    },
+    {
+      "id": "planning.goal",
+      "label": "Visual goal planner",
+      "kind": "group",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "colors",
+          "label": "colors",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        },
+        {
+          "id": "mask_logits",
+          "label": "mask_logits",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "children": [
+        "planning.goal.norm",
+        "planning.goal.project",
+        "planning.goal.memory",
+        "planning.goal.memory_tanh",
+        "planning.goal.features",
+        "planning.goal.conv0",
+        "planning.goal.silu0",
+        "planning.goal.conv2",
+        "planning.goal.silu2",
+        "planning.goal.pixels",
+        "planning.goal.shuffle",
+        "planning.goal.crop"
+      ],
+      "description": "VisualGoal from model/sequence_planning.py. Width 64, patch size 4. Predicts 16 palette logits and a target mask from the current observation and rule memory; supervised with teacher images/masks on sc01-v1 and si01-v1 only."
+    },
+    {
+      "id": "planning.goal.norm",
+      "label": "Latent LayerNorm",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
       "parameter_ids": [
-        "weights.dynamics.rotation_adapter.click_width.log_scale"
+        "weights.goal_planner.norm.weight",
+        "weights.goal_planner.norm.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "layer_norm"
+    },
+    {
+      "id": "planning.goal.project",
+      "label": "Patch projection",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.goal_planner.project.weight",
+        "weights.goal_planner.project.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.goal.memory",
+      "label": "Memory projection",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.goal_planner.memory.weight",
+        "weights.goal_planner.memory.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.goal.memory_tanh",
+      "label": "Bounded memory",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "tanh"
+    },
+    {
+      "id": "planning.goal.features",
+      "label": "Spatial features and coordinates",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "patches",
+          "label": "patches",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "memory",
+          "label": "memory",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 66
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "broadcast_add_reshape_concat_xy",
+      "description": "Add memory to each patch, reshape to the native patch grid and concatenate x/y coordinates in [-1,1].",
+      "formula": "concat(reshape(project(norm(z)) + tanh(memory(h))[:,None]), xy)"
+    },
+    {
+      "id": "planning.goal.conv0",
+      "label": "3×3 spatial convolution 1",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 66
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.goal_planner.spatial.0.weight",
+        "weights.goal_planner.spatial.0.bias"
       ],
       "references": [],
       "attributes": [
         {
-          "name": "initial_sigma_pixels",
-          "value": 1.5
+          "name": "kernel",
+          "value": 3
         },
         {
-          "name": "minimum_sigma_pixels",
-          "value": 0.375
-        },
-        {
-          "name": "maximum_sigma_pixels",
-          "value": 6.0
-        },
-        {
-          "name": "initial_log_scale",
-          "value": 0
+          "name": "padding",
+          "value": 1
         }
       ],
-      "formula": "sigma = 1.5 * exp(log(4) * tanh(log_scale))",
-      "description": "One shared scalar learned by the predictor optimizer without weight decay. Initial zero log_scale exactly preserves the fixed-width Gaussian of an existing trained adapter."
+      "parent_id": "planning.goal",
+      "operation": "conv2d"
+    },
+    {
+      "id": "planning.goal.silu0",
+      "label": "SiLU",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "silu"
+    },
+    {
+      "id": "planning.goal.conv2",
+      "label": "3×3 spatial convolution 2",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.goal_planner.spatial.2.weight",
+        "weights.goal_planner.spatial.2.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "value": 3
+        },
+        {
+          "name": "padding",
+          "value": 1
+        }
+      ],
+      "parent_id": "planning.goal",
+      "operation": "conv2d"
+    },
+    {
+      "id": "planning.goal.silu2",
+      "label": "SiLU",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "silu"
+    },
+    {
+      "id": "planning.goal.pixels",
+      "label": "Subpixel palette and mask logits",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 272
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.goal_planner.spatial.4.weight",
+        "weights.goal_planner.spatial.4.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "value": 1
+        },
+        {
+          "name": "channels",
+          "value": 272
+        }
+      ],
+      "parent_id": "planning.goal",
+      "operation": "conv2d"
+    },
+    {
+      "id": "planning.goal.shuffle",
+      "label": "PixelShuffle ×4",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 272
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 17
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "upscale_factor",
+          "value": 4
+        }
+      ],
+      "parent_id": "planning.goal",
+      "operation": "pixel_shuffle"
+    },
+    {
+      "id": "planning.goal.crop",
+      "label": "Crop and split goal outputs",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 17
+            },
+            {
+              "kind": "symbol",
+              "name": "H_pad"
+            },
+            {
+              "kind": "symbol",
+              "name": "W_pad"
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "colors",
+          "label": "colors",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        },
+        {
+          "id": "mask_logits",
+          "label": "mask_logits",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.goal",
+      "operation": "native_crop_split_permute",
+      "formula": "colors = result[:,:16,:H,:W].permute(0,2,3,1); mask_logits = result[:,16,:H,:W]"
+    },
+    {
+      "id": "planning.proposal",
+      "label": "Learned visual proposal",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "colors",
+          "label": "colors",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            },
+            {
+              "kind": "constant",
+              "value": 16
+            }
+          ]
+        },
+        {
+          "id": "mask_logits",
+          "label": "mask_logits",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "H"
+            },
+            {
+              "kind": "symbol",
+              "name": "W"
+            }
+          ]
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "palette_argmax_and_mask_threshold",
+      "formula": "frame = argmax(colors, -1); mask = mask_logits > 0"
+    },
+    {
+      "id": "planning.teacher",
+      "label": "Training-only visual teacher",
+      "kind": "context",
+      "ports": [
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Bundled teachers provide palette goals and masks for sc01-v1 and si01-v1. Teacher completion predicates provide real supervision only in the training coordinator; they are not inputs to neural heads or an evaluated agent."
+    },
+    {
+      "id": "planning.goal_selection",
+      "label": "Choose and retain the active goal",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "proposal",
+          "label": "proposal",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        },
+        {
+          "id": "teacher",
+          "label": "teacher",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        },
+        {
+          "id": "records",
+          "label": "records",
+          "direction": "input",
+          "shape": null,
+          "value_type": "RealSequenceBatch {native observations, actual actions, reset and level boundaries, geometry, previous observed action/change}"
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "output",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        },
+        {
+          "id": "budget",
+          "label": "budget",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "warmup_goal_updates",
+          "value": 8
+        },
+        {
+          "name": "ramp_goal_updates",
+          "value": 64
+        },
+        {
+          "name": "maximum_learned_fraction",
+          "value": 0.5
+        },
+        {
+          "name": "lifetime",
+          "value": 16
+        }
+      ],
+      "operation": "teacher_learned_goal_schedule",
+      "description": "Teacher warmup, then learned-proposal probability ramps to 0.5. Empty or already satisfied learned goals fall back to the teacher. Keep the chosen frame/mask fixed for an attempt of at most 16 actions, limited by session budget; decrement the budget after each real action."
+    },
+    {
+      "id": "planning.goal_encoding",
+      "label": "Shared frozen goal encoding",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "input",
+          "shape": null,
+          "value_type": "VisualGoalTarget {frame: uint8[H,W], mask: bool[H,W], geometry}"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "mask",
+          "label": "mask",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "operation": "shared_visual_encoder_and_mask_pool",
+      "description": "PathPlanner.set_goal invokes the same frozen VisualEncoder detailed above on the selected palette image (no new encoder weights). Average-pool the goal mask with patch=4, ceil_mode=True. Target z/mask broadcast over candidate states. The repeated encoder invocation is summarized here."
+    },
+    {
+      "id": "planning.rollout",
+      "label": "Imagine candidate transitions",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "shape": null,
+          "value_type": "LatentState {z: float32[P,1024], h: float32[2048], episode_context}"
+        },
+        {
+          "id": "candidates",
+          "label": "candidates",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CandidateActions {native action IDs and click coordinates from public observations}"
+        },
+        {
+          "id": "remaining_budget",
+          "label": "remaining_budget",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "output",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "budget",
+          "label": "budget",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "routes",
+          "label": "routes",
+          "direction": "output",
+          "shape": null,
+          "value_type": "CandidateRoutes {actions, depth, branch identities}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "horizon",
+          "value": 2
+        },
+        {
+          "name": "beam",
+          "value": 4
+        },
+        {
+          "name": "click_candidates",
+          "value": 8
+        }
+      ],
+      "operation": "shared_dynamics_beam_expansion",
+      "description": "Repeated Engine.predict calls use the same recurrent memory and latent-delta predictor detailed above. At each depth, branch over legal candidates, then feed PathValue estimates to success-first pruning. This node summarizes that control loop, not a separate learned module or verified transitions. Horizon=min(2, remaining budget); beam=4. The output budget is reduced by imagined depth."
+    },
+    {
+      "id": "planning.path",
+      "label": "Goal-conditioned path value",
+      "kind": "group",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "h",
+          "label": "h",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "mask",
+          "label": "mask",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "budget",
+          "label": "budget",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "success_logit",
+          "label": "success_logit",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "log_duration",
+          "label": "log_duration",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "children": [
+        "planning.path.normalize",
+        "planning.path.current",
+        "planning.path.target",
+        "planning.path.features",
+        "planning.path.conv0",
+        "planning.path.silu0",
+        "planning.path.conv2",
+        "planning.path.silu2",
+        "planning.path.pool",
+        "planning.path.flatten",
+        "planning.path.memory",
+        "planning.path.memory_tanh",
+        "planning.path.combine",
+        "planning.path.readout",
+        "planning.path.budget_log",
+        "planning.path.budget",
+        "planning.path.add_budget",
+        "planning.path.norm",
+        "planning.path.activation",
+        "planning.path.success",
+        "planning.path.success_flatten",
+        "planning.path.duration",
+        "planning.path.duration_positive"
+      ],
+      "description": "PathValue objective version 4, width 64. Estimates probability of reaching the active visual goal within the remaining budget and log1p duration conditional on success. During fitting, current states and outcomes are real; during search the same head evaluates imagined states. Neither estimate is a game-win detector."
+    },
+    {
+      "id": "planning.path.normalize",
+      "label": "Masked joint latent normalization",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "z",
+          "label": "z",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "goal",
+          "label": "goal",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "mask",
+          "label": "mask",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "current",
+          "label": "current",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "masked_joint_center_rms",
+      "description": "One shared center and RMS scale per sample. Zeroes excluded patches before projection; masks broadcast across candidate states.",
+      "formula": "w = max(sum(mask), 1e-6); center = sum((z+goal)*mask)/(2*w); u=(z-center)*mask; v=(goal-center)*mask; scale=sqrt(max(sum(mean_D(u²+v²))/(2*w),1e-4)); return u/scale, v/scale"
+    },
+    {
+      "id": "planning.path.current",
+      "label": "Shared projection · current",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.project.weight",
+        "weights.path_evaluator.project.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.target",
+      "label": "Shared projection · target",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.project.weight",
+        "weights.path_evaluator.project.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.features",
+      "label": "Current, target, difference, mask and XY",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "current",
+          "label": "current",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "mask",
+          "label": "mask",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "symbol",
+              "name": "P"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "geometry",
+          "label": "geometry",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CanvasGeometry {height, width, rows, columns, patch}"
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 195
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "concat_goal_features_reshape",
+      "description": "64 + 64 + 64 + 1 + 2 channels; native patch-grid coordinates in [-1,1]. Both projections above share a single Linear module.",
+      "formula": "reshape(concat(current, target, target-current, mask, xy))"
+    },
+    {
+      "id": "planning.path.conv0",
+      "label": "3×3 spatial convolution 1",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 195
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.spatial.0.weight",
+        "weights.path_evaluator.spatial.0.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "value": 3
+        },
+        {
+          "name": "padding",
+          "value": 1
+        }
+      ],
+      "parent_id": "planning.path",
+      "operation": "conv2d"
+    },
+    {
+      "id": "planning.path.silu0",
+      "label": "SiLU",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "silu"
+    },
+    {
+      "id": "planning.path.conv2",
+      "label": "3×3 spatial convolution 2",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.spatial.2.weight",
+        "weights.path_evaluator.spatial.2.bias"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "kernel",
+          "value": 3
+        },
+        {
+          "name": "padding",
+          "value": 1
+        }
+      ],
+      "parent_id": "planning.path",
+      "operation": "conv2d"
+    },
+    {
+      "id": "planning.path.silu2",
+      "label": "SiLU",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "silu"
+    },
+    {
+      "id": "planning.path.pool",
+      "label": "Adaptive average pool 4×4",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "symbol",
+              "name": "R"
+            },
+            {
+              "kind": "symbol",
+              "name": "C"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "adaptive_avg_pool2d"
+    },
+    {
+      "id": "planning.path.flatten",
+      "label": "Flatten spatial features",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            },
+            {
+              "kind": "constant",
+              "value": 4
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "flatten"
+    },
+    {
+      "id": "planning.path.memory",
+      "label": "Memory projection",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 2048
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.memory.weight",
+        "weights.path_evaluator.memory.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.memory_tanh",
+      "label": "Bounded memory",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "tanh"
+    },
+    {
+      "id": "planning.path.combine",
+      "label": "Spatial and memory features",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "spatial",
+          "label": "spatial",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1024
+            }
+          ]
+        },
+        {
+          "id": "memory",
+          "label": "memory",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 64
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1088
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "concat"
+    },
+    {
+      "id": "planning.path.readout",
+      "label": "Readout projection",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1088
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.readout.0.weight",
+        "weights.path_evaluator.readout.0.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.budget_log",
+      "label": "Remaining budget · log1p",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "reshape_log1p"
+    },
+    {
+      "id": "planning.path.budget",
+      "label": "Budget projection",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.budget.weight"
+      ],
+      "references": [],
+      "attributes": [
+        {
+          "name": "bias",
+          "value": false
+        }
+      ],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.add_budget",
+      "label": "Add budget conditioning",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "features",
+          "label": "features",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "budget",
+          "label": "budget",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "add"
+    },
+    {
+      "id": "planning.path.norm",
+      "label": "Readout LayerNorm",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.normalization.weight",
+        "weights.path_evaluator.normalization.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "layer_norm"
+    },
+    {
+      "id": "planning.path.activation",
+      "label": "SiLU",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "silu"
+    },
+    {
+      "id": "planning.path.success",
+      "label": "Success within budget · logit",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.success.weight",
+        "weights.path_evaluator.success.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.success_flatten",
+      "label": "Success logits",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "flatten"
+    },
+    {
+      "id": "planning.path.duration",
+      "label": "Conditional duration readout",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 128
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [
+        "weights.path_evaluator.readout.2.weight",
+        "weights.path_evaluator.readout.2.bias"
+      ],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "linear"
+    },
+    {
+      "id": "planning.path.duration_positive",
+      "label": "Nonnegative log1p duration",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "in",
+          "label": "in",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            },
+            {
+              "kind": "constant",
+              "value": 1
+            }
+          ]
+        },
+        {
+          "id": "out",
+          "label": "out",
+          "direction": "output",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "parent_id": "planning.path",
+      "operation": "softplus_flatten",
+      "description": "Smooth-L1 supervision only on successful real attempts; unsuccessful and censored attempts do not receive a successful-duration target."
+    },
+    {
+      "id": "planning.rank",
+      "label": "Success-first route ranking",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "success_logit",
+          "label": "success_logit",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "log_duration",
+          "label": "log_duration",
+          "direction": "input",
+          "shape": [
+            {
+              "kind": "symbol",
+              "name": "B"
+            }
+          ]
+        },
+        {
+          "id": "routes",
+          "label": "routes",
+          "direction": "input",
+          "shape": null,
+          "value_type": "CandidateRoutes {actions, depth, branch identities}"
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Action {id: 0..7, data: {x?: 0..63, y?: 0..63}}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "success_margin",
+          "value": 0.02
+        }
+      ],
+      "operation": "sigmoid_success_bands_then_duration",
+      "description": "Rank sigmoid(success_logit) in bands within 0.02 of the best remaining probability; within each band prefer depth + expm1(clamp(log_duration, max=log1p(1024))). Randomize numerical ties. Beam pruning and final prefix selection use this rule. Execute only the chosen first action, then replan from the next real observation."
+    },
+    {
+      "id": "planning.collection",
+      "label": "Planner and exploration collection policy",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "planned",
+          "label": "planned",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Action {id: 0..7, data: {x?: 0..63, y?: 0..63}}"
+        },
+        {
+          "id": "explore",
+          "label": "explore",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Action {id: 0..7, data: {x?: 0..63, y?: 0..63}}"
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Action {id: 0..7, data: {x?: 0..63, y?: 0..63}}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [
+        {
+          "name": "warmup_path_updates",
+          "value": 8
+        },
+        {
+          "name": "exploration_fraction",
+          "value": 0.25
+        }
+      ],
+      "operation": "teacher_game_collection_mixture",
+      "description": "sc01-v1 / si01-v1 use exploration while path_updates < 8, then retain at least 25% exploration. Other games retain the existing exploration policy. All executed actions respect the available SDK action set and the run excludes Undo. The world model learns only subsequent real transitions."
+    },
+    {
+      "id": "planning.action",
+      "label": "Execute one real action",
+      "kind": "output",
+      "ports": [
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Action {id: 0..7, data: {x?: 0..63, y?: 0..63}}"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": []
+    },
+    {
+      "id": "planning.learning",
+      "label": "Independent head supervision",
+      "kind": "context",
+      "ports": [],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "The goal head learns teacher palette/mask targets, balancing changed/unchanged goal pixels and included/excluded mask regions. PathValue uses real attempt success/failure within budget with BCE logits, plus successful-duration Smooth-L1 on log1p steps. Teacher-goal success uses teacher progress; learned-goal success uses real masked image matching and is reported separately from teacher/task progress and actual level wins. Interrupted attempts are censored. Independent AdamW optimizers (LR 1e-4) use detached current z/h and frozen goal encodings. The predictor continues training on real next frames; imagined branches never become verified training transitions."
     }
   ],
   "edges": [
@@ -58022,6 +60771,894 @@
         "port_id": "sigma"
       },
       "kind": "data"
+    },
+    {
+      "id": "sequence.memory.state__planning.state.state",
+      "source": {
+        "node_id": "sequence.memory",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "planning.state",
+        "port_id": "state"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "planning.state.z__planning.goal.z",
+      "source": {
+        "node_id": "planning.state",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "planning.goal",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.state.h__planning.goal.h",
+      "source": {
+        "node_id": "planning.state",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "planning.goal",
+        "port_id": "h"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.state.geometry__planning.goal.geometry",
+      "source": {
+        "node_id": "planning.state",
+        "port_id": "geometry"
+      },
+      "target": {
+        "node_id": "planning.goal",
+        "port_id": "geometry"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.z__planning.goal.norm.in",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "planning.goal.norm",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.norm.out__planning.goal.project.in",
+      "source": {
+        "node_id": "planning.goal.norm",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.project",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.h__planning.goal.memory.in",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "planning.goal.memory",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.memory.out__planning.goal.memory_tanh.in",
+      "source": {
+        "node_id": "planning.goal.memory",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.memory_tanh",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.project.out__planning.goal.features.patches",
+      "source": {
+        "node_id": "planning.goal.project",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.features",
+        "port_id": "patches"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.memory_tanh.out__planning.goal.features.memory",
+      "source": {
+        "node_id": "planning.goal.memory_tanh",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.features",
+        "port_id": "memory"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.geometry__planning.goal.features.geometry",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "geometry"
+      },
+      "target": {
+        "node_id": "planning.goal.features",
+        "port_id": "geometry"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.features.out__planning.goal.conv0.in",
+      "source": {
+        "node_id": "planning.goal.features",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.conv0",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.conv0.out__planning.goal.silu0.in",
+      "source": {
+        "node_id": "planning.goal.conv0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.silu0",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.silu0.out__planning.goal.conv2.in",
+      "source": {
+        "node_id": "planning.goal.silu0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.conv2",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.conv2.out__planning.goal.silu2.in",
+      "source": {
+        "node_id": "planning.goal.conv2",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.silu2",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.silu2.out__planning.goal.pixels.in",
+      "source": {
+        "node_id": "planning.goal.silu2",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.pixels",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.pixels.out__planning.goal.shuffle.in",
+      "source": {
+        "node_id": "planning.goal.pixels",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.shuffle",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.shuffle.out__planning.goal.crop.in",
+      "source": {
+        "node_id": "planning.goal.shuffle",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.goal.crop",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.geometry__planning.goal.crop.geometry",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "geometry"
+      },
+      "target": {
+        "node_id": "planning.goal.crop",
+        "port_id": "geometry"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.crop.colors__planning.goal.colors",
+      "source": {
+        "node_id": "planning.goal.crop",
+        "port_id": "colors"
+      },
+      "target": {
+        "node_id": "planning.goal",
+        "port_id": "colors"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.crop.mask_logits__planning.goal.mask_logits",
+      "source": {
+        "node_id": "planning.goal.crop",
+        "port_id": "mask_logits"
+      },
+      "target": {
+        "node_id": "planning.goal",
+        "port_id": "mask_logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.colors__planning.proposal.colors",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "colors"
+      },
+      "target": {
+        "node_id": "planning.proposal",
+        "port_id": "colors"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal.mask_logits__planning.proposal.mask_logits",
+      "source": {
+        "node_id": "planning.goal",
+        "port_id": "mask_logits"
+      },
+      "target": {
+        "node_id": "planning.proposal",
+        "port_id": "mask_logits"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.proposal.goal__planning.goal_selection.proposal",
+      "source": {
+        "node_id": "planning.proposal",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "planning.goal_selection",
+        "port_id": "proposal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.teacher.goal__planning.goal_selection.teacher",
+      "source": {
+        "node_id": "planning.teacher",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "planning.goal_selection",
+        "port_id": "teacher"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "sequence.observations.records__planning.goal_selection.records",
+      "source": {
+        "node_id": "sequence.observations",
+        "port_id": "records"
+      },
+      "target": {
+        "node_id": "planning.goal_selection",
+        "port_id": "records"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal_selection.goal__planning.goal_encoding.goal",
+      "source": {
+        "node_id": "planning.goal_selection",
+        "port_id": "goal"
+      },
+      "target": {
+        "node_id": "planning.goal_encoding",
+        "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "sequence.memory.state__planning.rollout.state",
+      "source": {
+        "node_id": "sequence.memory",
+        "port_id": "state"
+      },
+      "target": {
+        "node_id": "planning.rollout",
+        "port_id": "state"
+      },
+      "kind": "state"
+    },
+    {
+      "id": "exploration.candidates.candidates__planning.rollout.candidates",
+      "source": {
+        "node_id": "exploration.candidates",
+        "port_id": "candidates"
+      },
+      "target": {
+        "node_id": "planning.rollout",
+        "port_id": "candidates"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal_selection.budget__planning.rollout.budget",
+      "source": {
+        "node_id": "planning.goal_selection",
+        "port_id": "budget"
+      },
+      "target": {
+        "node_id": "planning.rollout",
+        "port_id": "remaining_budget"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rollout.z__planning.path.z",
+      "source": {
+        "node_id": "planning.rollout",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rollout.h__planning.path.h",
+      "source": {
+        "node_id": "planning.rollout",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "h"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rollout.geometry__planning.path.geometry",
+      "source": {
+        "node_id": "planning.rollout",
+        "port_id": "geometry"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "geometry"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rollout.budget__planning.path.budget",
+      "source": {
+        "node_id": "planning.rollout",
+        "port_id": "budget"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "budget"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal_encoding.target__planning.path.target",
+      "source": {
+        "node_id": "planning.goal_encoding",
+        "port_id": "target"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "target"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.goal_encoding.mask__planning.path.mask",
+      "source": {
+        "node_id": "planning.goal_encoding",
+        "port_id": "mask"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "mask"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.z__planning.path.normalize.z",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "z"
+      },
+      "target": {
+        "node_id": "planning.path.normalize",
+        "port_id": "z"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.target__planning.path.normalize.target",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "target"
+      },
+      "target": {
+        "node_id": "planning.path.normalize",
+        "port_id": "goal"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.mask__planning.path.normalize.mask",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "mask"
+      },
+      "target": {
+        "node_id": "planning.path.normalize",
+        "port_id": "mask"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.normalize.current__planning.path.current.in",
+      "source": {
+        "node_id": "planning.path.normalize",
+        "port_id": "current"
+      },
+      "target": {
+        "node_id": "planning.path.current",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.normalize.target__planning.path.target.in",
+      "source": {
+        "node_id": "planning.path.normalize",
+        "port_id": "target"
+      },
+      "target": {
+        "node_id": "planning.path.target",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.current.out__planning.path.features.current",
+      "source": {
+        "node_id": "planning.path.current",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.features",
+        "port_id": "current"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.target.out__planning.path.features.target",
+      "source": {
+        "node_id": "planning.path.target",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.features",
+        "port_id": "target"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.mask__planning.path.features.mask",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "mask"
+      },
+      "target": {
+        "node_id": "planning.path.features",
+        "port_id": "mask"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.geometry__planning.path.features.geometry",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "geometry"
+      },
+      "target": {
+        "node_id": "planning.path.features",
+        "port_id": "geometry"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.features.out__planning.path.conv0.in",
+      "source": {
+        "node_id": "planning.path.features",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.conv0",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.conv0.out__planning.path.silu0.in",
+      "source": {
+        "node_id": "planning.path.conv0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.silu0",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.silu0.out__planning.path.conv2.in",
+      "source": {
+        "node_id": "planning.path.silu0",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.conv2",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.conv2.out__planning.path.silu2.in",
+      "source": {
+        "node_id": "planning.path.conv2",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.silu2",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.silu2.out__planning.path.pool.in",
+      "source": {
+        "node_id": "planning.path.silu2",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.pool",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.pool.out__planning.path.flatten.in",
+      "source": {
+        "node_id": "planning.path.pool",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.flatten",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.h__planning.path.memory.in",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "h"
+      },
+      "target": {
+        "node_id": "planning.path.memory",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.memory.out__planning.path.memory_tanh.in",
+      "source": {
+        "node_id": "planning.path.memory",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.memory_tanh",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.flatten.out__planning.path.combine.spatial",
+      "source": {
+        "node_id": "planning.path.flatten",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.combine",
+        "port_id": "spatial"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.memory_tanh.out__planning.path.combine.memory",
+      "source": {
+        "node_id": "planning.path.memory_tanh",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.combine",
+        "port_id": "memory"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.combine.out__planning.path.readout.in",
+      "source": {
+        "node_id": "planning.path.combine",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.readout",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.budget__planning.path.budget_log.in",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "budget"
+      },
+      "target": {
+        "node_id": "planning.path.budget_log",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.budget_log.out__planning.path.budget.in",
+      "source": {
+        "node_id": "planning.path.budget_log",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.budget",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.readout.out__planning.path.add_budget.features",
+      "source": {
+        "node_id": "planning.path.readout",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.add_budget",
+        "port_id": "features"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.budget.out__planning.path.add_budget.budget",
+      "source": {
+        "node_id": "planning.path.budget",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.add_budget",
+        "port_id": "budget"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.add_budget.out__planning.path.norm.in",
+      "source": {
+        "node_id": "planning.path.add_budget",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.norm",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.norm.out__planning.path.activation.in",
+      "source": {
+        "node_id": "planning.path.norm",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.activation",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.activation.out__planning.path.success.in",
+      "source": {
+        "node_id": "planning.path.activation",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.success",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.success.out__planning.path.success_flatten.in",
+      "source": {
+        "node_id": "planning.path.success",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.success_flatten",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.success_flatten.out__planning.path.success_logit",
+      "source": {
+        "node_id": "planning.path.success_flatten",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "success_logit"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.activation.out__planning.path.duration.in",
+      "source": {
+        "node_id": "planning.path.activation",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.duration",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.duration.out__planning.path.duration_positive.in",
+      "source": {
+        "node_id": "planning.path.duration",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path.duration_positive",
+        "port_id": "in"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.duration_positive.out__planning.path.log_duration",
+      "source": {
+        "node_id": "planning.path.duration_positive",
+        "port_id": "out"
+      },
+      "target": {
+        "node_id": "planning.path",
+        "port_id": "log_duration"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.success_logit__planning.rank.success_logit",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "success_logit"
+      },
+      "target": {
+        "node_id": "planning.rank",
+        "port_id": "success_logit"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.path.log_duration__planning.rank.log_duration",
+      "source": {
+        "node_id": "planning.path",
+        "port_id": "log_duration"
+      },
+      "target": {
+        "node_id": "planning.rank",
+        "port_id": "log_duration"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rollout.routes__planning.rank.routes",
+      "source": {
+        "node_id": "planning.rollout",
+        "port_id": "routes"
+      },
+      "target": {
+        "node_id": "planning.rank",
+        "port_id": "routes"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.rank.action__planning.collection.planned",
+      "source": {
+        "node_id": "planning.rank",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "planning.collection",
+        "port_id": "planned"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "exploration.selection.action__planning.collection.explore",
+      "source": {
+        "node_id": "exploration.selection",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "planning.collection",
+        "port_id": "explore"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "planning.collection.action__planning.action.action",
+      "source": {
+        "node_id": "planning.collection",
+        "port_id": "action"
+      },
+      "target": {
+        "node_id": "planning.action",
+        "port_id": "action"
+      },
+      "kind": "data"
     }
   ],
   "parameters": [
@@ -63960,8 +67597,380 @@
       ]
     },
     {
-      "id": "weights.dynamics.rotation_adapter.click_width.log_scale",
-      "name": "dynamics.rotation_adapter.click_width.log_scale",
+      "id": "weights.goal_planner.norm.weight",
+      "name": "goal_planner.norm.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1024
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.norm.bias",
+      "name": "goal_planner.norm.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1024
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.project.weight",
+      "name": "goal_planner.project.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1024
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.project.bias",
+      "name": "goal_planner.project.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.memory.weight",
+      "name": "goal_planner.memory.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 2048
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.memory.bias",
+      "name": "goal_planner.memory.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.0.weight",
+      "name": "goal_planner.spatial.0.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 66
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.0.bias",
+      "name": "goal_planner.spatial.0.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.2.weight",
+      "name": "goal_planner.spatial.2.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.2.bias",
+      "name": "goal_planner.spatial.2.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.4.weight",
+      "name": "goal_planner.spatial.4.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 272
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.goal_planner.spatial.4.bias",
+      "name": "goal_planner.spatial.4.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 272
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.project.weight",
+      "name": "path_evaluator.project.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 1024
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.project.bias",
+      "name": "path_evaluator.project.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.spatial.0.weight",
+      "name": "path_evaluator.spatial.0.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 195
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.spatial.0.bias",
+      "name": "path_evaluator.spatial.0.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.spatial.2.weight",
+      "name": "path_evaluator.spatial.2.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        },
+        {
+          "kind": "constant",
+          "value": 3
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.spatial.2.bias",
+      "name": "path_evaluator.spatial.2.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.memory.weight",
+      "name": "path_evaluator.memory.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        },
+        {
+          "kind": "constant",
+          "value": 2048
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.memory.bias",
+      "name": "path_evaluator.memory.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 64
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.readout.0.weight",
+      "name": "path_evaluator.readout.0.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 128
+        },
+        {
+          "kind": "constant",
+          "value": 1088
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.readout.0.bias",
+      "name": "path_evaluator.readout.0.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 128
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.readout.2.weight",
+      "name": "path_evaluator.readout.2.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 128
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.readout.2.bias",
+      "name": "path_evaluator.readout.2.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.normalization.weight",
+      "name": "path_evaluator.normalization.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 128
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.normalization.bias",
+      "name": "path_evaluator.normalization.bias",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 128
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.budget.weight",
+      "name": "path_evaluator.budget.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 128
+        },
+        {
+          "kind": "constant",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.success.weight",
+      "name": "path_evaluator.success.weight",
+      "shape": [
+        {
+          "kind": "constant",
+          "value": 1
+        },
+        {
+          "kind": "constant",
+          "value": 128
+        }
+      ]
+    },
+    {
+      "id": "weights.path_evaluator.success.bias",
+      "name": "path_evaluator.success.bias",
       "shape": [
         {
           "kind": "constant",
@@ -76964,5 +80973,5 @@
       ]
     }
   ],
-  "incomplete_reason": "All encoder, recurrent predictor, decoder and learned change-head tensors are bound to the current sequence checkpoint. The diagram shows one shared neural invocation; batch scheduling, truncated backpropagation, loss construction and optimizer internals remain descriptive context. A synthetic-goal PathValue planner is not part of this sequence run."
+  "incomplete_reason": "All world-model, ChangeHead, VisualGoal and PathValue tensors are bound to the active sequence profile. The diagram details one neural invocation per module. Shared model calls during beam search, teacher scheduling, target construction, backpropagation and optimizers are summarized as control context, not an unrolled execution graph. This training package is not a portable Kaggle agent."
 }
