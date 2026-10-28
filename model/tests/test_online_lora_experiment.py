@@ -1,5 +1,8 @@
 """Runner contracts on scripted public SDK responses, never gameplay scores."""
 from types import SimpleNamespace
+from pathlib import Path
+import json
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -7,7 +10,10 @@ import numpy as np
 from arcengine import FrameData, GameState
 
 from model.data import Action
-from model.online_lora_experiment import aggregate_counts, counts, run_game
+from model.adaptation import AdaptationConfig
+from model.online_lora_experiment import (aggregate_counts, counts, run_game, parse_args,
+    verified_checkpoint, convergence_report)
+from model.online_lora_reporting import render_report, publish_report
 
 
 def frame(value=0, state=GameState.NOT_FINISHED, levels=0):
@@ -41,6 +47,66 @@ class Policy:
 
 
 class OnlineExperimentTests(unittest.TestCase):
+    def test_checkpoint_arguments_keep_8246_defaults_and_accept_8458_without_caps(self):
+        required = ['--checkpoint', 'base.pt', '--output-dir', 'unused']
+        _, original = parse_args(required)
+        self.assertEqual(original.checkpoint_batch, 8246)
+        self.assertEqual(original.checkpoint_sha256,
+            '4d125575cdc126044ec9b2e773252237cb9743c36032a08d4857f4d876150db7')
+        _, current = parse_args(required + ['--checkpoint-batch', '8458', '--checkpoint-sha256',
+            '918016ed000669f7bd17b241565f816ad6861aea484cb6c8876791440cf50787',
+            '--checkpoint-release', 'https://github.com/murillo128/arc-agi-3-model/releases/tag/lora-base-b8458-20261028'])
+        self.assertEqual(current.checkpoint_batch, 8458)
+        self.assertEqual(current.checkpoint_sha256,
+            '918016ed000669f7bd17b241565f816ad6861aea484cb6c8876791440cf50787')
+        self.assertIsNone(current.max_actions)
+        self.assertIsNone(current.max_game_seconds)
+        self.assertIsNone(current.report_issue)
+
+    def test_identity_checks_real_file_hash_then_portable_metadata(self):
+        # Standard SHA-256 test vector; model deserialization has its own integration test.
+        digest = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+        sentinel = SimpleNamespace(runtime=SimpleNamespace(metadata={'source_batches': 8458}))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'base.pt'
+            path.write_bytes(b'abc')
+            identity = dict(expected_sha256=digest, expected_source_batches=8458)
+            with patch('model.online_lora_experiment.load', return_value=sentinel) as loader:
+                self.assertIs(verified_checkpoint(path, identity, config=AdaptationConfig(), max_actions=None), sentinel)
+                self.assertEqual(identity['source_batches'], 8458)
+                self.assertEqual(identity['sha256_before'], digest)
+                loader.reset_mock()
+                with self.assertRaisesRegex(ValueError, 'SHA-256'):
+                    verified_checkpoint(path, dict(expected_sha256='0'*64, expected_source_batches=8458),
+                                        config=AdaptationConfig(), max_actions=None)
+                loader.assert_not_called()
+                with self.assertRaisesRegex(ValueError, 'source batch mismatch'):
+                    verified_checkpoint(path, dict(expected_sha256=digest, expected_source_batches=8246),
+                                        config=AdaptationConfig(), max_actions=None)
+
+    def test_pending_thresholds_keep_no_change_unavailable_and_do_not_mutate_diagnostics(self):
+        diagnostics = dict(convergence={
+            'goal': dict(reason='plateau', final=dict(metrics=dict(color_error=.2, mask_error=.05))),
+            'predictor': dict(reason='no_change', final=dict(metrics=dict(delta_error=None, latest_delta_error=None)))})
+        result = convergence_report(diagnostics, AdaptationConfig())
+        self.assertEqual(result['goal']['pending_thresholds'], {'color_error': {'value': .2, 'threshold': .1}})
+        self.assertEqual(result['predictor']['pending_thresholds'], {})
+        self.assertIsNone(result['predictor']['final']['metrics']['delta_error'])
+        self.assertNotIn('pending_thresholds', diagnostics['convergence']['goal'])
+
+    def test_failed_publication_retains_scalar_report_and_pending_games(self):
+        report = dict(games=[], aggregate={'games_recorded': 0}, status='failed', commit='test',
+            checkpoint=dict(expected_source_batches=8458, expected_sha256='a'*64, release='release-8458'))
+        body = render_report(report)
+        self.assertIn('batch **8458**', body)
+        self.assertIn('ar25-0c556536', body)
+        self.assertNotIn('arc3-lora-smoke-base', body)
+        with tempfile.TemporaryDirectory() as directory, self.assertLogs(level='ERROR'), \
+             patch('model.online_lora_reporting.subprocess.run', return_value=SimpleNamespace(returncode=1)):
+            publish_report(Path(directory), report, 157)
+            self.assertEqual((Path(directory) / 'issue-final.md').read_text(), body)
+            self.assertFalse(json.loads((Path(directory) / 'issue-final.publication.json').read_text())['published'])
+
     def test_unlimited_defaults_continue_past_eighty_until_win(self):
         events = []
         policy = Policy(None, events)
@@ -135,6 +201,7 @@ class OnlineExperimentTests(unittest.TestCase):
         self.assertEqual(result['actions_by_level']['1'],
                          dict(actions=3, resets=1, ordinary_actions=2, no_visual_effect=2))
         self.assertEqual(result['prediction']['samples'], 1)
+        self.assertEqual(result['prediction_exclusions'], {'reset': 1, 'level_change': 1})
         self.assertTrue(result['win'])
         self.assertEqual(result['stop_reason'], 'win')
 
