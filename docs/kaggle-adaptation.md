@@ -48,8 +48,9 @@ They are descriptive, not a causal comparison of equally difficult transitions.
 Every returned action is logged, including no-ops, failures, terminal results and
 level changes. The SDK's official scorecard supplies RHAE and per-level action
 counts, including failed attempts; unavailable references produce null RHAE.
-SDK ordinary-action counts exclude RESET, unlike the 80-request experiment cap.
-`make`'s initial reset is reported separately. Time is checked before selection
+SDK 0.9.9 counts partial RESET in both actions and resets; a full initialization
+starts a scorecard run at zero actions. The experiment counts every agent request,
+including RESET, while `make`'s initial reset is reported separately. Time is checked before selection
 and again before action dispatch. Already-running GPU/SDK operations and their
 confirmation finish; measured overruns remain visible. Game time includes policy
 creation, provisioning, diagnostics and learning; initial shared-base loading and
