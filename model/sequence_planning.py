@@ -200,27 +200,34 @@ class SequencePlanning:
                             states[i, t, True] = (encoded.z(step.after).detach(), next_h[k].detach())
         e, device = self.engine, self.engine.device
         losses, colors, masks, sample = [], [], [], None
+        goal_batches = []
+        self.goal.eval()
         for offset in range(0, len(examples), self.config.minibatch):
             rows = examples[offset:offset+self.config.minibatch]
             z, h = (torch.stack([states[i, row['index'], False][k] for i, row in rows]) for k in (0, 1))
             before = torch.tensor(np.stack([selected[i].transitions[row['index']].before.final for i,row in rows]),device=device).long()
             target = torch.tensor(np.stack([row['frame'] for _,row in rows]),device=device).long()
             mask = torch.tensor(np.stack([row['mask'] for _,row in rows]),device=device).bool()
-            self.goal.train()
-            for attempt in range(self.config.passes):
+            goal_batches.append((z, h, before, target, mask))
+            # Measure the entire sample before any head update, so later
+            # minibatches cannot benefit from earlier examples in this batch.
+            with torch.no_grad(), e.autocast():
+                logits, mask_logits = self.goal(z, h, *before.shape[-2:])
+                predicted = logits.argmax(-1)
+                union = ((before != target) | (before != predicted)) & mask
+                colors.extend((((predicted != target) & union).sum((1,2))/union.sum((1,2)).clamp_min(1)).cpu().tolist())
+                masks.extend(balanced_regions(((mask_logits>0) != mask).float(),mask,~mask).cpu().tolist())
+                if sample is None:
+                    sample = dict(game=selected[rows[0][0]].game, before=before[0].cpu().tolist(),
+                        target=target[0].cpu().tolist(), mask=mask[0].cpu().tolist(),
+                        predicted=predicted[0].cpu().tolist(), predicted_mask=(mask_logits[0]>0).cpu().tolist())
+        self.goal.train()
+        for z, h, before, target, mask in goal_batches:
+            for _ in range(self.config.passes):
                 self.goal_optimizer.zero_grad(set_to_none=True)
                 with e.autocast():
                     logits, mask_logits = self.goal(z, h, *before.shape[-2:])
                     loss = goal_loss(logits, mask_logits, before, target, mask)
-                if attempt == 0:
-                    predicted = logits.detach().argmax(-1)
-                    union = ((before != target) | (before != predicted)) & mask
-                    colors.extend((((predicted != target) & union).sum((1,2))/union.sum((1,2)).clamp_min(1)).cpu().tolist())
-                    masks.extend(balanced_regions(((mask_logits.detach()>0) != mask).float(),mask,~mask).cpu().tolist())
-                    if sample is None:
-                        sample = dict(game=selected[rows[0][0]].game, before=before[0].cpu().tolist(),
-                            target=target[0].cpu().tolist(), mask=mask[0].cpu().tolist(),
-                            predicted=predicted[0].cpu().tolist(), predicted_mask=(mask_logits[0].detach()>0).cpu().tolist())
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.goal.parameters(), 1., error_if_nonfinite=True)
                 self.goal_optimizer.step(); self.goal_updates += 1

@@ -163,7 +163,16 @@ class SequencePlanningTests(unittest.TestCase):
         engine.model.zero_grad(set_to_none=True)
         before = deepcopy(engine.model.state_dict())
         goal_before, path_before = deepcopy(heads.goal.state_dict()), deepcopy(heads.path.state_dict())
+        measured_versions = []
+        versions = tuple(p._version for p in heads.goal.parameters())
+        def measured(module, inputs):
+            if not torch.is_grad_enabled():
+                measured_versions.append(tuple(p._version for p in module.parameters()))
+        hook = heads.goal.register_forward_pre_hook(measured)
         metrics, sample = heads.fit(sessions)
+        hook.remove()
+        self.assertEqual(measured_versions, [versions, versions],
+                         'All diagnostic minibatches must use the same pre-update head')
         self.assertGreater(metrics['goal_updates'], 0)
         self.assertGreater(metrics['path_updates'], 0)
         self.assertEqual(sample['game'], 'sc01-v1')
