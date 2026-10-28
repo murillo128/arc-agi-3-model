@@ -71,6 +71,19 @@ class SequenceHistoryTests(unittest.TestCase):
             history.refresh()
             self.assertEqual([r['batch'] for r in json.loads(history.snapshot()[0])['history']],batches)
 
+    def test_expanding_telemetry_keeps_same_training_history_but_not_other_cohorts(self):
+        self.write([1,2])
+        history = SequenceHistory(self.report, self.archive)
+        payload = self.write([3], identity='expanded-catalog')
+        payload['history_identity'] = 'run-1'
+        self.report.write_text(json.dumps(payload))
+        restored = SequenceHistory(self.report, self.archive)
+        self.assertEqual([r['batch'] for r in json.loads(restored.snapshot()[0])['history']], [1,2,3])
+        payload['games'] = ['different-game']
+        self.report.write_text(json.dumps(payload))
+        restored.refresh()
+        self.assertEqual([r['batch'] for r in json.loads(restored.snapshot()[0])['history']], [3])
+
     def test_unavailable_or_foreign_archive_keeps_live_metrics_and_never_overwrites_report(self):
         self.write([1,2])
         with self.assertRaises(ValueError):

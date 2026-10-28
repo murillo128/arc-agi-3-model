@@ -161,7 +161,7 @@ class SequencePlanning:
             logits, mask = self.goal(state.z[None], state.h, *state.geometry)
         return logits.argmax(-1)[0].cpu().numpy().astype(np.uint8), (mask[0] > 0).cpu().numpy()
 
-    def fit(self, sessions):
+    def fit(self, sessions, *, telemetry=None):
         begin = time.perf_counter()
         selected = [s for s in sessions if s.planning is not None]
         metrics = {key: sum(s.planning['counts'].get(key, 0) for s in selected) for key in (
@@ -235,8 +235,11 @@ class SequencePlanning:
                     logits, mask_logits = self.goal(z, h, *before.shape[-2:])
                     loss = goal_loss(logits, mask_logits, before, target, mask)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.goal.parameters(), 1., error_if_nonfinite=True)
+                capture = telemetry.before_step('goal_planner', self.goal_optimizer) if telemetry else None
+                norm = torch.nn.utils.clip_grad_norm_(self.goal.parameters(), 1., error_if_nonfinite=True)
                 self.goal_optimizer.step(); self.goal_updates += 1
+                if telemetry:
+                    telemetry.after_step(capture, norm, loss.detach())
                 losses.append(float(loss.detach()))
         metrics.update(goal_loss=sum(losses)/len(losses) if losses else None,
             goal_color_error=sum(colors)/len(colors) if colors else None,
@@ -264,8 +267,11 @@ class SequencePlanning:
                     logits,cost = self.path(z,h,goals,mask,(height+patch-1)//patch,(width+patch-1)//patch,budget)
                     loss = path_loss(logits, cost, targets, duration)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.path.parameters(),1.,error_if_nonfinite=True)
+                capture = telemetry.before_step('path_planner', self.path_optimizer) if telemetry else None
+                norm = torch.nn.utils.clip_grad_norm_(self.path.parameters(),1.,error_if_nonfinite=True)
                 self.path_optimizer.step(); self.path_updates += 1
+                if telemetry:
+                    telemetry.after_step(capture, norm, loss.detach())
                 losses.append(float(loss.detach()))
         metrics['path_loss'] = sum(losses)/len(losses) if losses else None
         metrics.update(self.status(), seconds=time.perf_counter()-begin, goal_examples=len(examples), path_examples=len(path_rows))

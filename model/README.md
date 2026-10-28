@@ -618,6 +618,20 @@ checkpoints. El dashboard muestra la pestaña **Optimización** desde cualquier
 página; las ejecuciones no instrumentadas muestran un estado explícito de ausencia.
 No se reconstruyen gradientes históricos a partir de los pesos.
 
+Con el entrenamiento de planners activo, el selector incluye **Goal Planner**
+y **Path Planner**, con sus matrices, gradientes y trayectorias 2D/3D. Se registran
+los parámetros de las cabezas independientes sin incorporarlos al world model.
+Sus colores representan la loss media de sus actualizaciones del batch; un batch
+sin entrenamiento de esa cabeza no tiene loss. Los otros módulos conservan la
+NLL visual. La cadencia de capturas se aplica por separado al predictor y a cada
+planner; no se añaden predicciones ni pasos del optimizador.
+Ampliar el catálogo inicia un nuevo segmento de parámetros, que necesita cuatro
+muestras para calibrarse. La reanudación conserva la identidad del historial de
+métricas del entrenamiento (`history_identity`), separado de la nueva identidad
+de telemetría; los cambios de cohorte siguen invalidando el historial anterior.
+Si las primeras muestras son idénticas, la base nula se calibra al llegar el
+primer cambio de pesos; una base con direcciones medidas permanece fija.
+
 ```sh
 .venv/bin/python -u -m model.sequence_training \
   --training-config model/sequence_config.example.json \
@@ -633,12 +647,12 @@ No se reconstruyen gradientes históricos a partir de los pesos.
   `RMS(ΔW)/max(RMS(W), 1e-12)` es una estimación sobre esa muestra. Los mapas
   de la matriz seleccionada calculan RMS sobre bloques completos, sin cancelar
   signos. El histograma de ΔW utiliza la muestra. Se distinguen congelación,
-  gradiente ausente y cero medido. El último update de cada batch siempre se
+  gradiente ausente y cero medido. El último update del predictor de cada batch se
   captura, además de la cadencia, para alinearlo con su evaluación.
-- **Trayectoria:** PCA por módulo sobre la misma muestra estratificada, con dos
-  ejes fijos calibrados tras cuatro batches. La altura es la NLL de color sin
-  ponderación sobre las observaciones reales de evaluación, idénticas entre
-  batches; no es el loss del minibatch ni un paisaje de pérdidas. El porcentaje
+- **Trayectoria:** PCA por módulo sobre la misma muestra estratificada, con tres
+  ejes de pesos calibrados tras cuatro batches y vistas 2D/3D. El color muestra
+  NLL visual para el world model, o loss media del batch para los planners;
+  la etiqueta indica la fuente y no representa un paisaje de pérdidas. El porcentaje
   visible y el giro pertenecen a la muestra, no al vector completo. Recalibrar
   cambia la base y reproyecta todos los puntos retenidos; no mueve los pesos.
 - **Memoria:** sonda inicial y después bajo demanda. Derivada de la pérdida

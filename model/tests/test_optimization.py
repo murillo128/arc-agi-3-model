@@ -96,6 +96,9 @@ class OptimizationTests(unittest.TestCase):
         for _ in range(5):
             still.append([0, 0])
         self.assertIsNone(still.project()[-1]['coverage'])
+        still.append([1, 0])
+        self.assertAlmostEqual(still.project()[-1]['coverage'], 1.)
+        self.assertNotEqual(still.project()[-1]['x'], still.project()[-2]['x'])
 
     def test_temporal_probe_matches_analytic_derivative_and_preserves_state(self):
         e, row = scalar_engine(), session()
@@ -164,6 +167,7 @@ class OptimizationTests(unittest.TestCase):
                         torch.testing.assert_close(observed[optimizer]['state'][key][field], value, rtol=0, atol=0)
             report = json.loads((root/'observed/report.json').read_text())
             self.assertTrue(report['optimization_identity'])
+            self.assertEqual(report['history_identity'], first['identity'])
             self.assertTrue(np.isfinite(report['history'][-1]['quality']['reference']['nll']))
             self.assertEqual(OptimizationControl(root/'observed/report.json').snapshot()['status'], 'ready')
 
@@ -223,6 +227,8 @@ class OptimizationTests(unittest.TestCase):
                     (('points', 1), None),
                     (('points', 1, 'event_id'), 4),
                     (('points', 1, 'reference_loss'), float('inf')),
+                    (('points', 1, 'module_losses'), {'dynamics': 'invalid'}),
+                    (('points', 1, 'module_losses'), {'unknown_module': 1.}),
                     (('planes', 'dynamics', 'projections'), state['planes']['dynamics']['projections'][:3]),
                     (('planes', 'dynamics', 'projections', 1), None),
                     (('probe', 'steps'), [None]),

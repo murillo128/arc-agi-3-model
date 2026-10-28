@@ -10,7 +10,12 @@ class ParameterPlane:
     def append(self, vector):
         self.samples.append(np.asarray(vector, dtype=np.float32))
         self.samples = self.samples[-96:]
-        if self.basis is None and len(self.samples) >= 4:
+        # A module may be idle for its first batches (e.g. a sparse planner).
+        # A zero basis has no directions to preserve when its first update arrives.
+        moving_from_zero = (self.basis is not None and not np.any(self.basis)
+                            and len(self.samples) > 1
+                            and not np.array_equal(self.samples[-1], self.samples[-2]))
+        if len(self.samples) >= 4 and (self.basis is None or moving_from_zero):
             self.calibrate()
 
     def calibrate(self):
