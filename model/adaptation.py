@@ -116,6 +116,12 @@ class Runtime:
     def __init__(self, bundle):
         self.engine, self.goal, self.path = bundle.engine, bundle.goal, bundle.path
         self.metadata = bundle.metadata
+        # Adaptation must not opt into BF16 emulation on T4/P100. Keep this
+        # policy at the online boundary; the training Engine policy is unchanged.
+        self.engine.amp = False
+        if self.engine.device.type == 'cuda':
+            with torch.cuda.device(self.engine.device):
+                self.engine.amp = torch.cuda.is_bf16_supported(including_emulation=False)
         self.router = AdapterRouter(dict(encoder=self.engine.model.encoder,
             decoder=self.engine.model.decoder, predictor=self.engine.model.dynamics,
             goal=self.goal, path=self.path))

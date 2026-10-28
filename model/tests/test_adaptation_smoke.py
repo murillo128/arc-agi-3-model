@@ -1,6 +1,9 @@
 """Smoke evidence distinguishes simulated inputs from public SDK experience."""
 from dataclasses import asdict, replace
+from contextlib import redirect_stderr
 import hashlib
+import io
+import json
 import math
 from pathlib import Path
 import tempfile
@@ -64,8 +67,26 @@ class AdaptationSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             checkpoint = portable_fixture(Path(directory))
             digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
-            report = self_check(checkpoint, config=dict(per_observation_seconds=30.,
-                                  total_seconds=120., reconstruction_threshold=0.))
+            progress = io.StringIO()
+            with redirect_stderr(progress):
+                report = self_check(checkpoint, config=dict(per_observation_seconds=30.,
+                                      total_seconds=120., reconstruction_threshold=0.))
+            events = [json.loads(line) for line in progress.getvalue().splitlines()]
+            self.assertEqual([event['stage'] for event in events],
+                             ['loading', 'loaded', 'checking', 'learning', 'verifying', 'complete'])
+            self.assertEqual([event['elapsed_seconds'] for event in events],
+                             sorted(event['elapsed_seconds'] for event in events))
+            self.assertEqual(report['runtime']['device'], 'cpu')
+            self.assertEqual(report['runtime']['precision'], 'fp32')
+            self.assertFalse(report['runtime']['native_bf16'])
+            self.assertEqual(report['runtime']['checkpoint_loading'], 'eager')
+            self.assertEqual(report['runtime']['parameter_dtype'], 'torch.float32')
+            timings = report['timings']
+            self.assertTrue(all(math.isfinite(v) and v >= 0 for v in timings.values()))
+            self.assertGreater(timings['load_seconds'], 0)
+            self.assertGreaterEqual(timings['startup_seconds'], timings['load_seconds'])
+            self.assertGreaterEqual(report['elapsed_seconds'], sum(timings[key] for key in
+                ('startup_seconds', 'interaction_seconds', 'verification_seconds')))
             self.assertTrue(report['passed'], report)
             self.assertEqual(report['kind'], 'offline-fixture-self-check')
             self.assertEqual(report['real_sdk_transitions'], 0)
@@ -96,6 +117,9 @@ class AdaptationSmokeTests(unittest.TestCase):
             self.assertTrue(report['passed'], report)
             self.assertEqual(report['kind'], 'public-sdk-level1-smoke')
             self.assertEqual(report['real_sdk_transitions'], 2)
+            self.assertEqual(report['runtime']['precision'], 'fp32')
+            self.assertGreater(report['timings']['load_seconds'], 0)
+            self.assertGreater(report['timings']['interaction_seconds'], 0)
             self.assertEqual([game['game'] for game in report['games']], ['sc01-v1', 'si01-v1'])
             self.assertEqual([game['executed_sdk_actions'] for game in report['games']], [1, 1])
             self.assertTrue(report['base_immutable'])

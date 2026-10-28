@@ -116,7 +116,10 @@ def from_payload(payload, *, device='cpu'):
 
 
 def load(path, *, device='cpu'):
-    return from_payload(torch.load(path, map_location='cpu', weights_only=True, mmap=True), device=device)
+    # Mounted offline inputs need not support efficient memory mapping. Read the
+    # storages eagerly before validation/copying; do not retain a payload/cache.
+    # Peak host storage is the payload plus one base and per-tensor check scratch.
+    return from_payload(torch.load(path, map_location='cpu', weights_only=True, mmap=False), device=device)
 
 
 def _digest(path):

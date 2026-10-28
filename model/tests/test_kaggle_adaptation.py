@@ -247,6 +247,12 @@ print(json.dumps(dict(id=action.id, data=action.data, h=policy.state.h.tolist())
                 self.assertTrue(report['passed'])
                 self.assertEqual(report['real_sdk_transitions'], 0)
                 self.assertGreater(report['optimizer_steps'], 0)
+                self.assertEqual(report['runtime']['precision'], 'fp32')
+                self.assertEqual(report['runtime']['checkpoint_loading'], 'eager')
+                self.assertGreater(report['timings']['load_seconds'], 0)
+                events = [json.loads(line) for line in completed.stderr.splitlines() if line.startswith('{')]
+                self.assertEqual([event['stage'] for event in events],
+                                 ['loading', 'loaded', 'checking', 'learning', 'verifying', 'complete'])
                 self.assertFalse(notebook['metadata']['kaggle']['isInternetEnabled'])
                 self.assertNotIn(str(asset), json.dumps(notebook))
                 # A failed self-check stops normal notebook execution before the

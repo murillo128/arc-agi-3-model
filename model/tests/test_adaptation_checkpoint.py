@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -80,12 +81,39 @@ class AdaptationCheckpointTests(unittest.TestCase):
                 lambda p: p['world']['weights'].update({'encoder.patch.weight': torch.ones(1)}),
                 lambda p: p['goal']['weights'].update({'project.weight': p['goal']['weights']['project.weight'].double()}),
                 lambda p: p['goal']['weights']['project.weight'].fill_(float('nan')),
+                lambda p: p['world']['weights'].pop('encoder.patch.weight'),
+                lambda p: p['path']['weights'].update(unexpected=torch.ones(1)),
+                lambda p: p['path']['weights']['project.weight'].fill_(float('inf')),
+                lambda p: p['goal']['weights']['project.weight'].fill_(float('-inf')),
             ]
             for mutation in mutations:
                 payload = deepcopy(original)
                 mutation(payload)
+                torch.save(payload, output)
                 with self.subTest(mutation=mutation), self.assertRaises((ValueError, TypeError)):
-                    from_payload(payload)
+                    load(output)
+
+    def test_read_only_asset_loads_without_filesystem_mapping_and_matches_mmap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            torch.save(sequence_snapshot(), source)
+            export(source, output)
+            before = output.read_bytes()
+            reference = from_payload(torch.load(output, weights_only=True, mmap=True))
+            output.chmod(0o444)
+            with patch.object(torch.UntypedStorage, 'from_file',
+                              side_effect=OSError('input filesystem cannot map storage')):
+                actual = load(output)
+            for expected_module, actual_module in ((reference.engine.model, actual.engine.model),
+                                                   (reference.goal, actual.goal),
+                                                   (reference.path, actual.path)):
+                for key, expected in expected_module.state_dict().items():
+                    value = actual_module.state_dict()[key]
+                    self.assertTrue(torch.equal(value, expected), key)
+                    self.assertNotEqual(value.data_ptr(), expected.data_ptr(), key)
+                self.assertTrue(all(not p.requires_grad for p in actual_module.parameters()))
+            self.assertEqual(actual.metadata, reference.metadata)
+            self.assertEqual(output.read_bytes(), before)
 
 
 if __name__ == '__main__':
