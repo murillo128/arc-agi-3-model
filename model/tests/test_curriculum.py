@@ -701,8 +701,11 @@ class CurriculumTests(unittest.TestCase):
         self.assertTrue(all(r['representation_loss'] and r['predictor_loss'] for r in result['records']))
         self.assertIsNotNone(result['records'][-1]['predictor_loss']['rollout'])
         goal = agent.planner.goal
+        self.assertIsNone(goal['z'], 'Partial goals wait for the next real planning decision')
+        agent.planner.choose(agent.state, agent.observation, agent.rng)
+        target = np.where(goal['pixel_mask'], goal['frame'], agent.observation.final).astype(np.uint8)
         with torch.no_grad(), e.autocast():
-            encoded = e.encode([replace(obs(),frames=goal['frame'][None])])[0]
+            encoded = e.encode([replace(obs(),frames=target[None])])[0]
         torch.testing.assert_close(goal['z'],encoded)
         weights = fingerprint(e.model)
         with patch.object(e,'prediction',side_effect=predict_and_capture):

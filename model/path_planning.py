@@ -13,6 +13,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from .data import Observation, Episode
+from .goal_observation import compose_goal_observation
 from .learning import State
 from .planning import candidates
 
@@ -156,13 +157,15 @@ class PathPlanner:
         if (frame.ndim != 2 or frame.shape != mask.shape or not mask.any()
                 or not np.isin(frame, np.arange(16)).all()):
             raise ValueError('A goal requires a palette frame and a nonempty same-size mask')
-        observation = Observation(np.array(frame[None], dtype=np.uint8), (), 'NOT_FINISHED', 0, 0)
-        with self.engine.autocast():
-            z = self.engine.encode([observation])[0]
+        z = None
+        if mask.all():
+            observation = Observation(np.array(frame[None], dtype=np.uint8), (), 'NOT_FINISHED', 0, 0)
+            with self.engine.autocast():
+                z = self.engine.encode([observation])[0].detach()
         patch = self.engine.model.config.patch
         tensor = torch.tensor(mask.astype(np.float32), device=self.engine.device)[None, None]
         tensor = F.avg_pool2d(tensor, patch, patch, ceil_mode=True).flatten(2).transpose(1, 2)
-        self.goal = dict(z=z.detach(), mask=tensor, frame=np.array(frame, copy=True),
+        self.goal = dict(z=z, mask=tensor, frame=np.array(frame, copy=True),
                          pixel_mask=np.array(mask, dtype=bool, copy=True))
         self.noop_history.clear()
         self.clear_paths()
@@ -177,6 +180,13 @@ class PathPlanner:
             raise ValueError('Path planning requires a positive action budget')
         self.engine.model.eval()
         self.evaluator.eval()
+        if not self.goal['pixel_mask'].all():
+            # Every imagined branch shares the current real root's context.
+            # Refresh only at the next real decision, never from imagined pixels.
+            frame = compose_goal_observation(self.goal['frame'], self.goal['pixel_mask'], observation.final)
+            target = Observation(frame[None], (), 'NOT_FINISHED', 0, 0)
+            with self.engine.autocast():
+                self.goal['z'] = self.engine.encode([target])[0].detach()
         choices = (self.change_prior.candidates(observation, rng, self.config.clicks)
                    if self.change_prior is not None else candidates(observation, rng, self.config.clicks))
         root_allowed = None
@@ -359,22 +369,24 @@ separate conditional mean over successful segments only.
                         indices = [indices[-1]] + self.rng.sample(indices[:-1],min(3,len(indices)-1))
                     else:
                         indices=self.rng.sample(indices,min(4,len(indices)))
-                    target_obs=Observation(target['frame'][None],(),'NOT_FINISHED',0,0)
-                    goal=engine.encode([target_obs])[0].detach()
+                    target_observations = [Observation(compose_goal_observation(
+                        target['frame'], target['mask'], item['episode'].observations[i].final)[None],
+                        (), 'NOT_FINISHED', 0, 0) for i in indices]
+                    goal=torch.stack(engine.encode(target_observations)).detach()
                     encoded.append(dict(z=torch.stack([states[i].z for i in indices]).detach(),
                         h=torch.cat([states[i].h for i in indices]).detach(),goal=goal,mask=goal_mask,
                         indices=indices,record=target))
                 if self.predicted_inputs:
                     needed = sorted({i for entry in encoded[first_encoded:] for i in entry['indices']})
                     groups = {}
-                    predicted = {0: (states[0].z, states[0].h)}
+                    predicted = {0: (states[0].z, states[0].h, 0)}
                     for i in needed:
                         if i:
                             horizons = [n for n in range(1,min(3,i)+1) if states[i-n].z is not None]
                             if horizons:
                                 groups.setdefault(self.rng.choice(horizons), []).append(i)
                             else:
-                                predicted[i] = (states[i].z,states[i].h)
+                                predicted[i] = (states[i].z,states[i].h,i)
                     for steps, destinations in groups.items():
                         origins = [i-steps for i in destinations]
                         z = torch.stack([states[i].z for i in origins])
@@ -383,11 +395,20 @@ separate conditional mean over successful segments only.
                             actions = engine.actions([item['episode'].actions[i+offset] for i in origins])
                             z,h,_ = engine.predict(z,h,actions,height,width)
                         for j,i in enumerate(destinations):
-                            predicted[i] = (z[j].detach(),h[j:j+1].detach())
+                            predicted[i] = (z[j].detach(),h[j:j+1].detach(),origins[j])
                     for entry in encoded[first_encoded:]:
                         indices = entry['indices']
+                        target = entry['record']
+                        # Imagined states retain the real rollout-origin context;
+                        # the later observed destination is only a training label.
+                        target_observations = [Observation(compose_goal_observation(
+                            target['frame'], target['mask'],
+                            item['episode'].observations[predicted[i][2]].final)[None],
+                            (), 'NOT_FINISHED', 0, 0) for i in indices]
+                        goals = torch.stack(engine.encode(target_observations)).detach()
                         entry['z'] = torch.cat((entry['z'],torch.stack([predicted[i][0] for i in indices])))
                         entry['h'] = torch.cat((entry['h'],torch.cat([predicted[i][1] for i in indices])))
+                        entry['goal'] = torch.cat((entry['goal'], goals))
                         entry['indices'] = indices * 2
                 # A real raw replay entry must not retain weight-dependent tensors.
                 item['episode'].latent_cache.clear()
@@ -395,7 +416,7 @@ separate conditional mean over successful segments only.
         if not encoded:
             return None
         z=torch.cat([v['z'] for v in encoded]);h=torch.cat([v['h'] for v in encoded])
-        goals=torch.cat([v['goal'][None].expand(len(v['indices']),-1,-1) for v in encoded])
+        goals=torch.cat([v['goal'] for v in encoded])
         masks=torch.cat([v['mask'].expand(len(v['indices']),-1,-1) for v in encoded])
         targets=torch.tensor([float(v['record']['success']) for v in encoded for _ in v['indices']],device=engine.device)
         durations=torch.tensor([math.log1p(v['record']['end']-i) for v in encoded for i in v['indices']],device=engine.device)
