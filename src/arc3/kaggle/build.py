@@ -25,15 +25,50 @@ def code_cell(source: str) -> dict:
 
 
 def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "cpu",
-                   agent_checkpoint: str | None = None) -> dict:
+                   agent_checkpoint: str | None = None, adaptive: bool = False,
+                   adaptation_config: dict | None = None, cpu_threads: int = 2,
+                   smoke_output: str = '/kaggle/working/adaptation-smoke.json',
+                   extra_wheel_dir: str | None = None) -> dict:
     if max_actions <= 0:
         raise ValueError("max_actions must be positive")
     if accelerator not in ACCELERATORS:
         raise ValueError(f"Unsupported accelerator: {accelerator}")
+    if type(adaptive) is not bool:
+        raise ValueError('adaptive must be boolean')
+    if type(cpu_threads) is not int or not 1 <= cpu_threads <= 16:
+        raise ValueError('cpu_threads must be an integer in 1..16')
+    if adaptive and agent_checkpoint is None:
+        raise ValueError('Adaptive mode requires --agent-checkpoint with a portable base.pt')
+    if adaptation_config is not None and not adaptive:
+        raise ValueError('Adaptation configuration requires adaptive mode')
+    if adaptive:
+        from dataclasses import asdict
+        from model.adaptation import AdaptationConfig
+
+        if adaptation_config is not None and not isinstance(adaptation_config, dict):
+            raise ValueError('Adaptation configuration must be a JSON object')
+        try:
+            adaptation_config = asdict(AdaptationConfig(**(adaptation_config or {})))
+        except TypeError as exc:
+            raise ValueError(f'Invalid adaptation configuration: {exc}') from exc
+        smoke_path = PurePosixPath(smoke_output)
+        if (not smoke_path.is_relative_to('/kaggle/working') or '..' in smoke_path.parts
+                or smoke_path.suffix != '.json'):
+            raise ValueError('Smoke output must be a /kaggle/working/.../*.json path')
     if agent_checkpoint is not None:
         mount = PurePosixPath(agent_checkpoint)
         if not mount.is_relative_to('/kaggle/input') or '..' in mount.parts or mount.suffix != '.pt':
             raise ValueError('Agent checkpoint must be a mounted /kaggle/input/.../*.pt asset')
+    wheel_dirs = [f'{INPUT_ROOT}/arc_agi_3_wheels']
+    if extra_wheel_dir is not None:
+        if not isinstance(extra_wheel_dir, str) or '\x00' in extra_wheel_dir:
+            raise ValueError('Extra wheel directory must be a mounted /kaggle/input/... directory')
+        wheel_mount = PurePosixPath(extra_wheel_dir)
+        if (not wheel_mount.is_relative_to('/kaggle/input')
+                or wheel_mount == PurePosixPath('/kaggle/input') or '..' in wheel_mount.parts
+                or wheel_mount.suffix.lower() == '.whl'):
+            raise ValueError('Extra wheel directory must be a mounted /kaggle/input/... directory, not a wheel file')
+        wheel_dirs.append(str(wheel_mount))
     accelerator_name, uses_gpu = ACCELERATORS[accelerator]
     sources = {
         "arc3/__init__.py": "",
@@ -43,14 +78,21 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
             files("arc3.kaggle").joinpath("agent.py").read_text(encoding="utf-8")
             + f"\nMyAgent.SEED = {seed!r}\nMyAgent.MAX_ACTIONS = {max_actions!r}\n"
             + f"MyAgent.AGENT_CHECKPOINT = {agent_checkpoint!r}\nMyAgent.DEVICE = {'cuda' if uses_gpu else 'cpu'!r}\n"
+            + f"MyAgent.ADAPTIVE = {adaptive!r}\nMyAgent.ADAPTATION_CONFIG = {adaptation_config!r}\n"
+            + (f"import torch\ntorch.set_num_threads({cpu_threads!r})\n" if agent_checkpoint else '')
         ),
     }
     if agent_checkpoint is not None:
         # Versioned Python only. The checkpoint remains a separately mounted
         # offline asset; no host path, training data or weights enter the notebook.
-        for name in ('__init__', 'agent', 'agent_checkpoint', 'checkpoint', 'config',
-                     'data', 'learning', 'networks', 'metrics', 'sequence', 'planning',
-                     'goal_planning', 'goal_observation', 'path_planning', 'proposals'):
+        names = ['__init__', 'checkpoint', 'config', 'data', 'learning', 'networks',
+                 'metrics', 'planning', 'goal_observation', 'path_planning', 'spatial_adapter']
+        if adaptive:
+            names += ['adaptation', 'adaptation_heads', 'adaptation_checkpoint',
+                      'adaptation_smoke', 'lora', 'sequence_exploration']
+        else:
+            names += ['agent', 'agent_checkpoint', 'sequence', 'goal_planning', 'proposals']
+        for name in names:
             source = files('model').joinpath(f'{name}.py')
             if name == 'proposals' and not source.is_file():
                 continue
@@ -58,10 +100,24 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
     install = dedent(f"""\
         import subprocess
         import sys
-        subprocess.run([
-            sys.executable, '-m', 'pip', 'install', '--no-index', '--find-links',
-            '{INPUT_ROOT}/arc_agi_3_wheels', 'arc-agi=={SDK_VERSION}', 'python-dotenv'
-        ], check=True)
+        from pathlib import Path
+        offline_wheel_dirs = {wheel_dirs!r}
+        for wheel_dir in offline_wheel_dirs:
+            if not Path(wheel_dir).is_dir():
+                raise FileNotFoundError(
+                    f'Missing offline wheel directory: {{wheel_dir}}. Attach the competition input '
+                    'and the configured --extra-wheel-dir asset before running this notebook.')
+        try:
+            subprocess.run([
+                sys.executable, '-m', 'pip', 'install', '--no-index',
+                *[argument for directory in offline_wheel_dirs for argument in ('--find-links', directory)],
+                'arc-agi=={SDK_VERSION}', 'python-dotenv'
+            ], check=True)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                'Offline installation failed: attach arc-agi=={SDK_VERSION} and all required dependency wheels. '
+                'The competition bundle may contain an older SDK; use --extra-wheel-dir for the companion '
+                'wheel asset. Internet installation is disabled.') from exc
         from importlib.metadata import version
         assert version('arc-agi') == '{SDK_VERSION}', 'Unexpected SDK version'
     """)
@@ -87,6 +143,20 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         import shutil
         import time
         import urllib.request
+
+        if {adaptive!r} and not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
+            # Execute the embedded code and mounted weights before producing any
+            # starter artifact. This fixture check is not a scored game run.
+            environment = dict(os.environ)
+            environment.update({{'PYTHONPATH': str(source_root),
+                                'OMP_NUM_THREADS': {str(cpu_threads)!r},
+                                'MKL_NUM_THREADS': {str(cpu_threads)!r}}})
+            subprocess.run([
+                sys.executable, '-m', 'model.adaptation_smoke', '--self-check',
+                '--checkpoint', {agent_checkpoint!r}, '--device', {'cuda' if uses_gpu else 'cpu'!r},
+                '--threads', {str(cpu_threads)!r}, '--config-json', {json.dumps(adaptation_config)!r},
+                '--output', {smoke_output!r},
+            ], cwd=source_root, env=environment, check=True)
 
         if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
             # The competition gateway enforces scoring/lifetime restrictions.
@@ -117,6 +187,7 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
                 'OPERATION_MODE': 'online', 'ENVIRONMENTS_DIR': '',
                 'RECORDINGS_DIR': '/tmp/arc3-server-recordings',
                 'PYTHONPATH': str(source_root), 'MPLBACKEND': 'agg',
+                'OMP_NUM_THREADS': {str(cpu_threads)!r}, 'MKL_NUM_THREADS': {str(cpu_threads)!r},
             }})
             # The official framework makes each game once. The gateway produces
             # submission.parquet; this notebook does not create competition scores.
@@ -141,9 +212,13 @@ def build_notebook(seed: int = 0, max_actions: int = 80, *, accelerator: str = "
         },
         "cells": [
             {"cell_type": "markdown", "metadata": {}, "source": (
-                ("# ARC-AGI-3 frozen latent agent\n\n" if agent_checkpoint else "# ARC-AGI-3 seeded random baseline\n\n")
+                ("# ARC-AGI-3 per-game LoRA smoke agent\n\n" if adaptive else
+                 "# ARC-AGI-3 frozen latent agent\n\n" if agent_checkpoint else "# ARC-AGI-3 seeded random baseline\n\n")
                 + f"Generated from versioned Python source. Seed: {seed}; action budget: {max_actions}. "
-                "No online adaptation is implemented. Competition execution uses only "
+                + (f"Per-game adaptation is enabled. Save-and-run writes {smoke_output} from an offline fixture self-check; "
+                   "this and the dummy parquet are not game scores. " if adaptive else
+                   "This mode never updates model weights. ")
+                + "Competition execution uses only "
                 "the supplied offline wheels, official framework and gateway."
             )},
             code_cell(install), code_cell(embed), code_cell(run), code_cell(dummy),
@@ -160,6 +235,11 @@ def main() -> None:
     parser.add_argument("--max-actions", type=int, default=80)
     parser.add_argument("--agent-checkpoint", help="Mounted /kaggle/input/.../agent.pt; weights are never embedded")
     parser.add_argument("--agent-dataset", help="Optional owner/dataset reference for that mounted checkpoint")
+    parser.add_argument('--extra-wheel-dir', help='Mounted /kaggle/input/... directory with companion offline wheels, including arc-agi 0.9.9')
+    parser.add_argument('--adaptive', action='store_true', help='Opt in to per-game LoRA using a portable adaptation base')
+    parser.add_argument('--adaptation-config', help='Local JSON object containing bounded AdaptationConfig overrides')
+    parser.add_argument('--cpu-threads', type=int, default=2)
+    parser.add_argument('--smoke-output', default='/kaggle/working/adaptation-smoke.json')
     args = parser.parse_args()
     output = Path(args.output)
     if output.suffix != ".ipynb":
@@ -172,14 +252,18 @@ def main() -> None:
             not re.fullmatch(r'[A-Za-z0-9_-]+/[A-Za-z0-9_-]+', args.agent_dataset)):
         parser.error('--agent-dataset requires --agent-checkpoint and owner/dataset syntax')
     try:
+        adaptation_config = (json.loads(Path(args.adaptation_config).read_text(encoding='utf-8'))
+                             if args.adaptation_config else None)
         notebook = build_notebook(args.seed, args.max_actions, accelerator=args.accelerator,
-                                  agent_checkpoint=args.agent_checkpoint)
-    except ValueError as exc:
+                                  agent_checkpoint=args.agent_checkpoint, adaptive=args.adaptive,
+                                  adaptation_config=adaptation_config, cpu_threads=args.cpu_threads,
+                                  smoke_output=args.smoke_output, extra_wheel_dir=args.extra_wheel_dir)
+    except (OSError, ValueError) as exc:
         parser.error(str(exc))
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(notebook, indent=2) + "\n", encoding="utf-8")
     if args.username is not None:
-        artifact = 'frozen-agent' if args.agent_checkpoint else 'random-baseline'
+        artifact = 'adaptive-agent' if args.adaptive else 'frozen-agent' if args.agent_checkpoint else 'random-baseline'
         metadata = {
             "id": f"{args.username}/arc3-{artifact}", "title": f"ARC-AGI-3 {artifact.replace('-', ' ')}",
             "code_file": output.name, "language": "python", "kernel_type": "notebook",
