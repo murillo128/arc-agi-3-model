@@ -12,9 +12,12 @@ def render_report(report, game=None):
         return 'N/D' if value is None else f'{value:.{digits}f}'
 
     games = report['games']
-    pending = [name for name in GAMES if name not in {g['game'] for g in games}]
+    requested = report.get('requested_games', GAMES)
+    diagnostic = report.get('scope') == 'public-training-keyboard-diagnostic'
+    pending = [name for name in requested if name not in {g['game'] for g in games}]
     checkpoint = report['checkpoint']
-    lines = [f"Ejecución manual LoRA: actualización {'de ' + game['game'] if game else 'final'}.", '',
+    label = 'Diagnóstico LoRA de teclado (split de entrenamiento)' if diagnostic else 'Ejecución manual LoRA'
+    lines = [f"{label}: actualización {'de ' + game['game'] if game else 'final'}.", '',
         f"Código `{report['commit']}`; checkpoint batch **{checkpoint.get('source_batches', checkpoint['expected_source_batches'])}**, "
         f"SHA-256 `{checkpoint['expected_sha256']}`. Origen: {checkpoint.get('release') or 'archivo local indicado en la ejecución'}.", '',
         '| Juego | Niveles | Victoria | Acciones | RHAE % | Delta previo % | Adaptación s | Total s | GPU máx. GiB | Parada |',
@@ -28,13 +31,13 @@ def render_report(report, game=None):
             f"{number(row.get('elapsed_seconds'))} | "
             f"{number(row.get('peak_gpu_allocated_bytes', 0) / 2**30, 3)} | {row['stop_reason']} |")
     lines += ['', f"Estado: `{report['status']}`. Juegos pendientes: {', '.join(pending) or 'ninguno'}.", '',
-        'Agregado de los juegos registrados; RHAE medio sobre cinco sólo cuando están los cinco:',
+        f'Agregado de los juegos registrados; RHAE medio sólo al registrar los {len(requested)} juegos solicitados:',
         '```json', json.dumps(report['aggregate'], indent=2, allow_nan=False), '```']
     if game is not None:
         details = {key: game.get(key) for key in (
             'error', 'truncated', 'requests', 'confirmations', 'resets', 'actions_by_level', 'official',
             'prediction', 'prediction_exclusions', 'optimizer_steps_by_module', 'fit_stop_counts',
-            'final_fits', 'base_immutable', 'base_frozen', 'inactive_bank_unchanged')}
+            'final_fits', 'base_immutable', 'base_frozen', 'inactive_bank_unchanged', 'initial_available_actions')}
         details['numerical_failures'] = game.get('diagnostics', {}).get('numerical_failures')
         details['actions_per_solved_level'] = {key: value['actions']
             for key, value in game.get('actions_by_level', {}).items()
@@ -48,12 +51,18 @@ def render_report(report, game=None):
         lines += ['', f"Archivo base intacto al cierre: `{checkpoint['file_immutable']}`."]
     if report.get('error'):
         lines += ['', f"Error: `{report['error']}`."]
-    lines += ['', 'Comparación descriptiva con #153: cambian tanto los pesos (8246 → 8458) como el protocolo '
-        '(pasos/presupuestos e histórico 32 → umbrales/plateau e histórico completo ponderado). '
-        'No permite atribuir causalmente diferencias a LoRA. N/D incluye denominadores vacíos; '
+    if diagnostic:
+        lines += ['', 'Diagnóstico adicional sobre un juego público del split de entrenamiento: '
+            'el modelo base puede haberlo visto. No mide generalización a un juego desconocido '
+            'ni se incorpora al agregado de los cinco held-out.']
+    else:
+        lines += ['', 'Comparación descriptiva con #153: cambian tanto los pesos (8246 → 8458) como el protocolo '
+            '(pasos/presupuestos e histórico 32 → umbrales/plateau e histórico completo ponderado). '
+            'No permite atribuir causalmente diferencias a LoRA. Son juegos públicos held-out.']
+    lines += ['', 'N/D incluye denominadores vacíos; '
         'las acciones sin cambios siguen contando, y los resets/cambios de nivel se separan del error predictivo. '
         'Los errores posteriores al ajuste no demuestran generalización. '
-        'Son juegos públicos held-out y pesos de desarrollo; no una puntuación oficial de Kaggle.']
+        'Pesos de desarrollo; no una puntuación oficial de Kaggle.']
     return '\n'.join(lines) + '\n'
 
 

@@ -341,13 +341,13 @@ def official_score(arcade, game_id):
         actions=environment.actions, resets=environment.resets, runs=runs)
 
 
-def aggregate_games(games):
+def aggregate_games(games, requested_games=GAMES):
     scores = [g.get('official', {}).get('rhae_percent') for g in games]
-    return dict(games_recorded=len(games), requested_games=len(GAMES),
+    return dict(games_recorded=len(games), requested_games=len(requested_games),
         levels_completed=sum(g.get('levels_completed', 0) for g in games),
         total_levels=sum(g.get('total_levels') or 0 for g in games),
         wins=sum(g.get('win', False) for g in games), actions=sum(g.get('actions', 0) for g in games),
-        rhae_mean_percent=sum(scores)/len(GAMES) if len(scores) == len(GAMES) and all(s is not None for s in scores) else None,
+        rhae_mean_percent=sum(scores)/len(requested_games) if len(scores) == len(requested_games) and all(s is not None for s in scores) else None,
         prediction=aggregate_counts(g.get('prediction', {}) for g in games),
         adaptation_seconds=sum(g.get('diagnostics', {}).get('adaptation_seconds', 0.) for g in games),
         elapsed_seconds=sum(g.get('elapsed_seconds', 0.) for g in games),
@@ -356,7 +356,7 @@ def aggregate_games(games):
 
 
 def save_report(output, report):
-    report['aggregate'] = aggregate_games(report['games'])
+    report['aggregate'] = aggregate_games(report['games'], report.get('requested_games', GAMES))
     write_json(output / 'summary.json', report)
     fields = ('game', 'levels_completed', 'total_levels', 'win', 'actions', 'resets',
               'rhae_percent', 'predictor_error_percent', 'predictor_wrong', 'predictor_union',
@@ -374,6 +374,22 @@ def save_report(output, report):
             writer.writerow(row)
 
 
+def keyboard_metadata(arcade, game_id):
+    """Select by public SDK control tags, never game implementations or scores."""
+    info = next((entry for entry in arcade.get_environments() if entry.game_id == game_id), None)
+    tags = [] if info is None else list(info.tags or [])
+    if 'keyboard' not in tags or any('click' in tag for tag in tags):
+        raise ValueError('Diagnostic game must have a public keyboard-only SDK tag')
+    return dict(game_id=game_id, tags=tags, source='official_sdk_catalog', split='training')
+
+
+def keyboard_actions(observation):
+    actions = list(map(int, observation.available_actions))
+    if 6 in actions or not any(1 <= action <= 5 for action in actions):
+        raise ValueError('Keyboard diagnostic observation must offer keyboard actions without ACTION6')
+    return actions
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--checkpoint', required=True, type=Path)
@@ -388,6 +404,8 @@ def parse_args(argv=None):
                         help='Save SDK actions and frames locally under output-dir/sdk-recordings')
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--split', default='configs/splits.public-development.json')
+    parser.add_argument('--keyboard-diagnostic', metavar='GAME_ID',
+                        help='Explicit extra diagnostic on one public training-split keyboard game, not held-out')
     parser.add_argument('--environments-dir', default='environment_files')
     parser.add_argument('--mode', choices=('normal', 'offline'), default='normal')
     parser.add_argument('--threads', type=int, default=2)
@@ -404,8 +422,13 @@ def parse_args(argv=None):
         parser.error('--report-issue must be positive')
     if not 1 <= args.threads <= 16:
         parser.error('--threads must be in 1..16')
-    if tuple(load_split(args.split).evaluation) != GAMES:
+    split = load_split(args.split)
+    if tuple(split.evaluation) != GAMES:
         parser.error('Split differs from the five authorized public held-out games')
+    if args.keyboard_diagnostic is not None and args.keyboard_diagnostic not in split.training:
+        parser.error('--keyboard-diagnostic must name an exact public training-split game')
+    args.requested_games = (args.keyboard_diagnostic,) if args.keyboard_diagnostic else GAMES
+    args.scope = 'public-training-keyboard-diagnostic' if args.keyboard_diagnostic else 'public-held-out'
     if args.max_actions is not None and args.max_actions <= 0:
         parser.error('--max-actions must be positive')
     if args.max_game_seconds is not None and (not np.isfinite(args.max_game_seconds) or args.max_game_seconds <= 0):
@@ -432,6 +455,7 @@ def main():
     logging.basicConfig(filename=output / 'runner.log', level=logging.INFO, force=True)
     started = time.monotonic()
     report = dict(format='arc3-online-lora-experiment-v1', manual=True,
+        scope=args.scope, requested_games=list(args.requested_games),
         commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
         command=[sys.executable, '-m', 'model.online_lora_experiment', *sys.argv[1:]],
         sdk=version('arc-agi'), seed=42, policy_seed='42:<game_id>', max_actions=args.max_actions,
@@ -460,7 +484,10 @@ def main():
         save_report(output, report)
         arcade = open_arcade(args.mode, args.environments_dir,
                              recordings_dir=str(recordings_dir) if recordings_dir is not None else None)
-        for game_id in GAMES:
+        if args.keyboard_diagnostic:
+            report['keyboard_diagnostic'] = keyboard_metadata(arcade, args.keyboard_diagnostic)
+            save_report(output, report)
+        for game_id in args.requested_games:
             print(json.dumps(dict(event='game_start', game=game_id)), flush=True)
             game_started = time.monotonic()
             torch.cuda.reset_peak_memory_stats()
@@ -481,6 +508,8 @@ def main():
                                       include_frame_data=True)
                 if wrapper is None:
                     raise RuntimeError(f'Official SDK could not provision {game_id}')
+                if args.keyboard_diagnostic:
+                    game['initial_available_actions'] = keyboard_actions(wrapper.observation_space)
                 with (output / f'{game_id}.jsonl').open('x') as stream:
                     def emit(event):
                         if event['event'] == 'action':

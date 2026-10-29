@@ -164,6 +164,19 @@ of that earlier protocol. The new defaults do not rerun or reinterpret it. There
 is no automatic launch, submission, parameter search or transfer between games;
 launching a new held-out experiment remains an explicit operation.
 
+An explicitly authorized extra keyboard diagnostic can pass
+`--keyboard-diagnostic g50t-5849a774`. This selects only that exact game from
+`training_games`; the official SDK catalog must label it `keyboard` without any
+click tag, and its initial public observation must offer keyboard actions and no
+ACTION6. It does not change the split or the default five-game experiment.
+Reports mark this scope `public-training-keyboard-diagnostic`, calculate their
+aggregate over the single requested game, and never call it held-out evidence:
+the base model may have seen this game. Use a new output, separate issue, private
+policy state and a game-specific process lock when running alongside the
+disjoint held-out suite. Sharing one GPU changes timing and memory contention;
+it does not share adapters or training history. The existing frozen evaluator
+and adaptation losses are unchanged.
+
 With the authorized batch-8246 portable checkpoint available locally:
 
 ```sh

@@ -13,7 +13,7 @@ from arcengine import ActionInput, FrameData, FrameDataRaw, GameAction, GameStat
 from model.data import Action
 from model.adaptation import AdaptationConfig
 from model.online_lora_experiment import (aggregate_counts, counts, run_game, parse_args,
-    verified_checkpoint, convergence_report)
+    verified_checkpoint, convergence_report, keyboard_metadata, keyboard_actions, save_report, GAMES)
 from model.online_lora_reporting import render_report, publish_report
 
 
@@ -48,6 +48,69 @@ class Policy:
 
 
 class OnlineExperimentTests(unittest.TestCase):
+    def test_keyboard_diagnostic_selects_one_training_game_without_changing_default(self):
+        required = ['--checkpoint', 'base.pt', '--output-dir', 'unused']
+        _, default = parse_args(required)
+        self.assertEqual(default.requested_games, GAMES)
+        self.assertEqual(default.scope, 'public-held-out')
+        _, diagnostic = parse_args(required + ['--keyboard-diagnostic', 'g50t-5849a774'])
+        self.assertEqual(diagnostic.requested_games, ('g50t-5849a774',))
+        self.assertEqual(diagnostic.scope, 'public-training-keyboard-diagnostic')
+        self.assertIsNone(diagnostic.max_actions)
+        self.assertIsNone(diagnostic.max_game_seconds)
+        for invalid in ('ar25-0c556536', 'xxxx-00000000', 'g50t'):
+            with self.subTest(invalid=invalid), patch('sys.stderr'), self.assertRaises(SystemExit) as error:
+                parse_args(required + ['--keyboard-diagnostic', invalid])
+            self.assertEqual(error.exception.code, 2)
+
+    def test_keyboard_selection_uses_public_catalog_and_initial_actions(self):
+        from arc_agi.models import EnvironmentInfo
+
+        for tags in (['keyboard'], ['click'], ['keyboard_click'], [], ['keyboard', 'click']):
+            with self.subTest(tags=tags):
+                arcade = SimpleNamespace(get_environments=lambda: [EnvironmentInfo(game_id='g50t-5849a774', tags=tags)])
+                if tags == ['keyboard']:
+                    self.assertEqual(keyboard_metadata(arcade, 'g50t-5849a774'),
+                        dict(game_id='g50t-5849a774', tags=['keyboard'], source='official_sdk_catalog', split='training'))
+                else:
+                    with self.assertRaisesRegex(ValueError, 'keyboard-only'):
+                        keyboard_metadata(arcade, 'g50t-5849a774')
+        with self.assertRaisesRegex(ValueError, 'keyboard-only'):
+            keyboard_metadata(SimpleNamespace(get_environments=lambda: []), 'g50t-5849a774')
+        for actions in ([1, 2, 3, 4, 7], [1, 2, 6], [0], []):
+            with self.subTest(actions=actions):
+                observation = FrameData(available_actions=actions)
+                if actions == [1, 2, 3, 4, 7]:
+                    self.assertEqual(keyboard_actions(observation), actions)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'without ACTION6'):
+                        keyboard_actions(observation)
+
+    def test_single_game_report_has_own_denominator_and_training_scope(self):
+        report = dict(scope='public-training-keyboard-diagnostic', requested_games=['g50t-5849a774'],
+            games=[], status='running', commit='test',
+            checkpoint=dict(expected_source_batches=8458, expected_sha256='a'*64, release='release-8458'))
+        with tempfile.TemporaryDirectory() as directory:
+            save_report(Path(directory), report)
+            self.assertEqual(report['aggregate']['requested_games'], 1)
+            self.assertIsNone(report['aggregate']['rhae_mean_percent'])
+            self.assertIn('Juegos pendientes: g50t-5849a774', render_report(report))
+            report['games'].append(dict(game='g50t-5849a774', official=dict(rhae_percent=25.), stop_reason='win'))
+            save_report(Path(directory), report)
+            self.assertEqual(report['aggregate']['rhae_mean_percent'], 25.)
+            self.assertEqual(report['aggregate']['games_recorded'], 1)
+            self.assertEqual(json.loads((Path(directory) / 'summary.json').read_text())['scope'],
+                             'public-training-keyboard-diagnostic')
+            body = render_report(report)
+            self.assertIn('split de entrenamiento', body)
+            self.assertIn('Juegos pendientes: ninguno', body)
+            self.assertNotIn('ar25-0c556536', body)
+            self.assertNotIn('Son juegos públicos held-out', body)
+            report.pop('requested_games')
+            save_report(Path(directory), report)
+            self.assertEqual(report['aggregate']['requested_games'], 5)
+            self.assertIsNone(report['aggregate']['rhae_mean_percent'])
+
     def test_checkpoint_arguments_keep_8246_defaults_and_accept_8458_without_caps(self):
         required = ['--checkpoint', 'base.pt', '--output-dir', 'unused']
         _, original = parse_args(required)
