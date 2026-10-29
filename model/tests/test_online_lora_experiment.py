@@ -138,6 +138,15 @@ class OnlineExperimentTests(unittest.TestCase):
         self.assertIsNone(result['predictor']['final']['metrics']['delta_error'])
         self.assertNotIn('pending_thresholds', diagnostics['convergence']['goal'])
 
+        diagnostics['convergence']['predictor'] = dict(reason='plateau', final=dict(metrics=dict(
+            delta_error=.04, latest_delta_error=.03,
+            rollout_delta_error=.14, latest_rollout_delta_error=.2)))
+        result = convergence_report(diagnostics, AdaptationConfig())
+        self.assertEqual(result['predictor']['pending_thresholds'], {
+            'rollout_delta_error': {'value': .14, 'threshold': .1},
+            'latest_rollout_delta_error': {'value': .2, 'threshold': .1}})
+        self.assertNotIn('pending_thresholds', diagnostics['convergence']['predictor'])
+
     def test_failed_publication_retains_scalar_report_and_pending_games(self):
         report = dict(games=[], aggregate={'games_recorded': 0}, status='failed', commit='test',
             checkpoint=dict(expected_source_batches=8458, expected_sha256='a'*64, release='release-8458'))
