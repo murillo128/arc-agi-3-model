@@ -22,7 +22,8 @@ from torch.nn import functional as F
 
 from .adaptation_heads import goal_loss, path_loss, matches
 from .adaptation_convergence import (GROUPS, delta_metrics, goal_metrics, path_metrics,
-                                    fit, fixed_hindsight, recency_weights, weighted_mean)
+                                    fit, fixed_hindsight, successful_hindsight, predictive_pair,
+                                    recency_weights, weighted_mean)
 from .data import Action, Observation
 from .goal_observation import compose_goal_observation
 from .learning import State, visual_delta_loss
@@ -48,7 +49,8 @@ class AdaptationConfig:
     path_steps: int = 1
     goal_steps: int = 1
     reconstruction_threshold: float = .10
-    delta_threshold: float = .10
+    delta_threshold: float = .05
+    rollout_delta_threshold: float = .10
     goal_color_threshold: float = .10
     goal_mask_threshold: float = .10
     path_reachability_threshold: float = .10
@@ -87,7 +89,7 @@ class AdaptationConfig:
                 raise ValueError(f'Invalid adaptation {key}')
         for key, low in (('exploration', .000001), ('reconstruction_threshold', 0.),
                          ('history_weight_floor', .000001),
-                         ('delta_threshold', 0.), ('goal_color_threshold', 0.),
+                         ('delta_threshold', 0.), ('rollout_delta_threshold', 0.), ('goal_color_threshold', 0.),
                          ('goal_mask_threshold', 0.), ('path_reachability_threshold', 0.),
                          ('path_cost_threshold', 0.), ('plateau_min_relative_improvement', .000001)):
             value = getattr(self, key)
@@ -203,19 +205,42 @@ class AdaptivePolicy:
         self.runtime, self.config, self.max_actions = runtime, config, max_actions
         self.rng = random.Random(seed)
         bank_seed = int.from_bytes(hashlib.sha256(str(seed).encode()).digest()[:8], 'little') % (2**63)
+        self._bank_seed = bank_seed
         self.bank = runtime.router.new_bank(rank=config.rank, alpha=config.alpha, seed=bank_seed,
                                             learning_rate=config.learning_rate)
         self.history = deque(maxlen=None if config.replay_size is None else config.replay_size + 1)
         self.path_labels = deque(maxlen=config.replay_size)
         self.pending_action = self.observation = self.state = self.goal = None
         self.actions_taken = 0
+        self._predictor_adapted_through = -1
         self._lock = threading.RLock()
         self._cancelled = threading.Event()
         self._candidates = _VisibleCandidates()
         self.diagnostics = dict(observations=0, confirmed_transitions=0, predictive_pairs=0,
             boundary_skips=0, updates=dict.fromkeys(('representation', 'predictor', 'path', 'goal'), 0),
             losses={}, convergence={}, adaptation_seconds=0., numerical_failures=0, budget_stops=0,
-            skipped=Counter(), goal_outcomes=Counter(), native_outcomes=Counter(), masks=0)
+            skipped=Counter(), goal_outcomes=Counter(), native_outcomes=Counter(), masks=0,
+            goal_adapter_resets=0)
+
+    def reset_goal_adaptation(self):
+        """Deliberately discard only this game's Goal LoRA, between SDK actions."""
+        with self._lock:
+            if self.pending_action is not None:
+                raise ValueError('Cannot reset Goal with a pending SDK action')
+            fresh = self.runtime.router.new_bank(rank=self.config.rank, alpha=self.config.alpha,
+                seed=self._bank_seed, learning_rate=self.config.learning_rate)
+            with self.runtime.router.activate(self.bank), torch.no_grad():
+                for current, initial in zip(self.bank.parameters(('goal',)), fresh.parameters(('goal',))):
+                    current.copy_(initial)
+                optimizer = self.bank.optimizers['goal']
+                optimizer.state.clear()
+                optimizer.zero_grad(set_to_none=True)
+            if self.goal is not None:
+                self.diagnostics['goal_outcomes']['censored'] += 1
+            self.goal = None
+            self.diagnostics['losses'].pop('goal', None)
+            self.diagnostics['convergence'].pop('goal', None)
+            self.diagnostics['goal_adapter_resets'] += 1
 
     def _filtered(self, obs):
         return replace(obs, available_actions=tuple(i for i in obs.available_actions
@@ -457,10 +482,11 @@ class AdaptivePolicy:
             return [r.scene_observation for r in rows if r.observation.final is not None]
         if name == 'predictor':
             return [(before, after) for before, after in zip(rows, rows[1:])
-                    if not after.boundary and before.observation.final is not None
-                    and after.observation.final is not None]
+                    if predictive_pair(before, after)]
+        if name == 'goal':
+            return successful_hindsight(rows)
         labels = self._hindsight(fixed=True)
-        return list(self.path_labels) + labels if name == 'path' else labels
+        return list(self.path_labels) + labels
 
     def _weights(self, name, samples):
         if name == 'representation':
@@ -512,28 +538,47 @@ class AdaptivePolicy:
             if not pairs:
                 return None
 
+            def prediction_loss(origin, after, steps):
+                state, target_state = current(origin.number), current(after.number)
+                z, h = state.z[None], state.h
+                for record in steps:
+                    z, h, _ = engine.predict(z, h, engine.actions([record.action]), *state.geometry)
+                latent = F.mse_loss(z.float(), target_state.z.detach().float()[None])
+                logits = engine.decode(z, *state.geometry)
+                reference = torch.tensor(np.array(origin.observation.final), device=engine.device).long()[None]
+                actual = torch.tensor(np.array(after.observation.final), device=engine.device).long()[None]
+                visual = visual_delta_loss(logits, reference, actual, engine.config.false_change_weight,
+                                           mode=engine.config.prediction_delta_loss).mean()
+                metrics = delta_metrics(reference, actual, logits.argmax(-1)) if measured is not None else None
+                return latent + visual, metrics
+
             def objective():
                 losses = []
                 for before, after in pairs:
-                    state, target_state = current(before.number), current(after.number)
-                    predicted, _, delta = engine.predict(state.z[None], state.h,
-                        engine.actions([after.action]), *state.geometry)
-                    target = (target_state.z - state.z).detach()[None]
-                    latent = F.mse_loss(delta.float(), target.float())
-                    logits = engine.decode(predicted, *state.geometry)
-                    reference = torch.tensor(np.array(before.observation.final), device=engine.device).long()[None]
-                    actual = torch.tensor(np.array(after.observation.final), device=engine.device).long()[None]
-                    visual = visual_delta_loss(logits, reference, actual, engine.config.false_change_weight,
-                                               mode=engine.config.prediction_delta_loss).mean()
-                    losses.append(latent + visual)
+                    loss, metrics = prediction_loss(before, after, [after])
+                    window = [records.get(i) for i in range(after.number-3, after.number+1)]
+                    eligible = all(r is not None for r in window) and all(
+                        predictive_pair(a, b) for a, b in zip(window, window[1:]))
                     if measured is not None:
-                        measured.append(delta_metrics(reference, actual, logits.argmax(-1)))
+                        metrics.update(rollout_samples=0, rollout_wrong=0, rollout_union=0)
+                    if eligible:
+                        rollout_loss, rollout_metrics = prediction_loss(window[0], after, window[1:])
+                        loss = (loss + rollout_loss) / 2
+                        if measured is not None:
+                            metrics.update(rollout_samples=1, rollout_wrong=rollout_metrics['wrong'],
+                                           rollout_union=rollout_metrics['union'])
+                    losses.append(loss)
+                    if measured is not None:
+                        measured.append(metrics)
                 return weighted_mean(losses, weights), None
             return objective
         labels = samples
         if labels is None:
-            labels = self._hindsight()
-            if name == 'path':
+            if name == 'goal':
+                labels = self._examples('goal')
+                labels = self.rng.sample(labels, min(len(labels), self.config.minibatch))
+            else:
+                labels = self._hindsight()
                 labels = (list(self.path_labels)[-self.config.minibatch:] + labels)[:self.config.minibatch]
         if not labels:
             return None

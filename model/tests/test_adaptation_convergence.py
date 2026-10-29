@@ -1,5 +1,6 @@
 """Convergence contracts: real CPU learning, fixed evidence and honest stops."""
 from copy import deepcopy
+from dataclasses import replace
 import math
 import unittest
 from unittest.mock import patch
@@ -40,16 +41,27 @@ class ConvergenceTests(unittest.TestCase):
         self.assertEqual(policy.diagnostics['convergence']['predictor']['reason'], 'no_data')
         policy.confirm_result(observed(3), action)
         fits = policy.diagnostics['convergence']
-        for name in ('representation', 'predictor', 'path', 'goal'):
+        for name in ('representation', 'path'):
             self.assertEqual(fits[name]['reason'], 'threshold', (name, fits[name]))
             self.assertTrue(fits[name]['threshold_met'])
             self.assertGreaterEqual(fits[name]['elapsed_seconds'], 0.)
-        for name in ('predictor', 'path', 'goal'):
+        self.assertEqual(fits['goal']['reason'], 'no_progress')
+        self.assertEqual(fits['predictor']['reason'], 'insufficient_rollout_history')
+        self.assertFalse(fits['predictor']['threshold_met'])
+        self.assertEqual(fits['predictor']['final']['metrics']['rollout_samples'], 0)
+        self.assertIsNone(fits['predictor']['final']['metrics']['rollout_delta_error'])
+        for name in ('predictor', 'path'):
             self.assertGreater(fits[name]['steps'], 1)
             self.assertLess(fits[name]['final']['loss'], fits[name]['initial']['loss'])
-        self.assertLessEqual(fits['predictor']['final']['metrics']['delta_error'], .10)
-        self.assertLessEqual(fits['goal']['final']['metrics']['mask_error'], .10)
+        self.assertLessEqual(fits['predictor']['final']['metrics']['delta_error'], .05)
         self.assertLessEqual(fits['path']['final']['metrics']['cost_error'], .10)
+        policy.choose_action(observed(3))
+        policy.confirm_result(observed(4, level=1))
+        goal = policy.diagnostics['convergence']['goal']
+        self.assertEqual(goal['reason'], 'threshold')
+        self.assertGreater(goal['steps'], 1)
+        self.assertLess(goal['final']['loss'], goal['initial']['loss'])
+        self.assertLessEqual(goal['final']['metrics']['mask_error'], .10)
         self.assertEqual(base_digest(shared), frozen)
         self.assertEqual(bank_digest(inactive.bank), other)
         self.assertTrue(all(p.grad is None for p in shared.engine.model.parameters()))
@@ -65,7 +77,7 @@ class ConvergenceTests(unittest.TestCase):
         empty = delta_metrics(before, before, before)
         empty_metric = summarize('predictor', [empty])
         self.assertIsNone(empty_metric['delta_error'])
-        self.assertEqual(stopping_reason('predictor', empty_metric, AdaptationConfig()), 'no_change')
+        self.assertEqual(stopping_reason('predictor', empty_metric, AdaptationConfig()), 'insufficient_rollout_history')
         # Historical success must not hide a completely wrong new transition.
         easy = dict(missed=0, invented=0, wrong_color=0, wrong=0, union=100, changed=100)
         metrics = summarize('predictor', [easy, stats])
@@ -87,6 +99,79 @@ class ConvergenceTests(unittest.TestCase):
         failed = path_metrics(torch.tensor([0.]), torch.tensor([1000.]), False, 4)
         self.assertEqual(failed, dict(reachability_error=.5, cost_error=None))
 
+    def test_empty_latest_change_unions_cannot_borrow_pooled_convergence(self):
+        cases = [((0, 1, 2, 2), 'latest_delta_error', 'no_latest_change', 2, 1),
+                 ((0, 1, 2, 3, 1), 'latest_rollout_delta_error', 'no_latest_rollout_change', 4, 1)]
+        config = AdaptationConfig()
+        for colors, missing, reason, one_step_union, rollout_union in cases:
+            with self.subTest(colors=colors):
+                frames = [torch.tensor([[[color]]]) for color in colors]
+                rows = []
+                for i in range(1, len(frames)):
+                    # Perfect predictions: every changed single pixel contributes
+                    # one to the union, while equal start/end colors contribute zero.
+                    stats = delta_metrics(frames[i-1], frames[i], frames[i])
+                    stats.update(rollout_samples=int(i >= 3), rollout_wrong=0, rollout_union=0)
+                    if i >= 3:
+                        rollout = delta_metrics(frames[i-3], frames[i], frames[i])
+                        stats.update(rollout_wrong=rollout['wrong'], rollout_union=rollout['union'])
+                    rows.append(stats)
+                metrics = summarize('predictor', rows)
+                self.assertEqual(metrics['union'], one_step_union)
+                self.assertEqual(metrics['rollout_union'], rollout_union)
+                self.assertEqual(metrics['rollout_samples'], len(colors)-3)
+                self.assertEqual(metrics['delta_error'], 0.)
+                self.assertEqual(metrics['rollout_delta_error'], 0.)
+                self.assertIsNone(metrics[missing])
+                self.assertEqual(stopping_reason('predictor', metrics, config), reason)
+                # Missing evidence must not stop fitting any available failing error.
+                for key in ('delta_error', 'latest_delta_error',
+                            'rollout_delta_error', 'latest_rollout_delta_error'):
+                    if key != missing:
+                        self.assertIsNone(stopping_reason('predictor', metrics | {key: 1.}, config))
+
+    def test_unavailable_latest_guards_keep_required_update_and_allow_next_action(self):
+        for missing, reason in [('latest_delta_error', 'no_latest_change'),
+                                ('latest_rollout_delta_error', 'no_latest_rollout_change')]:
+            with self.subTest(missing=missing):
+                policy = AdaptivePolicy(runtime(), no_learning(learning_rate=1.), seed=3)
+                for before, after in ((1, 2), (2, 3), (3, 4), (4, 2)):
+                    policy.choose_action(observed(before))
+                    policy.confirm_result(observed(after))
+                policy.config = replace(policy.config, stopping='convergence', predictor_steps=1)
+                parameter = policy.bank.parameters(('predictor',))[0]
+                with torch.no_grad():
+                    parameter.zero_()
+
+                def objective(name, *, samples=None, states=None, measured=None, weights=None):
+                    def calculate():
+                        if measured is not None:
+                            for _, after in samples:
+                                latest = after.number == policy.history[-1].number
+                                measured.append(dict(wrong=0, union=int(not (latest and missing == 'latest_delta_error')),
+                                    rollout_samples=int(after.number >= 3), rollout_wrong=0,
+                                    rollout_union=int(after.number >= 3 and not (latest and missing == 'latest_rollout_delta_error'))))
+                        # Adam at LR=1 overshoots this optimum. The initial loss
+                        # remains best, so accidental rollback would erase the update.
+                        return (parameter.flatten()[0] - .1).square(), None
+                    return calculate
+
+                with patch.object(policy, '_objective', side_effect=objective):
+                    policy._adapt()
+                result = policy.diagnostics['convergence']['predictor']
+                self.assertEqual(result['reason'], reason)
+                self.assertFalse(result['threshold_met'])
+                self.assertIsNone(result['final']['metrics'][missing])
+                self.assertEqual(result['minimum_steps'], 1)
+                self.assertEqual(result['steps'], 1)
+                self.assertEqual(policy.diagnostics['updates']['predictor'], 1)
+                self.assertGreater(result['final']['loss'], result['initial']['loss'])
+                self.assertFalse(result['restored_best'])
+                self.assertNotEqual(float(parameter.flatten()[0].detach()), 0.)
+                state = policy.bank.optimizers['predictor'].state[parameter]
+                self.assertEqual(float(state['step']), 1.)
+                self.assertIsNotNone(policy.choose_action(policy.observation))
+
     def test_full_replay_is_deterministic_and_keeps_latest_eligible_samples(self):
         policy = AdaptivePolicy(runtime(), no_learning(replay_size=3), seed=8)
         for i in range(5):
@@ -96,12 +181,13 @@ class ConvergenceTests(unittest.TestCase):
         self.assertEqual(len(policy._examples('representation')), 4)
         pairs = policy._examples('predictor')
         self.assertEqual([(a.number, b.number) for a, b in pairs], [(2, 3), (3, 4), (4, 5)])
-        labels = policy._examples('goal')
+        self.assertEqual(policy._examples('goal'), [])  # no native success yet
+        labels = policy._examples('path')
         self.assertEqual(len({r['start'] for r in labels}), len(labels))
         self.assertTrue(any(r['end'] == 5 for r in labels))
         self.assertEqual(policy.rng.getstate(), rng)
         self.assertEqual([(r['start'], r['end']) for r in labels],
-                         [(r['start'], r['end']) for r in policy._examples('goal')])
+                         [(r['start'], r['end']) for r in policy._examples('path')])
 
     def test_plateau_restores_best_parameters_and_adam_moments(self):
         policy = AdaptivePolicy(runtime(), AdaptationConfig(learning_rate=1., exploration=1.,

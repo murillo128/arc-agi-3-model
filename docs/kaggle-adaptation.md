@@ -15,6 +15,11 @@ own the outer lifetime. Each observation triggers representation → predictor �
 Path → Goal fitting, using only that game's real evidence. The base
 weights remain frozen. Adapters and Adam state persist across actions and levels.
 
+Goal fitting requires native progress: a confirmed increase in
+`levels_completed` or `WIN`. Before such evidence, it reports `no_progress`
+and its adapters and Adam state stay unchanged. Path can still learn observed
+reachability and action cost without a solved level.
+
 By default `replay_size=null` retains **all** confirmed frames, incoming actions
 and actual goal outcomes for that game in CPU RAM, across levels and RESETs.
 It no longer drops transitions older than 32 actions. This is an in-memory
@@ -48,29 +53,55 @@ active examples move to the accelerator. Graph memory is bounded by minibatch
 size; CPU memory and work per sweep grow with history length. Encoder/decoder
 remain fixed during predictor/Path/Goal fitting.
 
+Every newly confirmed eligible transition gets at least one predictor update,
+even when its initial error passes the thresholds. Actual no-op actions count;
+duplicate confirmations and initial/reset/level-boundary frames do not force
+an update. Thereafter thresholds decide whether more fitting is needed.
+
+For each eligible transition, the predictor fits its one-step latent/visual
+loss. If three consecutive real actions end at that observation, it also fits
+the three-step endpoint latent/visual loss, averaging the two horizon losses.
+Both use the destination's recency weight. The rollout starts with a real causal
+state and feeds **predicted latent and memory** through the three actual actions;
+it never corrects itself using intermediate observations. Windows exclude reset,
+level/geometry changes, missing frames and terminal origins. These additional
+predictions and their backward graphs increase adaptation cost per sweep.
+
 Convergence errors remain **unweighted** over the entire history, including the
 latest-frame/transition guards, so low weights cannot hide poor historical fit.
 Checks never use a changing random minibatch. The default thresholds are
 fractions (0.10 = 10%), independently configurable:
 
-| Configuration key | Measured fitting error |
-| --- | --- |
-| `reconstruction_threshold` | Equal-weight-per-color reconstruction error; replay mean and latest frame must both pass |
-| `delta_threshold` | Wrong pixels / union of actual and predicted changes; pooled replay and latest eligible transition must both pass |
-| `goal_color_threshold` | Color error inside the target mask, balancing changed and unchanged regions |
-| `goal_mask_threshold` | Mask classification error, balancing included and excluded pixels |
-| `path_reachability_threshold` | Mean absolute reachability probability error against observed labels |
-| `path_cost_threshold` | Mean absolute action-distance error / max(1, actual distance), successful labels only |
+| Configuration key | Default | Measured fitting error |
+| --- | --- | --- |
+| `reconstruction_threshold` | 0.10 | Equal-weight-per-color reconstruction error; replay mean and latest frame must both pass |
+| `delta_threshold` | 0.05 | One-step wrong pixels / union of actual and predicted changes; pooled replay and latest eligible transition must both pass |
+| `rollout_delta_threshold` | 0.10 | Three-step endpoint delta relative to its real starting frame; pooled windows and latest eligible rollout must both pass |
+| `goal_color_threshold` | 0.10 | Color error inside the target mask, balancing changed and unchanged regions |
+| `goal_mask_threshold` | 0.10 | Mask classification error, balancing included and excluded pixels |
+| `path_reachability_threshold` | 0.10 | Mean absolute reachability probability error against observed labels |
+| `path_cost_threshold` | 0.10 | Mean absolute action-distance error / max(1, actual distance), successful labels only |
 
 The goal stage needs both its thresholds; Path needs both when successful labels
-exist. An empty delta union is reported as `no_change` with null delta error, not
-as evidence of dynamic prediction accuracy. A stage without usable data reports
-`no_data` and does not delay action selection. Hindsight uses one deterministic
-target per origin: the latest different frame actually reached in that scene,
-with public native progress recorded separately. It computes these targets in
-linear frame work rather than enumerating every historical pair. Reachability
-is not a winning label. Path also retains the active goal's observed
-success/failure outcomes.
+exist. Predictor convergence requires both horizons and their latest guards.
+With fewer than three eligible actions, it can finish one-step fitting and
+collect another observation, reporting `insufficient_rollout_history` with null
+rollout errors and `threshold_met=false`. With eligible windows but no changed
+pixels, it reports `no_change` (both horizons) or `no_rollout_change` (three-step
+union empty). Even when pooled errors pass, an empty latest transition or rollout
+union reports `no_latest_change` or `no_latest_rollout_change`, respectively.
+These stops retain null errors and `threshold_met=false`; any available failing
+error still requires fitting before stopping for incomplete evidence. A stage without
+usable data reports `no_data`; Goal without positive native evidence reports
+`no_progress`. None of these unavailable-data states delays collecting evidence.
+
+Path hindsight uses one deterministic target per origin: the latest different
+frame actually reached in that scene, plus active-goal success/failure outcomes.
+Goal instead uses different observed origins and the final **nonterminal** frame
+of a scene followed by native success. These successful-trajectory subgoals are
+not proof of an optimal or unique winning image. Terminal displays and new-level
+frames are never Goal targets, and neither visual change nor RESET alone creates
+a positive example. Both modes use linear frame work, not all historical pairs.
 
 There is no update-count ceiling in convergence mode. To avoid waiting forever
 for inconsistent or insufficient evidence, `plateau_patience=8` full-replay checks
@@ -90,16 +121,35 @@ measurements remain separate. Nonfinite updates
 roll back; cooperative `policy.request_stop()` or Ctrl+C can interrupt fitting.
 An already-admitted real result remains confirmed even if its SFT is cancelled.
 
+Predictor metrics include `rollout_samples`, `rollout_wrong`, `rollout_union`,
+`rollout_delta_error` and `latest_rollout_delta_error`, separate from one-step
+counts/errors. These are measured on all eligible retained windows with current
+adapters, not unseen rollout accuracy. `minimum_steps` records the per-observation
+update floor.
+
 Optional positive `max_actions`, `per_observation_seconds` and `total_seconds`
 are still supported explicitly. A finite `replay_size` is an opt-in legacy
 engineering mode that intentionally discards old evidence. `stopping="steps"`
-reproduces the earlier sampled, unweighted update schedule; combine it with
-`replay_size=32` to reproduce its former history window. In convergence mode,
+retains the sampled, unweighted update schedule, with the same native-success
+Goal gate and three-step loss; it no longer reproduces the old unsupervised-Goal
+protocol. In convergence mode,
 positive `*_steps` values do not cap work; zero disables that stage.
 `goal_lifetime`, `horizon`, `beam` and `clicks` still
 control goal/search scope and are not total game action budgets. The standalone
 smoke and generated save-and-run fixture explicitly use `stopping="steps"`; the
 scored adaptive agent uses the requested convergence configuration.
+
+An existing JSON override of `delta_threshold: 0.10` still overrides the new
+default: explicitly set `delta_threshold: 0.05` and
+`rollout_delta_threshold: 0.10` when updating an experiment. The model base format
+and weights need no conversion. An in-memory controller adopting the new policy
+can call `policy.reset_goal_adaptation()` **between confirmed actions** to discard
+only Goal's previous adaptation. It restores the initialized zero-effect Goal
+adapter and empty Goal Adam state, clears stale Goal diagnostics/proposals, and
+increments `goal_adapter_resets`. Other adapters/Adam, history, base weights and
+cumulative update counters are retained. It rejects a pending SDK action. This
+method does not hot-reload code or add process-restart persistence: restarting an
+existing RAM-only experiment still loses its private adapters/history.
 
 ## Manual public held-out experiment
 
@@ -286,9 +336,10 @@ Adapters persist through RESET and level changes, but those scene boundaries
 never become predictive pairs and clear the active spatial goal. Recurrent
 context is rebuilt with current adapters from the full history, starting at zero
 at its left edge and using boundary markers. Raw boundary animations are retained,
-but only their final frame is encoded as the new scene. Hindsight masks
-come only from changed same-level states actually reached; they indicate
-reachability, not proof of winning. Pending goal segments are censored rather
+but only their final frame is encoded as the new scene. Path hindsight masks
+come from changed same-level states actually reached; they indicate reachability.
+Goal labels additionally require the native-success evidence described above.
+Pending goal segments are censored rather
 than treated as failures. Only group=1 Conv2d and Linear targets are adapted;
 the smoke report lists supported targets and excluded grouped/depthwise layers.
 Loss diagnostics retain the most recently measured pre/post values for each

@@ -88,7 +88,7 @@ class AdaptationTests(unittest.TestCase):
         with patch('torch.cuda.is_bf16_supported', side_effect=AssertionError('CUDA probe on CPU')):
             self.assertFalse(runtime().engine.amp)
 
-    def test_initial_only_representation_then_all_groups_learn_from_real_confirmation(self):
+    def test_representation_and_dynamics_learn_before_native_progress_enables_goal(self):
         shared = runtime()
         policy = AdaptivePolicy(shared, config(learning_rate=.001), seed=3)
         before = base_digest(shared)
@@ -101,6 +101,9 @@ class AdaptationTests(unittest.TestCase):
         self.assertEqual(policy.diagnostics['confirmed_transitions'], 0)
         policy.confirm_result(observed(3), action)
         self.assertEqual(policy.diagnostics['predictive_pairs'], 1)
+        self.assertEqual(policy.diagnostics['updates']['goal'], 0)
+        policy.choose_action(observed(3))
+        policy.confirm_result(observed(4, level=1))
         self.assertTrue(all(v > 0 for v in policy.diagnostics['updates'].values()))
         for group in pristine:
             self.assertTrue(any(not torch.equal(a, b) for a, b in
