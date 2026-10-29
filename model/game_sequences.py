@@ -290,6 +290,12 @@ class SequenceLearner:
     def update(self, encoded, start, stop, *, telemetry=None, last=False):
         e = self.engine
         trainable(e, 'dynamics')
+        objects = getattr(e.model.dynamics, 'objects', None)
+        if objects is not None and not bool(objects.gain):
+            # A zero residual produces zero gradient tensors, which still
+            # advance Adam's momentum/decay. None gradients leave both weights
+            # and optimizer history untouched until auxiliary supervision.
+            objects.requires_grad_(False)
         self.optimizer.zero_grad(set_to_none=True)
         terms = self.block_loss(encoded, start, stop)
         if terms is None:

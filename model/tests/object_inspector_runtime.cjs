@@ -34,6 +34,8 @@ const sample={game:'fixture',batch:7,step:2,conditioning:'student',action:{id:6,
     predicted:[{id:4,bits:'AgA=',area:1,confidence:.7}]}}};
 render(sample);
 assert.equal(node('inspector-content').hidden,false);
+assert.deepEqual(node('set').children.map(n=>n.value),['current','next','predicted'],'old instance reports do not invent learned masks');
+assert.match(node('inspector-status').textContent,/Current student masks were not recorded/);
 assert.match(node('sample-info').textContent,/fixture · step 2.*batch 7 · action 6.*prediction input: student masks/);
 assert.match(node('set-summary').textContent,/2 SAM masks · covered 9 \/ 9 pixels \(100%\) · uncovered 0 \(0%\)/);
 assert.equal(node('instance').children.length,2,'overlapping instances remain individually selectable');
@@ -119,6 +121,22 @@ for(const [instances,reason] of [
   assert.equal(node('inspector-content').hidden,true);
   assert.match(node('inspector-status').textContent,reason);
 }
+// Student extraction is a separate set over t, never over the real t+1 frame.
+render({...sample,batch:11,instances:{...sample.instances,sets:{...sample.instances.sets,
+  learned_current:[{id:2,bits:'AAE=',area:1,confidence:.8}]}}});
+assert.match(node('sample-info').textContent,/before auxiliary fitting/);
+assert.deepEqual(node('set').children.map(n=>n.value),['current','learned_current','next','predicted']);
+change('set','learned_current');change('mode','single');
+assert.match(node('set-summary').textContent,/1 student masks.*covered 1 \/ 9/);
+assert.match(node('instance-detail').textContent,/Slot 3.*presence 80%/);
+assert.match(node('confidence-help').textContent,/Saved student masks use presence/);
+assert.match(node('inspector-caption').textContent,/Current student · t/);
+assert.deepEqual(operations().slice(0,9).map(op=>op.color),
+  ['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31']);
+assert.deepEqual(operations().filter(op=>op.alpha===.65).map(({x,y})=>({x,y})),[{x:16,y:16}]);
+render({...sample,batch:12});
+assert.equal(node('set').value,'current','an older report without student masks remains usable');
+assert.ok(!node('set').children.some(n=>n.value==='learned_current'));
 render(null);
 assert.equal(node('pin').disabled,true);
 assert.match(node('sample-info').textContent,/Waiting for an object sample/);

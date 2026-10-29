@@ -274,14 +274,31 @@ function renderObjects(data, rows) {
   $('objects-panel').hidden=!state;
   if(!state)return;
   const threshold=pct(state.config?.activation_iou);
-  $('objects-status').textContent=`${state.active?'Object residual active':'Warm-up · visual residual disabled'} · ${number(state.total_updates??0,0)} updates · ${number(state.samples??0,0)} sampled transitions · teacher ${number(state.teacher?.seconds??0,1)} s total / ${number(state.teacher?.calls??0,0)} frames · ${number(state.teacher?.cache_hits??0,0)} cache hits${Number.isFinite(threshold)?` · activation requires current, one-step and three-step agreement ≥ ${number(threshold,1)}%, plus configured warm-up and activation enabled`:''}`;
+  const admission=state.metric_version===2?'pre-fit extraction and student-input one-step and three-step agreement':'legacy current and mixed-input future agreement';
+  $('objects-status').textContent=`${state.active?'Object residual active':'Warm-up · visual residual disabled'} · ${number(state.total_updates??0,0)} updates · ${number(state.samples??0,0)} sampled transitions · teacher ${number(state.teacher?.seconds??0,1)} s total / ${number(state.teacher?.calls??0,0)} frames · ${number(state.teacher?.cache_hits??0,0)} cache hits${Number.isFinite(threshold)?` · activation requires ${admission} ≥ ${number(threshold,1)}%, plus configured warm-up and activation enabled`:''}`;
+  const observer=Number.isFinite(state.observer_updates)?` · ${number(state.observer_updates,0)} observer-only steps · ${number(state.observer_frames,0)} labeled observations / ${number(state.replay_frames,0)} in replay`:'';
+  $('objects-status').textContent+=observer;
   const labels=grid=>grid?.map(row=>row.map(value=>value===0?16:value));
   draw('objects-before',sample?.before);draw('objects-actual',sample?.actual);
   draw('objects-observed',labels(sample?.observed_masks));draw('objects-target',labels(sample?.actual_masks));
   draw('objects-predicted',labels(sample?.predicted_masks));
-  chart('objects-iou',rows,[series('Current student',r=>pct(r.objects?.observed_iou)),series('One-step prediction',r=>pct(r.objects?.mean_iou)),series('Three-step prediction',r=>pct(r.objects?.rollout_iou))],100,
-    Number.isFinite(threshold)?[{value:threshold,label:'Residual activation threshold',color:'#e9b86c'}]:[]);
-  chart('objects-loss',rows,[series('Object objective',r=>r.objects?.loss)]);
+  $('objects-learned-figure').hidden=!sample?.learned_current_masks;
+  draw('objects-learned',labels(sample?.learned_current_masks));
+  const split=r=>r.objects?.metric_version===2;
+  const metric=key=>r=>split(r)?pct(r.objects?.[key]):null;
+  const limits=Number.isFinite(threshold)?[{value:threshold,label:'Student residual activation threshold',color:'#e9b86c'}]:[];
+  chart('objects-iou',rows,[series('Before fitting',metric('observed_iou'),{color:colors[0]}),
+    series('After fitting · same observations',metric('observed_post_iou'),{color:colors[2]})],100,limits);
+  chart('objects-one-step',rows,[series('Student input',metric('student_iou'),{color:colors[0]}),
+    series('SAM input',metric('sam_iou'),{color:colors[2]}),series('Copy SAM · no action',metric('copy_iou'),{color:colors[3]})],100,limits);
+  chart('objects-three-step',rows,[series('Student input',metric('student_rollout_iou'),{color:colors[0]}),
+    series('SAM input',metric('sam_rollout_iou'),{color:colors[2]}),series('Copy SAM · no action',metric('copy_rollout_iou'),{color:colors[3]})],100,limits);
+  const legacy=key=>r=>!split(r)?pct(r.objects?.[key]):null;
+  $('objects-legacy').hidden=!rows.some(r=>!split(r)&&['observed_iou','mean_iou','rollout_iou'].some(key=>Number.isFinite(r.objects?.[key])));
+  chart('objects-legacy-iou',rows,[series('Current · during fitting',legacy('observed_iou')),
+    series('Mixed input · one step',legacy('mean_iou')),series('Mixed input · three steps',legacy('rollout_iou'))],100);
+  chart('objects-loss',rows,[series('Joint object objective',r=>r.objects?.loss),
+    series('Observer-only objective',r=>r.objects?.observer_loss,{color:colors[2]})]);
 }
 function renderPlanning(data, rows, all) {
   const state=data.planning;

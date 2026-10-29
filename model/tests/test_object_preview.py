@@ -29,6 +29,23 @@ class ObjectPreviewTests(unittest.TestCase):
             self.assertEqual(base64.b64decode(rows[1]['bits']), b'\xff\x01')
         sparse = mask_instances(masks, np.array([.4, .75, 1., .6]))
         self.assertEqual([r['id'] for r in sparse], [1, 2])
+        self.assertNotIn('learned_current', decoded['sets'], 'Legacy calls do not invent a student observation')
+
+    def test_learned_current_is_separate_from_teacher_and_future(self):
+        labels = Segmentation(np.array([[[1, 0], [0, 0]]]), np.array([.9]))
+        learned = np.array([[[0, 0], [0, 1]], [[0, 1], [0, 0]]])
+        preview = instance_preview(labels, labels, labels.masks, labels.confidence,
+                                   learned_current=learned, learned_presence=np.array([.8, .49]))
+        sets = json.loads(json.dumps(preview))['sets']
+        self.assertEqual(base64.b64decode(sets['current'][0]['bits']), b'\x01')
+        self.assertEqual(base64.b64decode(sets['predicted'][0]['bits']), b'\x01')
+        self.assertEqual(len(sets['learned_current']), 1)
+        self.assertEqual(base64.b64decode(sets['learned_current'][0]['bits']), b'\x08')
+        self.assertEqual(sets['learned_current'][0]['confidence'], .8)
+        for kwargs in ({'learned_current': learned}, {'learned_presence': np.array([.8])},
+                       {'learned_current': np.ones((1, 3, 3)), 'learned_presence': np.array([.8])}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                instance_preview(labels, labels, labels.masks, labels.confidence, **kwargs)
 
     def test_bounded_native_payload_and_invalid_shapes(self):
         masks = np.ones((64, 64, 64), dtype=bool)

@@ -11,6 +11,7 @@ from .game_sequences import EncodedSessions, memory_inputs
 from .learning import visual_delta_loss
 from .object_dynamics import mask_loss, probabilities
 from .object_preview import instance_preview
+from .object_observation import ObservationReplay
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,8 @@ class ObjectTrainingConfig:
     cache_frames: int = 256
     points_per_side: int = 8
     activate_residual: bool = False
+    observer_steps: int = 32
+    observer_replay_frames: int = 64
 
     def __post_init__(self):
         if not isinstance(self.checkpoint, str) or not self.checkpoint:
@@ -39,6 +42,10 @@ class ObjectTrainingConfig:
             value = getattr(self, key)
             if type(value) is not int or not 1 <= value <= 4096:
                 raise ValueError(f'Invalid objects.{key}')
+        if type(self.observer_steps) is not int or not 0 <= self.observer_steps <= 256:
+            raise ValueError('observer_steps must be 0..256')
+        if type(self.observer_replay_frames) is not int or not 1 <= self.observer_replay_frames <= 256:
+            raise ValueError('observer_replay_frames must be 1..256')
         if type(self.click_frames) is not int or not 0 <= self.click_frames <= 64:
             raise ValueError('click_frames must be 0..64')
         if not 2 <= self.points_per_side <= 32 or self.samples > 64 or self.passes > 16:
@@ -98,6 +105,7 @@ class ObjectTrainer:
         if not engine.model.config.object_slots:
             raise ValueError('Object training requires object_slots > 0')
         engine.segmenter = segmenter
+        self.observations = ObservationReplay(config.observer_replay_frames)
 
     def begin_collection(self):
         self.segmenter.remaining = self.config.click_frames
@@ -107,6 +115,7 @@ class ObjectTrainer:
         head = e.model.dynamics.objects
         start = time.perf_counter()
         self.segmenter.remaining = c.teacher_frames
+        self.observations.check_encoder(e)
         # Rotate coverage over games instead of spending every label on one game.
         rng = random.Random(sum(s.seed for s in sessions) + learner.updates)
         candidates = []
@@ -120,73 +129,111 @@ class ObjectTrainer:
             for rows in candidates:
                 if rows and len(selected) < c.samples:
                     selected.append(rows.pop())
-        examples = []
+        examples, labeled_observations = [], []
         for i, t in selected:
             window = rollout_window(sessions[i], t, 3) or rollout_window(sessions[i], t, 1)
             before = self.segmenter.segment(window[0].before.final)
             after = self.segmenter.segment(window[0].after.final)
             endpoint = self.segmenter.segment(window[-1].after.final) if len(window) == 3 else None
+            for observation, labels in ((window[0].before, before), (window[0].after, after),
+                                         (window[-1].after, endpoint)):
+                if labels is not None and len(labels.masks):
+                    labeled_observations.append((sessions[i].game, observation, labels))
             if before is not None and after is not None and len(before.masks) and len(after.masks):
                 examples.append((i, t, window, before, after, endpoint))
         metrics = dict(samples=len(examples), updates=0, loss=None, mean_iou=None, rollout_iou=None,
-                       matched=0, rollout_matched=0, teacher=self.segmenter.report())
+                       matched=0, rollout_matched=0, teacher=self.segmenter.report(),
+                       metric_version=2, measurement='before auxiliary fitting',
+                       observer_updates=0, observer_loss=None, observer_frames=0,
+                       replay_frames=len(self.observations.rows), observed_post_iou=None,
+                       observed_fit_iou=None)
+        quality = {key: [] for key in ('observed_iou', 'sam_iou', 'student_iou',
+                   'sam_rollout_iou', 'student_rollout_iou', 'copy_iou', 'copy_rollout_iou')}
+        metrics.update({key: None for key in quality})
         sample = None
-        if not examples:
+        if not examples and not labeled_observations:
             return dict(metrics, seconds=time.perf_counter()-start, active=bool(head.gain)), sample
         encoded = EncodedSessions(e, sessions)
         memories = learner.zero_memories(sessions)
         states = {}
         wanted = {(i, t) for i, t, *_ in examples}
         with torch.no_grad(), e.autocast():
-            for t in range(max(t for _, t in wanted)+1):
+            for t in range(max((t for _, t in wanted), default=-1)+1):
                 for ids, _, z, h, action, _ in memory_inputs(e, encoded, t, memories):
                     next_h, _ = e.advance(z, h, action)
                     for k, i in enumerate(ids):
                         if (i, t) in wanted:
                             states[i, t] = (z[k:k+1].detach(), h[k:k+1].detach())
                         memories[i] = next_h[k:k+1]
+        current_rows = [self.observations.add(game, observation, encoded.z(observation)[None], labels)
+                        for game, observation, labels in labeled_observations]
+        prepared = []
+        with torch.no_grad(), e.autocast():
+            for i, t, window, before, after, endpoint in examples:
+                z, h = states[i, t]
+                geometry = window[0].before.final.shape
+                actions = [e.actions([step.action]) for step in window]
+                targets = [target_tensors(after, head.slots, e.device)]
+                if len(window) == 3 and endpoint is not None and len(endpoint.masks):
+                    targets.append(target_tensors(endpoint, head.slots, e.device))
+                masks, confidence = target_tensors(before, head.slots, e.device)
+                # Gain-zero base forecasts are independent of all object weights.
+                # Cache those expensive forwards once; all mask graphs remain live.
+                frozen = None
+                if not bool(head.gain):
+                    frozen, zz, hh = [], z, h
+                    for action in actions:
+                        next_z, next_h, _ = e.predict(zz, hh, action, *geometry)
+                        frozen.append((zz.detach(), next_h.detach(), action, next_z.detach()))
+                        zz, hh = next_z, next_h
+                item = dict(i=i, t=t, window=window, before=before, after=after,
+                            z=z, h=h, geometry=geometry, actions=actions,
+                            masks=masks, confidence=confidence, targets=targets, frozen=frozen)
+                prepared.append(item)
+                current = head.observe(z, *geometry)
+                add_quality(quality, 'observed_iou', current, (masks, confidence))
+                for conditioning, source in (('sam', masks), ('student', probabilities(current))):
+                    future = self._future(item, source)
+                    add_quality(quality, conditioning+'_iou', future[0][2], targets[0])
+                    if len(targets) == 2:
+                        add_quality(quality, conditioning+'_rollout_iou', future[-1][2], targets[1])
+                    if sample is None and conditioning == 'student':
+                        sample = self._preview(sessions[i].game, item, current, future[0][2])
+                copy = unchanged_prediction(masks)
+                add_quality(quality, 'copy_iou', copy, targets[0])
+                if len(targets) == 2:
+                    add_quality(quality, 'copy_rollout_iou', copy, targets[1])
+                if frozen is not None:
+                    item['visual'] = self._visual_losses(item, self._future(item, masks))
+        metrics.update({key: average(values) for key, values in quality.items()})
+        metrics.update(observer_frames=len({row.key for row in current_rows}),
+                       replay_frames=len(self.observations.rows))
         flags = [(p, p.requires_grad) for p in e.model.parameters()]
         rates = [g['lr'] for g in learner.optimizer.param_groups]
-        losses, ious, rollouts, observed = [], [], [], []
+        losses, ious, rollouts, observed, observer_losses = [], [], [], [], []
         e.model.eval().requires_grad_(False); head.train().requires_grad_(True)
         try:
             # Same named Adam states; no old parameter receives an auxiliary step.
             for group in learner.optimizer.param_groups: group['lr'] = c.learning_rate
             for _ in range(c.passes):
-                for i, t, window, before, after, endpoint in examples:
+                for item in prepared:
                     learner.optimizer.zero_grad(set_to_none=True)
-                    z, h = states[i, t]; geometry = window[0].before.final.shape
-                    masks, confidence = target_tensors(before, head.slots, e.device)
-                    target, target_confidence = target_tensors(after, head.slots, e.device)
                     with e.autocast():
-                        current = head.observe(z, *geometry)
-                        observed_loss, current_measure = mask_loss(current, masks, confidence)
-                        # Both teacher-conditioned and student-conditioned dynamics
-                        # are trained. During imagination only predictions survive.
+                        current = head.observe(item['z'], *item['geometry'])
+                        observed_loss, current_measure = mask_loss(current, item['masks'], item['confidence'])
                         conditioning = 'sam' if rng.random() < .5 else 'student'
-                        source = masks if conditioning == 'sam' else probabilities(current)
-                        actions = [e.actions([s.action]) for s in window]
-                        future = object_rollout(e, z, h, actions, geometry, source, warmup=not bool(head.gain))
-                        predicted, _, prediction = future[0]
-                        auxiliary, measured = mask_loss(prediction, target, target_confidence)
-                        a = torch.as_tensor(np.array(window[0].before.final), device=e.device).long()[None]
-                        b = torch.as_tensor(np.array(window[0].after.final), device=e.device).long()[None]
-                        visual = visual_delta_loss(e.decode(predicted, *geometry), a, b,
-                            e.config.false_change_weight, mode=e.config.prediction_delta_loss).mean()
-                        loss = observed_loss + auxiliary + visual
+                        source = item['masks'] if conditioning == 'sam' else probabilities(current)
+                        future = self._future(item, source)
+                        auxiliary, measured = mask_loss(future[0][2], *item['targets'][0])
+                        visual = item.get('visual')
+                        if visual is None:
+                            visual = self._visual_losses(item, future)
+                        loss = observed_loss + auxiliary + visual[0]
                         rollout_measure = None
-                        if len(future) == 3 and endpoint is not None and len(endpoint.masks):
-                            target3, confidence3 = target_tensors(endpoint, head.slots, e.device)
-                            term, rollout_measure = mask_loss(future[-1][2], target3, confidence3)
-                            b3 = torch.as_tensor(np.array(window[-1].after.final), device=e.device).long()[None]
-                            visual3 = visual_delta_loss(e.decode(future[-1][0], *geometry), a, b3,
-                                e.config.false_change_weight, mode=e.config.prediction_delta_loss).mean()
-                            loss = observed_loss + (auxiliary + term + visual + visual3)/2
-                    if not torch.isfinite(loss):
-                        raise ValueError('Nonfinite object dynamics loss')
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(head.parameters(), 1., error_if_nonfinite=True)
-                    learner.optimizer.step(); head.updates.add_(1)
+                        if len(item['targets']) == 2:
+                            term, rollout_measure = mask_loss(future[-1][2], *item['targets'][1])
+                            loss = observed_loss + (auxiliary + term + visual[0] + visual[1])/2
+                    self._step(learner, loss); head.updates.add_(1)
                     losses.append(float(loss.detach()))
                     if current_measure['mean_iou'] is not None: observed.append(current_measure['mean_iou'])
                     if measured['mean_iou'] is not None: ious.append(measured['mean_iou'])
@@ -194,27 +241,87 @@ class ObjectTrainer:
                     if rollout_measure:
                         metrics['rollout_matched'] += rollout_measure['matched']
                         if rollout_measure['mean_iou'] is not None: rollouts.append(rollout_measure['mean_iou'])
-                    if sample is None:
-                        predicted_masks = prediction[0][0].detach().sigmoid().float().cpu().numpy()
-                        predicted_presence = prediction[1][0].detach().sigmoid().float().cpu().numpy()
-                        sample = dict(game=sessions[i].game, step=t, source='frozen SAM2 pseudo-labels',
-                            action=asdict(window[0].action), conditioning=conditioning,
-                            before=window[0].before.final.tolist(), actual=window[0].after.final.tolist(),
-                            observed_masks=label_image(before.masks), actual_masks=label_image(after.masks),
-                            predicted_masks=label_image(predicted_masks, predicted_presence),
-                            instances=instance_preview(before, after, predicted_masks, predicted_presence))
-            mean_iou = sum(ious)/len(ious) if ious else None
-            observed_iou = sum(observed)/len(observed) if observed else None
-            rollout_iou = sum(rollouts)/len(rollouts) if rollouts else None
-            ready = all(value is not None and value >= c.activation_iou
-                        for value in (observed_iou, mean_iou, rollout_iou))
+            for row in self.observations.schedule(current_rows, c.observer_steps, rng):
+                learner.optimizer.zero_grad(set_to_none=True)
+                with e.autocast():
+                    prediction = head.observe(row.latent.to(e.device), *row.geometry)
+                    loss, _ = mask_loss(prediction, *target_tensors(row.labels, head.slots, e.device))
+                self._step(learner, loss)
+                observer_losses.append(float(loss.detach()))
+            post = []
+            with torch.no_grad(), e.autocast():
+                for item in prepared:
+                    _, measured = mask_loss(head.observe(item['z'], *item['geometry']),
+                                            item['masks'], item['confidence'])
+                    if measured['mean_iou'] is not None: post.append(measured['mean_iou'])
+            # Admission is based on the unaided pre-fit forecasts, never the
+            # easier teacher-conditioned or repeatedly fitted measurements.
+            ready = all(metrics[key] is not None and metrics[key] >= c.activation_iou
+                        for key in ('observed_iou', 'student_iou', 'student_rollout_iou'))
             if c.activate_residual and int(head.updates) >= c.warmup_updates and ready:
                 head.gain.fill_(1.)
-            metrics.update(updates=len(losses), total_updates=int(head.updates), loss=sum(losses)/len(losses),
-                mean_iou=mean_iou, rollout_iou=rollout_iou, observed_iou=observed_iou, ready=ready)
+            metrics.update(updates=len(losses), total_updates=int(head.updates), loss=average(losses),
+                mean_iou=average(ious), rollout_iou=average(rollouts), observed_fit_iou=average(observed),
+                observed_post_iou=average(post), observer_updates=len(observer_losses),
+                observer_loss=average(observer_losses), ready=ready)
         finally:
             learner.optimizer.zero_grad(set_to_none=True)
             for group, rate in zip(learner.optimizer.param_groups, rates): group['lr'] = rate
             for parameter, flag in flags: parameter.requires_grad_(flag)
             e.model.eval()
         return dict(metrics, seconds=time.perf_counter()-start, active=bool(head.gain)), sample
+
+    def _future(self, item, masks):
+        if item['frozen'] is None:
+            return object_rollout(self.engine, item['z'], item['h'], item['actions'], item['geometry'], masks)
+        result = []
+        for z, h_next, action, predicted in item['frozen']:
+            _, prediction = self.engine.model.dynamics.objects(z, h_next, action, *item['geometry'], masks)
+            masks = probabilities(prediction)
+            result.append((predicted, h_next, prediction))
+        return result
+
+    def _visual_losses(self, item, future):
+        e = self.engine
+        window, geometry = item['window'], item['geometry']
+        a = torch.as_tensor(np.array(window[0].before.final), device=e.device).long()[None]
+        result = []
+        for index in (0, -1) if len(item['targets']) == 2 else (0,):
+            b = torch.as_tensor(np.array(window[index].after.final), device=e.device).long()[None]
+            result.append(visual_delta_loss(e.decode(future[index][0], *geometry), a, b,
+                e.config.false_change_weight, mode=e.config.prediction_delta_loss).mean())
+        return result
+
+    def _step(self, learner, loss):
+        if not torch.isfinite(loss):
+            raise ValueError('Nonfinite object dynamics loss')
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.engine.model.dynamics.objects.parameters(), 1., error_if_nonfinite=True)
+        learner.optimizer.step()
+
+    def _preview(self, game, item, current, predicted):
+        masks, presence = [value[0].detach().sigmoid().float().cpu().numpy() for value in predicted]
+        learned, learned_presence = [value[0].detach().sigmoid().float().cpu().numpy() for value in current]
+        return dict(game=game, step=item['t'], source='frozen SAM2 pseudo-labels',
+            action=asdict(item['window'][0].action), conditioning='student', measurement='before auxiliary fitting',
+            before=item['window'][0].before.final.tolist(), actual=item['window'][0].after.final.tolist(),
+            observed_masks=label_image(item['before'].masks), actual_masks=label_image(item['after'].masks),
+            learned_current_masks=label_image(learned, learned_presence), predicted_masks=label_image(masks, presence),
+            instances=instance_preview(item['before'], item['after'], masks, presence,
+                                       learned_current=learned, learned_presence=learned_presence))
+
+
+def average(values):
+    return sum(values)/len(values) if values else None
+
+
+def add_quality(quality, key, prediction, target):
+    _, measured = mask_loss(prediction, *target)
+    if measured['mean_iou'] is not None:
+        quality[key].append(measured['mean_iou'])
+
+
+def unchanged_prediction(masks):
+    """A literal no-action SAM-copy baseline, expressed in the metric's logits."""
+    exists = masks.flatten(2).any(2)
+    return torch.where(masks > .5, 20., -20.), torch.where(exists, 20., -20.)

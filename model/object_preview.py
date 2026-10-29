@@ -25,12 +25,19 @@ def mask_instances(masks, confidence):
     return result
 
 
-def instance_preview(before, after, predicted, presence):
+def instance_preview(before, after, predicted, presence, *, learned_current=None, learned_presence=None):
     """One sample only, not the batch history; no soft probabilities retained."""
     shape = before.masks.shape[1:]
     if after.masks.shape[1:] != shape or predicted.shape[1:] != shape:
         raise ValueError('Object preview sets must use the same native geometry')
-    return dict(version=1, encoding='packbits-little-base64', shape=list(shape), sets=dict(
+    sets = dict(
         current=mask_instances(before.masks, before.confidence),
         next=mask_instances(after.masks, after.confidence),
-        predicted=mask_instances(predicted, presence)))
+        predicted=mask_instances(predicted, presence))
+    if learned_current is not None:
+        if learned_current.shape[1:] != shape or learned_presence is None:
+            raise ValueError('Learned current preview requires matching geometry and presence')
+        sets['learned_current'] = mask_instances(learned_current, learned_presence)
+    elif learned_presence is not None:
+        raise ValueError('Learned presence requires current masks')
+    return dict(version=1, encoding='packbits-little-base64', shape=list(shape), sets=sets)

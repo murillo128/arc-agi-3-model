@@ -60,13 +60,29 @@ old weight and binds existing Adam moments by parameter name. Auxiliary steps
 freeze the original modules and update only the new head, using the same
 optimizer's new parameter states at a temporary learning rate. Normal sequence
 predictor learning continues at its original rate. Encoder/decoder rates and
-checkpoint state are unchanged.
+checkpoint state are unchanged. While fusion gain is zero, normal predictor
+steps leave object parameters without gradients, so neither their weights nor
+their Adam moments/step counters advance. A zero gradient tensor would still
+apply Adam momentum and weight decay; it is not sufficient isolation.
+
+Extraction also learns from every available labeled before/after/valid endpoint
+observation, using `observer_steps` head-only updates per batch (default 32).
+These run after joint future-mask fitting. A bounded CPU replay keeps up to
+`observer_replay_frames` distinct labeled encodings (default 64), balances games
+when evicting/sampling and invalidates encodings when the encoder changes.
+It uses the already requested SAM labels, without extra teacher calls. Replay
+does not retain model graphs or GPU session storage and starts empty on resume;
+learned weights and optimizer history are retained. `observer_updates` reports
+these additional updates separately from the existing joint auxiliary counter.
 
 `activate_residual: false` keeps fusion disabled while collecting evidence.
 With explicit activation requested, fusion can start only after the configured
-number of auxiliary updates and current/one-step/three-step matched-mask IoU all
-meet `activation_iou`. These are **fit metrics**, not a guarantee of generalization
-or improved visual predictions. Keep a comparison run before promoting a model.
+number of joint auxiliary updates and current extraction plus **student-input**
+one-step/three-step matched-mask IoU all meet `activation_iou`. They are measured
+on the same sampled normal training transitions before auxiliary fitting, after
+the batch's main predictor updates. Teacher-input forecasts cannot satisfy this
+gate. These are training measurements, not held-out generalization or evidence of
+improved game completion.
 
 ## Installation and configuration
 
@@ -113,6 +129,8 @@ CPU sampling allowance; tune after measuring):
   "device": "cpu",
   "samples": 2,
   "passes": 2,
+  "observer_steps": 32,
+  "observer_replay_frames": 64,
   "learning_rate": 0.001,
   "teacher_frames": 6,
   "click_frames": 1,
@@ -128,6 +146,10 @@ The teacher has separate per-batch call allowances for collection and learning.
 An exhausted allowance falls back to the existing click policy or skips an
 unlabeled training example. Cached real frames cost no new inference calls. The
 LR in this section applies only to auxiliary updates of new parameters.
+`observer_steps` accepts 0..256; zero disables the extra extraction updates.
+`observer_replay_frames` accepts 1..256. Existing object checkpoints missing these
+two fields adopt their defaults on normal resume. Other configuration changes
+remain subject to the existing strict resume checks.
 
 To resume a **frozen-representation sequence checkpoint**, migrate into a new
 directory, leaving the old run intact, and then use the normal resume path:
@@ -172,8 +194,15 @@ It measures teacher memory only; a completed resumed training batch is the
 co-residency check. No held-out observations or comparative training are needed.
 
 The dashboard adds an experimental panel only when object measurements exist:
-real frames, SAM masks, predicted next masks, current/one/three-step IoU, auxiliary
-loss and teacher cost. Preview colors are local mask indices, not cross-frame
+real frames, SAM masks, learned current masks, predicted next masks, auxiliary
+loss and teacher cost. Metric version 2 distinguishes current extraction before
+and after auxiliary fitting; one/three-step forecasts from SAM versus learned
+current masks; and an unchanged-SAM copy baseline. All forecast comparisons use
+the same pre-fit model and selected transitions. A high teacher-input or copy
+score can reflect static objects, not learned motion. All IoUs measure agreement
+with SAM pseudo-labels, not semantic object correctness. Historical mixed fit
+metrics remain available as explicitly legacy data and are not spliced into the
+new curves. Preview colors are local mask indices, not cross-frame
 identity. The architecture describes the optional branch; LMEX binds its tensor
 inventory only when exporting an enabled checkpoint. Generated Kaggle packages
 include learned inference code, without SAM dependencies or checkpoint downloads.

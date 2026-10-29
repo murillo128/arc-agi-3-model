@@ -3,13 +3,14 @@
 (() => {
   const $=id=>document.getElementById(id);
   const palette=['#ffffff','#cccccc','#999999','#666666','#333333','#000000','#e53aa3','#ff7bcc','#f93c31','#1e93ff','#88d8f1','#ffdc00','#ff851b','#921231','#4fcc30','#a356d6'];
-  const names={current:'Current SAM · t',next:'Next SAM · t + 1',predicted:'Predicted · t + 1'};
+  const names={current:'Current SAM · t',learned_current:'Current student · t',next:'Next SAM · t + 1',predicted:'Predicted · t + 1'};
+  const student=set=>set==='predicted'||set==='learned_current';
   const state={latest:null,sample:null,key:null,decoded:null,error:'',set:'current',mode:'outlines',selected:0,pinned:false,opacity:.4,uncovered:false};
   const key=sample=>sample?JSON.stringify([sample.game,sample.batch,sample.step]):null;
   const count=value=>value.toLocaleString('en-US');
   const percent=value=>(100*value).toLocaleString('en-US',{maximumFractionDigits:1})+'%';
-  const color=(id,set)=>`hsl(${(id*137.508+{current:155,next:35,predicted:260}[set])%360} 85% 65%)`;
-  const label=(mask,set)=>`${set==='predicted'?'Slot':'Mask'} ${mask.id+1}`;
+  const color=(id,set)=>`hsl(${(id*137.508+{current:155,learned_current:260,next:35,predicted:260}[set])%360} 85% 65%)`;
+  const label=(mask,set)=>`${student(set)?'Slot':'Mask'} ${mask.id+1}`;
 
   function decode(sample){
     const data=sample.instances;
@@ -23,6 +24,7 @@
     const sets={};
     for(const name of Object.keys(names)){
       const source=data.sets?.[name], ids=new Set(), union=new Uint8Array(size);
+      if(name==='learned_current'&&source===undefined)continue;
       if(!Array.isArray(source)||source.length>64)throw Error('Missing or invalid mask set.');
       const masks=source.map(entry=>{
         if(!Number.isInteger(entry.id)||entry.id<0||entry.id>=64||ids.has(entry.id))throw Error('Invalid instance number.');
@@ -59,7 +61,7 @@
 
   function paint(){
     const {width,height}=state.decoded, {masks,union}=state.decoded.sets[state.set];
-    const selected=masks[state.selected], frame=state.set==='current'?state.sample.before:state.sample.actual;
+    const selected=masks[state.selected], frame=['current','learned_current'].includes(state.set)?state.sample.before:state.sample.actual;
     const canvas=$('objects-inspector-canvas'), ctx=canvas.getContext('2d');
     const scale=Math.max(2,Math.min(8,Math.floor(768/Math.max(width,height))));
     canvas.width=width*scale;canvas.height=height*scale;
@@ -93,13 +95,20 @@
     $('objects-inspector-controls').hidden=!available;$('objects-inspector-content').hidden=!available;
     const conditioning=sample?.conditioning==='sam'?'SAM masks':sample?.conditioning==='student'?'student masks':'not recorded';
     const action=sample?.action?` · action ${sample.action.id}${Object.keys(sample.action.data||{}).length?' '+JSON.stringify(sample.action.data):''}`:'';
-    $('objects-sample-info').textContent=sample?`${sample.game} · step ${sample.step} · first auxiliary fit pass, batch ${sample.batch}${action} · prediction input: ${conditioning}`:'Waiting for an object sample.';
+    $('objects-sample-info').textContent=sample?`${sample.game} · step ${sample.step} · ${sample.instances?.sets?.learned_current?'before auxiliary fitting':'first auxiliary fit pass'}, batch ${sample.batch}${action} · prediction input: ${conditioning}`:'Waiting for an object sample.';
+    const inspection=state.decoded?.sets.learned_current
+      ?'Compare Current student with Current SAM to inspect extraction.'
+      :'Current student masks were not recorded in this older sample.';
     const pinned=state.pinned?`Pinned sample.${key(state.latest)!==state.key?' A newer sample is available; unpin to follow it.':''} `:'';
-    $('objects-inspector-status').textContent=pinned+(available?'Independent masks retain overlaps. Inspect SAM proposals against the real frame; they may miss or merge meaningful game objects.'
+    $('objects-inspector-status').textContent=pinned+(available?`Independent masks retain overlaps. ${inspection} SAM proposals may miss or merge meaningful game objects.`
       :state.error?`Instance inspection unavailable: ${state.error} The flattened overview remains below.`
       :sample?'Legacy sample: only flattened masks were saved. Overlap, individual area, confidence and coverage cannot be recovered; use the overview below.'
       :'Individual masks appear when a new object sample is saved.');
     if(!available){$('objects-instance').replaceChildren();return;}
+    if(!state.decoded.sets[state.set])state.set='current';
+    $('objects-set').replaceChildren(...Object.keys(state.decoded.sets).map(name=>{
+      const option=document.createElement('option');option.value=name;option.textContent=names[name];return option;
+    }));
     const {masks,covered}=state.decoded.sets[state.set], {size}=state.decoded;
     if(state.selected>=masks.length)state.selected=0;
     const selected=masks[state.selected];
@@ -107,16 +116,16 @@
     $('objects-opacity').value=String(state.opacity*100);$('objects-opacity').disabled=state.mode!=='single';
     $('objects-opacity-value').textContent=percent(state.opacity);
     $('objects-uncovered').checked=state.uncovered;$('objects-uncovered').disabled=state.mode==='frame';
-    $('objects-set-summary').textContent=`${count(masks.length)} ${state.set==='predicted'?'predicted masks':'SAM masks'} · covered ${count(covered)} / ${count(size)} pixels (${percent(covered/size)}) · uncovered ${count(size-covered)} (${percent(1-covered/size)})`;
+    $('objects-set-summary').textContent=`${count(masks.length)} ${student(state.set)?'student masks':'SAM masks'} · covered ${count(covered)} / ${count(size)} pixels (${percent(covered/size)}) · uncovered ${count(size-covered)} (${percent(1-covered/size)})`;
     $('objects-instance').replaceChildren(...masks.map((mask,index)=>{
       const option=document.createElement('option');option.value=String(index);
       option.textContent=`${label(mask,state.set)} · ${count(mask.area)} px · ${percent(mask.area/size)}`;return option;
     }));
     $('objects-instance').value=String(state.selected);$('objects-instance').disabled=!masks.length;
     $('objects-prev').disabled=!masks.length||state.selected===0;$('objects-next').disabled=!masks.length||state.selected===masks.length-1;
-    $('objects-instance-detail').textContent=selected?`${label(selected,state.set)} · ${count(selected.area)} pixels (${percent(selected.area/size)}) · ${state.set==='predicted'?'presence':'SAM confidence'} ${percent(selected.confidence)}`:'No masks in this set. The real frame remains visible; all pixels are uncovered.';
+    $('objects-instance-detail').textContent=selected?`${label(selected,state.set)} · ${count(selected.area)} pixels (${percent(selected.area/size)}) · ${student(state.set)?'presence':'SAM confidence'} ${percent(selected.confidence)}`:'No masks in this set. The real frame remains visible; all pixels are uncovered.';
     $('objects-instance-detail').style.borderColor=selected?color(selected.id,state.set):'transparent';
-    $('objects-confidence-help').textContent=state.set==='predicted'?'Presence is the model’s probability for this slot, not semantic correctness. Saved predictions use presence ≥ 50% and mask probability > 50%; empty masks are omitted.'
+    $('objects-confidence-help').textContent=student(state.set)?'Presence is the model’s probability for this slot, not semantic correctness. Saved student masks use presence ≥ 50% and mask probability > 50%; empty masks are omitted.'
       :'SAM confidence is the lower of its predicted IoU and stability scores, not the probability of a correct game object. Overlapping instance areas are counted separately; coverage counts their union once.';
     paint();
   }
