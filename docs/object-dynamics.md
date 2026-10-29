@@ -81,8 +81,19 @@ SAM2_BUILD_CUDA=0 .venv-objects/bin/python -m pip install --no-build-isolation '
 ```
 
 Download the official checkpoint separately and verify the SHA above. The provider
-also verifies it on startup. CPU is supported. A GPU teacher competes with the
-world model for memory; do not assume it fits alongside the current trainer.
+also verifies it on startup. CPU is supported. With `device: "cuda:0"`, the frozen teacher is kept on CPU
+when idle. Each uncached, budgeted call transfers it to the selected GPU, runs
+BF16 inference, returns native CPU labels, clears predictor image features and
+moves the teacher back to CPU in a `finally` block. Unused CUDA allocator memory
+is released before and after the call. Cache hits and exhausted budgets do not
+transfer the model. CUDA requires native BF16 support; there is no silent CPU or
+precision fallback. Exceptions propagate after cleanup.
+
+Labels are generated outside the world model's backward pass, but the model and
+Adam still occupy VRAM. Check actual memory before adoption; temporary residency
+does not guarantee that every GPU fits. Teacher timing includes transfer,
+synchronization and cleanup. Its report identifies inference device, precision
+and idle residency. CPU execution keeps its existing FP32 behavior.
 No held-out game is needed for setup or the audit.
 
 Make a copy of the current training and initialization JSON files, preserving their
@@ -127,6 +138,32 @@ request fusion later without discarding learned masks, change **only**
 `activate_residual` to `true` in a copied config and migrate the object run into
 another new directory with the same command. This retains its masks and Adam
 states and requests the warm-up/IoU gate; it does not force activation.
+
+To change the teacher device on an already-enabled run, copy its training config
+and change **only** `sequence_objects.device`. Use the explicit migration flag:
+
+```sh
+python -m model.object_upgrade --source /old-object-run/latest.pt \
+  --training-config /configs/train-objects-cuda.json --output /new-object-run \
+  --change-teacher-device
+```
+
+This preserves object weights, gain, update counters, every optimizer and all
+other learned/control state. It cannot simultaneously change activation, labels,
+rates, budgets, games or architecture. Resume the new output normally. Keep the
+source run and copy its metric history when switching the dashboard.
+
+At a saved batch boundary with the trainer stopped, a one-frame device check can
+use the report's real training sample. It writes a new local evidence file and
+checks native masks, frozen weights, and release of GPU tensors:
+
+```sh
+python -m model.bench_sam_device --report /old-object-run/report.json \
+  --device cuda:0 --output /tmp/sam-device-check.json
+```
+
+It measures teacher memory only; a completed resumed training batch is the
+co-residency check. No held-out observations or comparative training are needed.
 
 The dashboard adds an experimental panel only when object measurements exist:
 real frames, SAM masks, predicted next masks, current/one/three-step IoU, auxiliary
