@@ -405,7 +405,8 @@ class AdaptivePolicy:
             raise FloatingPointError('Nonfinite current state')
         if state.z is not None and self.goal is None:
             with torch.no_grad(), self.runtime.engine.autocast():
-                logits, mask_logits = self.runtime.goal(state.z[None], state.h, *state.geometry)
+                features = self.runtime.engine.planning_features(state.z[None], *state.geometry)
+                logits, mask_logits = self.runtime.goal(features, state.h, *state.geometry)
             if not torch.isfinite(logits).all() or not torch.isfinite(mask_logits).all():
                 raise FloatingPointError('Nonfinite visual goal')
             frame = logits.argmax(-1)[0].cpu().numpy().astype(np.uint8)
@@ -588,7 +589,8 @@ class AdaptivePolicy:
                 losses = []
                 for row in labels:
                     state = current(row['start'])
-                    logits, mask_logits = self.runtime.goal(state.z[None], state.h, *state.geometry)
+                    features = engine.planning_features(state.z[None], *state.geometry)
+                    logits, mask_logits = self.runtime.goal(features, state.h, *state.geometry)
                     tensors = [torch.tensor(np.array(v), device=engine.device)[None] for v in
                                (records[row['start']].observation.final, row['frame'], row['mask'])]
                     losses.append(goal_loss(logits, mask_logits, tensors[0].long(), tensors[1].long(), tensors[2].bool()))
@@ -613,7 +615,9 @@ class AdaptivePolicy:
                 state = current(row['start'])
                 patch = engine.model.config.patch
                 height, width = state.geometry
-                logits, cost = self.runtime.path(state.z[None], state.h, z[None], mask,
+                features = engine.planning_features(state.z[None], height, width)
+                goal_features = engine.planning_features(z[None], height, width)
+                logits, cost = self.runtime.path(features, state.h, goal_features, mask,
                     (height+patch-1)//patch, (width+patch-1)//patch,
                     torch.tensor([row['budget']], device=engine.device))
                 targets = torch.tensor([float(row['success'])], device=engine.device)

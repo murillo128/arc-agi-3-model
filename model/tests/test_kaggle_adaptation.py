@@ -328,11 +328,40 @@ with torch.no_grad():
     prediction = engine.predict(z, h, engine.actions([Action(4)]), 8, 8)
     context = engine.planning_features(z, 8, 8)
 objects = getattr(engine.model.dynamics, 'objects', None)
+adaptive_action = None
+if objects is not None:
+    import numpy as np
+    from model import adaptation
+    from model.data import Observation
+    assert Path(adaptation.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
+    config = adaptation.AdaptationConfig(stopping='steps', exploration=1.,
+        representation_steps=0, predictor_steps=0, goal_steps=0, path_steps=0)
+    policy = adaptation.load(sys.argv[2], config=config, seed=23)
+    observed = np.zeros((1, 8, 8), dtype=np.uint8)
+    observed[0, 2:4, 1:3] = 9
+    consumed = []
+    def record_goal(module, args, output):
+        consumed.append((args[0].detach().clone(), tuple(value.detach().clone() for value in output)))
+    handle = policy.runtime.goal.register_forward_hook(record_goal)
+    try:
+        adaptive_action = policy.choose_action(Observation(observed, (4,), 'NOT_FINISHED', 0, 5)).id
+    finally:
+        handle.remove()
+    assert len(consumed) == 1
+    state = policy.state
+    with policy.runtime.router.activate(policy.bank), torch.no_grad():
+        enriched = policy.runtime.engine.planning_features(state.z[None], *state.geometry)
+        expected_goal = policy.runtime.goal(enriched, state.h, *state.geometry)
+        raw_goal = policy.runtime.goal(state.z[None], state.h, *state.geometry)
+    assert any(not torch.equal(a, b) for a, b in zip(raw_goal, expected_goal)), 'Inactive Goal fixture'
+    torch.testing.assert_close(consumed[0][0], enriched, rtol=0, atol=0)
+    for actual, expected in zip(consumed[0][1], expected_goal):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 print(json.dumps(dict(prediction=[value.tolist() for value in prediction], context=context.tolist(),
     slots=engine.model.config.object_slots, width=engine.model.config.object_width,
     updates=int(objects.updates) if objects is not None else None,
     updates_dtype=str(objects.updates.dtype) if objects is not None else None,
-    gain=float(objects.gain) if objects is not None else None)))
+    gain=float(objects.gain) if objects is not None else None, adaptive_action=adaptive_action)))
 '''
             try:
                 for variant in ('legacy', 'objects'):
@@ -351,7 +380,8 @@ print(json.dumps(dict(prediction=[value.tolist() for value in prediction], conte
                         else:
                             with torch.no_grad():
                                 reference.dynamics.objects.output.weight.fill_(.05)
-                                reference.dynamics.objects.output.bias.fill_(.01)
+                                bias = reference.dynamics.objects.output.bias
+                                bias.copy_(torch.arange(bias.numel()).float() * .25)
                                 reference.dynamics.objects.gain.fill_(1.)
                                 reference.dynamics.objects.updates.fill_(7)
                             payload['world']['network'] = asdict(config)
@@ -377,6 +407,7 @@ print(json.dumps(dict(prediction=[value.tolist() for value in prediction], conte
                         self.assertEqual(actual['updates'], 7 if variant == 'objects' else None)
                         self.assertEqual(actual['updates_dtype'], 'torch.int64' if variant == 'objects' else None)
                         self.assertEqual(actual['gain'], 1. if variant == 'objects' else None)
+                        self.assertEqual(actual['adaptive_action'], 4 if variant == 'objects' else None)
             finally:
                 shutil.rmtree(package)
 
