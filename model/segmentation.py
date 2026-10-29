@@ -4,6 +4,7 @@ SAM is optional and imported only when explicitly configured. No game rules,
 future frames, downloads or trainable teacher state enter this boundary.
 """
 from collections import OrderedDict
+from contextlib import nullcontext
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -159,8 +160,27 @@ class SAM2Segmenter:
         import torch
         from sam2.build_sam import build_sam2
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-        self.model = build_sam2('configs/sam2.1/sam2.1_hiera_t.yaml', str(checkpoint),
-                               device=device, apply_postprocessing=False).eval().requires_grad_(False)
+        self.device = torch.device(device)
+        cuda = self.device.type == 'cuda'
+        load_device = 'cpu' if cuda else device
+        overrides = [
+            '++model.image_encoder.neck.position_encoding.warmup_cache=false',
+            '++model.memory_encoder.position_encoding.warmup_cache=false',
+        ] if cuda else []
+        # Pinned SAM briefly initializes rotary tensors on the current GPU even
+        # with device='cpu'. Select the requested GPU and release them before return.
+        with torch.cuda.device(self.device) if cuda else nullcontext():
+            self.model = build_sam2('configs/sam2.1/sam2.1_hiera_t.yaml', str(checkpoint),
+                device=load_device, hydra_overrides_extra=overrides,
+                apply_postprocessing=False).eval().requires_grad_(False)
+            if cuda:
+                try:
+                    self._clear_cuda_caches()
+                finally:
+                    try:
+                        torch.cuda.synchronize(self.device)
+                    finally:
+                        torch.cuda.empty_cache()
         self.generator = SAM2AutomaticMaskGenerator(self.model, points_per_side=points_per_side,
             points_per_batch=16, pred_iou_thresh=.7, stability_score_thresh=.8, crop_n_layers=0)
         self.uniform_points = self.generator.point_grids[0].copy()
@@ -170,6 +190,17 @@ class SAM2Segmenter:
         self.seconds = 0.
         self.remaining = None
         self.deferred = 0
+
+    def _clear_cuda_caches(self):
+        # These two pinned SAM caches are not registered buffers: Module.to()
+        # does not move them, and predictor.reset_predictor() only clears features.
+        from sam2.modeling.position_encoding import PositionEmbeddingSine
+        from sam2.modeling.sam.transformer import RoPEAttention
+        for module in self.model.modules():
+            if isinstance(module, PositionEmbeddingSine):
+                module.cache.clear()
+            elif isinstance(module, RoPEAttention):
+                module.freqs_cis = module.freqs_cis.cpu()
 
     def segment(self, frame):
         if frame is None:
@@ -194,10 +225,37 @@ class SAM2Segmenter:
         scale = max(1, 512 // max(frame.shape))
         rgb = np.array(Image.fromarray(PALETTE[frame.astype(np.uint8)]).resize(
             (frame.shape[1]*scale, frame.shape[0]*scale), Image.Resampling.NEAREST))
-        with torch.inference_mode():
-            self.generator.point_grids = [np.unique(np.concatenate((self.uniform_points, detail_prompts(frame))), axis=0)]
-            proposals = self.generator.generate(rgb)
-        result = native_masks(proposals, frame.shape, self.capacity)
+        cuda = self.device.type == 'cuda'
+        with torch.cuda.device(self.device) if cuda else nullcontext():
+            if cuda and not torch.cuda.is_bf16_supported(including_emulation=False):
+                raise RuntimeError(f'SAM2 on {self.device} requires native bfloat16 support')
+            try:
+                if cuda:
+                    torch.cuda.synchronize(self.device)
+                    torch.cuda.empty_cache()
+                    self.model.to(self.device)
+                precision = torch.autocast('cuda', dtype=torch.bfloat16) if cuda else nullcontext()
+                with torch.inference_mode(), precision:
+                    self.generator.point_grids = [np.unique(np.concatenate((self.uniform_points, detail_prompts(frame))), axis=0)]
+                    proposals = self.generator.generate(rgb)
+                result = native_masks(proposals, frame.shape, self.capacity)
+            finally:
+                # SAM can retain image embeddings when generation raises. Offload
+                # even if predictor cleanup fails, and retain trainer peak counters.
+                try:
+                    self.generator.predictor.reset_predictor()
+                finally:
+                    if cuda:
+                        try:
+                            try:
+                                self.model.to('cpu')
+                            finally:
+                                self._clear_cuda_caches()
+                        finally:
+                            try:
+                                torch.cuda.synchronize(self.device)
+                            finally:
+                                torch.cuda.empty_cache()
         self.seconds += time.perf_counter() - start; self.calls += 1
         self.cache[key] = result
         while len(self.cache) > self.cache_frames:
@@ -207,4 +265,6 @@ class SAM2Segmenter:
     def report(self):
         return dict(provider='sam2.1_hiera_tiny', revision=SAM2_REVISION, checkpoint_sha256=TINY_SHA256,
                     calls=self.calls, cache_hits=self.hits, seconds=self.seconds, cached_frames=len(self.cache),
-                    deferred=self.deferred, detail_prompts=32)
+                    deferred=self.deferred, detail_prompts=32, device=str(self.device),
+                    precision='bfloat16' if self.device.type == 'cuda' else 'float32',
+                    resident_device=str(next(self.model.parameters()).device))

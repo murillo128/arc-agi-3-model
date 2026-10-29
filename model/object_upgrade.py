@@ -13,13 +13,27 @@ from .sequence_upgrade import normalized_plan, upgraded_optimizer
 from .training_config import load_plan
 
 
-def migrate(saved, plan):
+def migrate(saved, plan, *, change_teacher_device=False):
     if saved.get('kind') != 'game_sequences' or saved.get('version') != 1:
         raise ValueError('Object migration requires a sequence checkpoint')
     if 'sequence_objects' not in plan.payload:
         raise ValueError('Missing sequence_objects configuration')
     old = NetworkConfig(**saved['network'])
     target = NetworkConfig(**plan.payload['initialization']['network'])
+    if change_teacher_device:
+        if not old.object_slots or old != target:
+            raise ValueError('Teacher device migration requires an unchanged enabled object network')
+        before, after = normalized_plan(saved['plan']), normalized_plan(plan.payload)
+        old_device = before['sequence_objects'].get('device', 'cpu')
+        new_device = after['sequence_objects'].get('device', 'cpu')
+        if torch.device(new_device).type not in ('cpu', 'cuda') or old_device == new_device:
+            raise ValueError('Teacher device migration requires a different CPU/CUDA device')
+        before['sequence_objects']['device'] = new_device
+        after['sequence_objects']['device'] = new_device
+        if before != after:
+            raise ValueError('Teacher device migration may only change sequence_objects.device')
+        return dict(saved, plan=plan.payload, predictor_adaptations=list(saved.get('predictor_adaptations', [])) + [dict(
+            kind='object_teacher_device', batch=saved['progress']['batches'], before=old_device, after=new_device)])
     if old.object_slots:
         before, after = normalized_plan(saved['plan']), normalized_plan(plan.payload)
         was_requested = before['sequence_objects'].get('activate_residual', False)
@@ -61,13 +75,15 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--training-config', required=True)
     parser.add_argument('--output', required=True, help='A new run directory; never the source run')
+    parser.add_argument('--change-teacher-device', action='store_true',
+                        help='Change only the teacher CPU/CUDA device on an existing object run')
     args = parser.parse_args()
     output = Path(args.output)
     if output.exists():
         parser.error('Output must be a new directory to preserve the source run')
     plan = load_plan(args.training_config)
     payload = torch.load(args.source, map_location='cpu', weights_only=True, mmap=True)
-    updated = migrate(payload, plan)
+    updated = migrate(payload, plan, change_teacher_device=args.change_teacher_device)
     checkpoint.write(output/'latest.pt', updated)
     print(f'Migrated batch {updated["progress"]["batches"]}; existing weights/Adam retained; source untouched.')
 

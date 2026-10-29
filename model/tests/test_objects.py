@@ -267,6 +267,60 @@ class ObjectTests(unittest.TestCase):
             if 'objects.' not in name: torch.testing.assert_close(value, after[name], rtol=0, atol=0)
         self.assertEqual(float(engine.model.dynamics.objects.gain), 0)
 
+    def test_auxiliary_fit_with_bfloat16_autocast_returns_serializable_native_preview(self):
+        import json
+        from unittest.mock import patch
+        torch.manual_seed(9)
+        engine = Engine(WorldModel(network()), TrainConfig())
+        learner = SequenceLearner(engine, SequenceConfig(batch_games=1, session_steps=4, block_steps=2))
+        trainer = ObjectTrainer(engine, ObjectTrainingConfig('/fake', samples=1, passes=1), FakeTeacher())
+        with patch.object(engine, 'autocast', lambda: torch.autocast('cpu', dtype=torch.bfloat16)):
+            metrics, preview = trainer.fit(learner, [session()])
+        self.assertEqual(metrics['updates'], 1)
+        self.assertEqual(metrics['total_updates'], 1)
+        self.assertTrue(np.isfinite(metrics['loss']))
+        self.assertIsNotNone(preview)
+        serialized = json.loads(json.dumps(preview, allow_nan=False))
+        for key in ('before', 'actual', 'observed_masks', 'actual_masks', 'predicted_masks'):
+            self.assertEqual(np.asarray(serialized[key]).shape, (8, 8), key)
+            self.assertTrue(all(type(pixel) is int for row in serialized[key] for pixel in row), key)
+
+    def test_teacher_device_migration_preserves_enabled_learning_state(self):
+        model = WorldModel(network())
+        adam = optimizer(model.dynamics.parameters(), .001, False)
+        sum(p.square().sum() for p in model.dynamics.parameters()).backward(); adam.step()
+        model.dynamics.objects.updates.fill_(192); model.dynamics.objects.gain.fill_(1.)
+        plan = dict(initialization=dict(network=asdict(model.config)), settings=dict(seed=1),
+                    sequence_objects=dict(checkpoint='/offline/sam.pt', device='cpu', activate_residual=True))
+        saved = dict(kind='game_sequences', version=1, network=asdict(model.config), plan=plan,
+                     weights=deepcopy(model.state_dict()), predictor_optimizer=adam.state_dict(),
+                     representation_optimizer=dict(state={}), planning=dict(goal_updates=31),
+                     predictor_adaptations=[dict(kind='object_dynamics', batch=2)],
+                     progress=dict(updates=8, batches=12), torch_rng=torch.get_rng_state(),
+                     sequence_control=dict(representation_frozen_at_batch=1))
+        target = deepcopy(plan); target['sequence_objects']['device'] = 'cuda:0'
+        migrated = migrate(saved, SimpleNamespace(payload=target), change_teacher_device=True)
+        for key in saved:
+            if key not in ('plan', 'predictor_adaptations'): self.assertIs(migrated[key], saved[key], key)
+        self.assertEqual(migrated['predictor_adaptations'][:-1], saved['predictor_adaptations'])
+        self.assertEqual(saved['plan']['sequence_objects']['device'], 'cpu')
+        self.assertEqual(migrated['plan']['sequence_objects']['device'], 'cuda:0')
+        self.assertEqual(migrated['predictor_adaptations'][-1]['kind'], 'object_teacher_device')
+        self.assertEqual(int(migrated['weights']['dynamics.objects.updates']), 192)
+        self.assertEqual(float(migrated['weights']['dynamics.objects.gain']), 1.)
+        with self.assertRaises(ValueError): migrate(saved, SimpleNamespace(payload=target))
+        with self.assertRaises(ValueError):
+            migrate(saved, SimpleNamespace(payload=plan), change_teacher_device=True)
+        for path, value in [(('settings', 'seed'), 99), (('sequence_objects', 'activate_residual'), False),
+                            (('sequence_objects', 'checkpoint'), '/other.pt'),
+                            (('sequence_objects', 'learning_rate'), .1)]:
+            changed = deepcopy(target); changed[path[0]][path[1]] = value
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, 'only change'):
+                migrate(saved, SimpleNamespace(payload=changed), change_teacher_device=True)
+        changed = deepcopy(target); changed['initialization']['network']['object_slots'] = 4
+        with self.assertRaisesRegex(ValueError, 'unchanged enabled'):
+            migrate(saved, SimpleNamespace(payload=changed), change_teacher_device=True)
+
     def test_rollout_never_crosses_reset_or_new_level(self):
         s = session()
         self.assertEqual(len(rollout_window(s, 0)), 3)
