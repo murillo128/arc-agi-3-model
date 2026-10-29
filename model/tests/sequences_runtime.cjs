@@ -62,11 +62,54 @@ const text = id => nodes.get(id).textContent;
     [{batch:7,objects:{mean_iou:.5,rollout_iou:.25,observed_iou:.75,loss:2}}])`,context);
   assert.equal(nodes.get('objects-panel').hidden,false);
   assert.match(text('objects-status'),/Warm-up · visual residual disabled/);
-  assert.match(text('objects-status'),/current, one-step and three-step agreement ≥ 55%/);
+  assert.match(text('objects-status'),/legacy current and mixed-input future agreement ≥ 55%/);
   assert.match(text('objects-sample-info'),/batch 7/);
-  assert.deepEqual(nodes.get('objects-iou-legend').children.map(n=>n.textContent),
-    ['Current student: 75','One-step prediction: 50','Three-step prediction: 25','┄ Residual activation threshold: 55 %']);
+  assert.equal(nodes.get('objects-legacy').hidden,false);
+  assert.deepEqual(nodes.get('objects-legacy-iou-legend').children.map(n=>n.textContent),
+    ['Current · during fitting: 75','Mixed input · one step: 50','Mixed input · three steps: 25']);
+  assert.equal(nodes.get('objects-iou').children[0].textContent,'No measurements yet',
+    'legacy fit values must not be relabeled as pre-fit extraction');
+  assert.equal(nodes.get('objects-one-step').children[0].textContent,'No measurements yet',
+    'legacy mixed values cannot be split into teacher/student results');
+  assert.equal(nodes.get('objects-learned-figure').hidden,true);
   assert.equal(nodes.get('objects-predicted').context.pixels.at(-1).color,'#999999');
+  vm.runInContext(`renderObjects({objects:{metric_version:2,active:false,total_updates:40,samples:2,
+    observer_updates:32,observer_frames:6,replay_frames:12,config:{activation_iou:.5}},
+    object_sample:{game:'fixture',batch:8,step:1,before:[[0,1]],actual:[[1,0]],
+      learned_current_masks:[[3,0]]}},[
+    {batch:7,objects:{observed_iou:.9,mean_iou:.9,rollout_iou:.9}},
+    {batch:8,objects:{metric_version:2,observed_iou:.17,observed_post_iou:.4,sam_iou:.7,student_iou:.2,
+      sam_rollout_iou:.6,student_rollout_iou:.1,copy_iou:.8,copy_rollout_iou:.5,
+      mean_iou:.99,rollout_iou:.99,loss:2,observer_loss:1}}
+    ])`,context);
+  assert.match(text('objects-status'),/pre-fit extraction and student-input one-step and three-step agreement ≥ 50%/);
+  assert.match(text('objects-status'),/32 observer-only steps · 6 labeled observations \/ 12 in replay/);
+  assert.deepEqual(nodes.get('objects-iou-legend').children.map(n=>n.textContent),
+    ['Before fitting: 17','After fitting · same observations: 40','┄ Student residual activation threshold: 50 %']);
+  assert.deepEqual(nodes.get('objects-one-step-legend').children.map(n=>n.textContent),
+    ['Student input: 20','SAM input: 70','Copy SAM · no action: 80','┄ Student residual activation threshold: 50 %']);
+  assert.deepEqual(nodes.get('objects-three-step-legend').children.map(n=>n.textContent),
+    ['Student input: 10','SAM input: 60','Copy SAM · no action: 50','┄ Student residual activation threshold: 50 %']);
+  assert.deepEqual(nodes.get('objects-loss-legend').children.map(n=>n.textContent),
+    ['Joint object objective: 2','Observer-only objective: 1']);
+  assert.equal(nodes.get('objects-legacy-iou-legend').children[0].textContent,'Current · during fitting: 90');
+  assert.equal(nodes.get('objects-learned-figure').hidden,false);
+  assert.deepEqual(nodes.get('objects-learned').context.pixels.map(p=>p.color),['#666666','#aaa']);
+  const extraction=nodes.get('objects-iou').children.filter(n=>n.class==='series-ema');
+  assert.equal(extraction.length,2);
+  assert.equal(extraction[0].points,'50,188.04','new measurements use the plot width, not an empty legacy history');
+  for(const id of ['objects-iou','objects-one-step','objects-three-step']) {
+    const batches=nodes.get(id).children.filter(n=>n.textContent.startsWith('Batch ')).map(n=>n.textContent);
+    assert.deepEqual(batches,['Batch 8','Batch 8'],`${id}: axis starts with split metrics, not legacy batch 7`);
+  }
+  assert.ok(nodes.get('objects-legacy-iou').children.some(n=>n.textContent==='Batch 7'),
+    'the legacy chart retains its own earlier history');
+  vm.runInContext(`renderObjects({objects:{metric_version:2}},[{batch:9,objects:{metric_version:2,
+    observed_iou:0,student_iou:null,sam_iou:.8,mean_iou:.99}}])`,context);
+  assert.equal(nodes.get('objects-legacy').hidden,true);
+  assert.equal(nodes.get('objects-iou-legend').children[0].textContent,'Before fitting: 0');
+  assert.equal(nodes.get('objects-one-step-legend').children[0].textContent,'Student input: —',
+    'missing student results stay missing even when a mixed result is present');
   vm.runInContext('renderObjects({},[])',context);
   assert.equal(nodes.get('objects-panel').hidden,true);
   report.planning={goal_updates:16,path_updates:12,learned_probability:.125,

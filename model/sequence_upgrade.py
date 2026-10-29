@@ -20,6 +20,11 @@ def normalized_plan(payload):
     result['initialization']['network'].setdefault('object_width', 16)
     if 'sequence_exploration' in result:
         result['sequence_exploration'].setdefault('allow_undo', True)
+    if 'sequence_objects' in result:
+        # Legacy runs adopt the bounded observer-fitting defaults without
+        # resetting weights/Adam or admitting unrelated configuration changes.
+        result['sequence_objects'].setdefault('observer_steps', 32)
+        result['sequence_objects'].setdefault('observer_replay_frames', 64)
     return result
 
 
