@@ -135,6 +135,11 @@ identity. The architecture describes the optional branch; LMEX binds its tensor
 inventory only when exporting an enabled checkpoint. Generated Kaggle packages
 include learned inference code, without SAM dependencies or checkpoint downloads.
 Packaging alone does not enable teacher adaptation in the competition agent.
+Portable v1 bases saved before this extension still load with objects disabled;
+only the missing `object_slots` and `object_width` fields receive defaults. Enabled
+exports retain the scalar int64 auxiliary-update counter as well as learned
+weights and fusion gain. Loading rejects negative counters, incorrect tensor
+shapes/dtypes and nonfinite weights; it does not activate fusion.
 
 ## Initial audit — 2026-10-29
 

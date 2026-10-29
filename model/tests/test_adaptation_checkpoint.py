@@ -18,9 +18,9 @@ from model.networks import WorldModel
 from model.path_planning import PathValue
 
 
-def sequence_snapshot():
+def sequence_snapshot(*, object_slots=0):
     config = replace(NetworkConfig.small(), patch=2, latent=16, pixel_latent=True,
-                     local_dynamics=True, rotation_adapter_width=4)
+                     local_dynamics=True, rotation_adapter_width=4, object_slots=object_slots)
     world = WorldModel(config)
     goal = VisualGoal(config.latent, config.memory, config.patch, 8)
     path = PathValue(config.latent, config.memory, 8)
@@ -142,6 +142,73 @@ class AdaptationCheckpointTests(unittest.TestCase):
             self.assertEqual(bundle.engine.model.config.rotation_adapter_width, 4)
             with self.assertRaisesRegex(ValueError, 'overwrite'):
                 export(source, source)
+
+    def test_legacy_v1_optional_object_defaults_preserve_weights_and_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            snapshot = sequence_snapshot()
+            torch.save(snapshot, source)
+            export(source, output)
+            original = torch.load(output, weights_only=True)
+            # Pre-object v1 exports have neither field. Each new optional field
+            # can also be omitted independently; other schema keys stay required.
+            for missing in (('object_slots', 'object_width'), ('object_slots',), ('object_width',)):
+                with self.subTest(missing=missing):
+                    payload = deepcopy(original)
+                    for key in missing:
+                        del payload['world']['network'][key]
+                    network_before = dict(payload['world']['network'])
+                    bundle = from_payload(payload)
+                    self.assertEqual(payload['world']['network'], network_before)
+                    self.assertEqual(bundle.engine.model.config.object_slots, 0)
+                    self.assertEqual(bundle.engine.model.config.object_width, 16)
+                    self.assertFalse(hasattr(bundle.engine.model.dynamics, 'objects'))
+                    for key, value in bundle.engine.model.state_dict().items():
+                        self.assertTrue(torch.equal(value, snapshot['weights'][key]), key)
+                    for invalid in ('unknown', 'missing-required'):
+                        malformed = deepcopy(payload)
+                        if invalid == 'unknown':
+                            malformed['world']['network']['unknown'] = 1
+                        else:
+                            del malformed['world']['network']['latent']
+                        with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'network config'):
+                            from_payload(malformed)
+
+    def test_enabled_object_export_preserves_typed_buffers_and_rejects_invalid_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, output = Path(directory) / 'source.pt', Path(directory) / 'base.pt'
+            snapshot = sequence_snapshot(object_slots=3)
+            prefix = 'dynamics.objects.'
+            snapshot['weights'][prefix+'updates'].fill_(17)
+            snapshot['weights'][prefix+'gain'].fill_(1.)
+            torch.save(snapshot, source)
+            before = source.read_bytes()
+            export(source, output)
+            bundle = load(output)
+            self.assertEqual(source.read_bytes(), before)
+            head = bundle.engine.model.dynamics.objects
+            self.assertEqual(head.updates.dtype, torch.int64)
+            self.assertEqual(head.updates.shape, torch.Size([]))
+            self.assertEqual(head.updates.item(), 17)
+            self.assertEqual(head.gain.item(), 1.)
+            for key, value in bundle.engine.model.state_dict().items():
+                self.assertTrue(torch.equal(value, snapshot['weights'][key]), key)
+            original = torch.load(output, weights_only=True)
+            invalid_values = (
+                ('updates', torch.tensor(-1, dtype=torch.int64)),
+                ('updates', torch.tensor(17.)),
+                ('updates', torch.tensor(17, dtype=torch.int32)),
+                ('updates', torch.tensor(True)),
+                ('updates', torch.tensor([17], dtype=torch.int64)),
+                ('gain', torch.tensor(float('nan'))),
+                ('gain', torch.tensor(1, dtype=torch.int64)),
+            )
+            for name, value in invalid_values:
+                with self.subTest(name=name, value=value):
+                    payload = deepcopy(original)
+                    payload['world']['weights'][prefix+name] = value
+                    with self.assertRaisesRegex(ValueError, 'Invalid world tensor'):
+                        from_payload(payload)
 
     def test_malformed_schema_shapes_and_nonfinite_weights_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -48,10 +48,13 @@ def _weights(module, values, name):
     if set(values) != set(expected):
         raise ValueError(f'Unexpected {name} weight keys')
     for key, value in values.items():
+        # The module's schema fixes each parameter/buffer dtype; the object
+        # update counter is int64 while learned weights remain floating point.
         if (not isinstance(value, torch.Tensor) or value.layout != torch.strided or
                 value.shape != expected[key].shape or value.dtype != expected[key].dtype or
-                not value.is_floating_point() or
                 not torch.isfinite(value).all()):
+            raise ValueError(f'Invalid {name} tensor: {key}')
+        if name == 'world' and key == 'dynamics.objects.updates' and value.item() < 0:
             raise ValueError(f'Invalid {name} tensor: {key}')
     module.load_state_dict(values, strict=True)
     module.eval().requires_grad_(False)
@@ -76,17 +79,22 @@ def from_payload(payload, *, device='cpu'):
     _metadata(payload['metadata'])
     world, goal, path = (payload[key] for key in ('world', 'goal', 'path'))
     _keys(world, ('network', 'learning', 'weights'), 'world')
-    _keys(world['network'], NetworkConfig.__dataclass_fields__, 'network config')
+    if type(world['network']) is not dict:
+        raise ValueError('Unexpected network config fields')
+    # Pre-object v1 exports omit these optional fields. Normalize a copy without
+    # accepting unknown keys or defaulting any of the original required fields.
+    network_config = dict(object_slots=0, object_width=16) | world['network']
+    _keys(network_config, NetworkConfig.__dataclass_fields__, 'network config')
     _keys(world['learning'], LEARNING_FIELDS, 'learning config')
     for name, field in NetworkConfig.__dataclass_fields__.items():
-        value = world['network'][name]
+        value = network_config[name]
         allowed = (int, float) if field.type is float else (field.type,)
         if type(value) not in allowed:
             raise ValueError(f'Invalid network config type: {name}')
     for name in ('delta_overlap_weight', 'false_change_weight'):
         if type(world['learning'][name]) not in (int, float):
             raise ValueError(f'Invalid learning config type: {name}')
-    network = NetworkConfig(**world['network'])
+    network = NetworkConfig(**network_config)
     training = TrainConfig(**world['learning'])
     if type(training.frame_chunk) is not int:
         raise ValueError('frame_chunk must be an integer')
