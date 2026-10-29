@@ -458,6 +458,32 @@ body .preview-delta-footer .legend { margin: 0; }
 }
 
 .chart-help { color: var(--muted, #9bb0ac); font-size: 11px; line-height: 1.6; margin: 0 0 16px; }
+
+/* Independent SAM masks: the observation stays visible under every inspection mode. */
+.object-inspector { margin: 24px 0; padding-top: 20px; border-top: 1px solid var(--border); }
+.object-inspector .quality-heading { flex-wrap: wrap; gap: 12px; }
+.object-inspector h4 { margin: 0; font-size: 15px; }
+.object-inspector-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 14px 20px; margin: 18px 0; }
+.object-inspector-controls > label:not(.toggle), .object-inspector-selection > label { display: flex; flex-direction: column; gap: 8px; min-width: 0; color: var(--muted); font-size: 12px; }
+.object-inspector-controls > label { flex: 1 1 170px; }
+.object-inspector-controls .toggle { align-self: center; }
+.object-inspector-controls select, .object-inspector-selection select { max-width: 100%; width: 100%; }
+.object-inspector-controls input[type="range"] { width: 100%; accent-color: var(--mint); min-height: 28px; }
+.object-inspector-controls output { color: var(--text); }
+.object-inspector-content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, .8fr); gap: 24px; align-items: start; }
+.object-inspector-frame { margin: 0; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--inset); }
+.object-inspector-frame canvas { display: block; width: 100%; max-width: 512px; height: auto; margin: auto; image-rendering: pixelated; }
+.object-inspector-frame figcaption { color: var(--muted); margin-top: 14px; font-size: 12px; line-height: 1.6; }
+.object-inspector-selection { min-width: 0; }
+body .object-inspector-selection p, #objects-inspector-status, #objects-sample-info { font-size: 12px; overflow-wrap: anywhere; }
+.object-set-summary { margin-top: 0; color: var(--mint); }
+.object-instance-navigation { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.object-instance-navigation button { flex: 1 1 100px; min-height: 44px; }
+#objects-instance-detail { padding-left: 10px; border-left: 4px solid transparent; color: var(--text); }
+.object-overview { margin-bottom: 24px; }
+.object-overview summary { cursor: pointer; line-height: 1.8; margin-bottom: 16px; }
+.object-overview summary span { margin-left: 10px; font-size: 12px; }
+@media (max-width: 720px) { .object-inspector-content { grid-template-columns: 1fr; gap: 16px; } .object-inspector-frame { padding: 10px; } .object-overview summary span { display: block; margin-left: 0; } }
 .series-guide { pointer-events: none; }
 
 /* One navigation row, with a compact sticky run summary. */

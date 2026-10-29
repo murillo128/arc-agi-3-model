@@ -281,6 +281,10 @@ class ObjectTests(unittest.TestCase):
         self.assertTrue(np.isfinite(metrics['loss']))
         self.assertIsNotNone(preview)
         serialized = json.loads(json.dumps(preview, allow_nan=False))
+        self.assertIn(serialized['conditioning'], ('sam', 'student'))
+        self.assertEqual(serialized['action'], dict(id=4, data={}))
+        self.assertEqual(serialized['instances']['shape'], [8, 8])
+        self.assertEqual(len(serialized['instances']['sets']['current']), 1)
         for key in ('before', 'actual', 'observed_masks', 'actual_masks', 'predicted_masks'):
             self.assertEqual(np.asarray(serialized[key]).shape, (8, 8), key)
             self.assertTrue(all(type(pixel) is int for row in serialized[key] for pixel in row), key)

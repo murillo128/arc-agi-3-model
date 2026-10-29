@@ -813,7 +813,7 @@ def make_server(address, monitor, behavior=None, campaign=None, subgoal_report=N
                 data = json.dumps({'trajectory': trajectory_snapshot(sequence_report or subgoal_report,
                     sequence=sequence_report is not None)}, allow_nan=False, separators=(',', ':')).encode()
                 mime = 'application/json; charset=utf-8'
-            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/sequence-trends.js', '/trajectory-viewer.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
+            elif route in ('/', '/index.html', '/dashboard.css', '/chart-tools.js', '/sequence-trends.js', '/trajectory-viewer.js', '/object-inspector.js', '/dashboard.js', '/campaign.html', '/campaign.js', '/subgoals.js', '/sequences.js',
                            '/optimization.html', '/optimization.js', '/optimization.css'):
                 name = 'index.html' if route == '/' else route[1:]
                 if subgoal_report and name in ('index.html', 'campaign.html'):
