@@ -267,6 +267,24 @@ class ObjectTests(unittest.TestCase):
             if 'objects.' not in name: torch.testing.assert_close(value, after[name], rtol=0, atol=0)
         self.assertEqual(float(engine.model.dynamics.objects.gain), 0)
 
+    def test_auxiliary_fit_with_bfloat16_autocast_returns_serializable_native_preview(self):
+        import json
+        from unittest.mock import patch
+        torch.manual_seed(9)
+        engine = Engine(WorldModel(network()), TrainConfig())
+        learner = SequenceLearner(engine, SequenceConfig(batch_games=1, session_steps=4, block_steps=2))
+        trainer = ObjectTrainer(engine, ObjectTrainingConfig('/fake', samples=1, passes=1), FakeTeacher())
+        with patch.object(engine, 'autocast', lambda: torch.autocast('cpu', dtype=torch.bfloat16)):
+            metrics, preview = trainer.fit(learner, [session()])
+        self.assertEqual(metrics['updates'], 1)
+        self.assertEqual(metrics['total_updates'], 1)
+        self.assertTrue(np.isfinite(metrics['loss']))
+        self.assertIsNotNone(preview)
+        serialized = json.loads(json.dumps(preview, allow_nan=False))
+        for key in ('before', 'actual', 'observed_masks', 'actual_masks', 'predicted_masks'):
+            self.assertEqual(np.asarray(serialized[key]).shape, (8, 8), key)
+            self.assertTrue(all(type(pixel) is int for row in serialized[key] for pixel in row), key)
+
     def test_rollout_never_crosses_reset_or_new_level(self):
         s = session()
         self.assertEqual(len(rollout_window(s, 0)), 3)

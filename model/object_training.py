@@ -196,8 +196,8 @@ class ObjectTrainer:
                         sample = dict(game=sessions[i].game, step=t, source='frozen SAM2 pseudo-labels',
                             before=window[0].before.final.tolist(), actual=window[0].after.final.tolist(),
                             observed_masks=label_image(before.masks), actual_masks=label_image(after.masks),
-                            predicted_masks=label_image(prediction[0][0].detach().sigmoid().cpu().numpy(),
-                                prediction[1][0].detach().sigmoid().cpu().numpy()))
+                            predicted_masks=label_image(prediction[0][0].detach().sigmoid().float().cpu().numpy(),
+                                prediction[1][0].detach().sigmoid().float().cpu().numpy()))
             mean_iou = sum(ious)/len(ious) if ious else None
             observed_iou = sum(observed)/len(observed) if observed else None
             rollout_iou = sum(rollouts)/len(rollouts) if rollouts else None
