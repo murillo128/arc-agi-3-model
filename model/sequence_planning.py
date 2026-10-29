@@ -107,7 +107,8 @@ class SequencePlanning:
     def propose(self, state):
         self.goal.eval()
         with self.engine.autocast():
-            logits, mask = self.goal(state.z[None], state.h, *state.geometry)
+            z = self.engine.planning_features(state.z[None], *state.geometry)
+            logits, mask = self.goal(z, state.h, *state.geometry)
         return logits.argmax(-1)[0].cpu().numpy().astype(np.uint8), (mask[0] > 0).cpu().numpy()
 
     def fit(self, sessions, *, telemetry=None):
@@ -163,6 +164,8 @@ class SequencePlanning:
             before = torch.tensor(np.stack([selected[i].transitions[row['index']].before.final for i,row in rows]),device=device).long()
             target = torch.tensor(np.stack([row['frame'] for _,row in rows]),device=device).long()
             mask = torch.tensor(np.stack([row['mask'] for _,row in rows]),device=device).bool()
+            with torch.no_grad(), e.autocast():
+                z = e.planning_features(z, *before.shape[-2:]).detach()
             goal_batches.append((z, h, before, target, mask))
             # Measure the entire sample before any head update, so later
             # minibatches cannot benefit from earlier examples in this batch.
@@ -207,6 +210,9 @@ class SequencePlanning:
             with torch.no_grad(), e.autocast():
                 goals = torch.stack(e.encode(observations))
             height, width = observations[0].final.shape
+            with torch.no_grad(), e.autocast():
+                z = e.planning_features(z, height, width).detach()
+                goals = e.planning_features(goals, height, width).detach()
             patch = e.model.config.patch
             mask = torch.tensor(np.stack([s['mask'] for *_,s in rows]), device=device).float()[:,None]
             mask = F.avg_pool2d(mask, patch, patch, ceil_mode=True).flatten(2).transpose(1,2)

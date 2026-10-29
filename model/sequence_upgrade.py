@@ -16,6 +16,8 @@ def normalized_plan(payload):
     result = copy.deepcopy(payload)
     result['initialization']['network'].setdefault('rotation_adapter_width', 0)
     result['initialization']['network'].setdefault('learnable_click_sigma', False)
+    result['initialization']['network'].setdefault('object_slots', 0)
+    result['initialization']['network'].setdefault('object_width', 16)
     if 'sequence_exploration' in result:
         result['sequence_exploration'].setdefault('allow_undo', True)
     return result
@@ -85,7 +87,7 @@ def load_upgraded_weights(model, saved, *, fix_click_sigma=False):
     model.load_state_dict(weights, strict=True)
 
 
-def upgraded_optimizer(saved, dynamics, *, fix_click_sigma=False):
+def upgraded_optimizer(saved, dynamics, *, fix_click_sigma=False, add_objects=False):
     """Bind Adam by name; only add adapter parameters or remove the width scalar."""
     with torch.device('meta'):
         previous = Dynamics(NetworkConfig(**saved['network']))
@@ -97,7 +99,8 @@ def upgraded_optimizer(saved, dynamics, *, fix_click_sigma=False):
         valid = new_names == [n for n in old_names if n != 'rotation_adapter.click_width.log_scale']
     else:
         valid = (new_names[:len(old_names)] == old_names and
-                 all(n.startswith('rotation_adapter.') for n in new_names[len(old_names):]))
+                 all(n.startswith('objects.' if add_objects else 'rotation_adapter.')
+                     for n in new_names[len(old_names):]))
     if not valid:
         raise ValueError('Predictor optimizer migration found an unexpected parameter layout')
     state = saved['predictor_optimizer']

@@ -133,8 +133,9 @@ class ChangeHead(nn.Module):
 
 
 class ChangeExplorer:
-    def __init__(self, config):
+    def __init__(self, config, *, segmenter=None):
         self.config = config
+        self.segmenter = segmenter
         # Auxiliary initialization must not advance the world model's RNG.
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(114)
@@ -207,7 +208,7 @@ class ChangeExplorer:
         reserved = max(1, math.ceil(clicks * self.config.uniform_probability))
         uniform = [Action(6, dict(x=xy % 64, y=xy // 64))
                    for xy in rng.sample(range(4096), reserved)]
-        pool = click_pool(observation, rng, max(clicks, self.config.candidate_clicks))
+        pool = self.click_pool(observation, rng, max(clicks, self.config.candidate_clicks))
         probabilities = self.probabilities(observation, pool)
         # Randomize exact score ties; do not prefer low coordinates.
         order = list(range(len(pool))); rng.shuffle(order)
@@ -224,6 +225,14 @@ class ChangeExplorer:
                 result.append(Action(6, dict(x=xy % 64, y=xy // 64)))
                 used.add((xy % 64, xy // 64))
         return ordinary + result
+
+    def click_pool(self, observation, rng, count):
+        if self.segmenter is not None:
+            from .segmentation import interior_clicks
+            proposals = interior_clicks(self.segmenter.segment(observation.final), rng, count)
+            if proposals:
+                return proposals + click_pool(observation, rng, count-len(proposals))
+        return click_pool(observation, rng, count)
 
 
 def click_pool(observation, rng, count):
@@ -261,7 +270,7 @@ class ExplorationSession:
             return choices[0] if choices else action
         if observation.final is None or np.unique(observation.final).size < 2:
             return action
-        choices = click_pool(observation, self.rng, self.config.candidate_clicks)
+        choices = self.explorer.click_pool(observation, self.rng, self.config.candidate_clicks)
         probabilities = self.explorer.probabilities(observation, choices, self.previous)
         key = observation.final.tobytes() if observation.final is not None else b''
         weights = [float(.05 + p)**4 * (.02 if self.noops.get((key, a.data['x'], a.data['y']), 0) > self.tick else 1)

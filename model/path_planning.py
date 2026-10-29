@@ -201,6 +201,8 @@ class PathPlanner:
         actions = self.engine.actions(choices)
         count = len(choices)
         z, h, paths = state.z[None], state.h, [[]]
+        has_objects = getattr(self.engine.model.config, 'object_slots', 0) > 0
+        object_masks = self.engine.object_masks(z, *state.geometry, observation=observation) if has_objects else None
         history = [[]]
         routes = []
         budget = remaining_budget if remaining_budget is not None else self.config.horizon
@@ -209,12 +211,28 @@ class PathPlanner:
         rows, columns = (height + patch - 1) // patch, (width + patch - 1) // patch
         horizon = min(self.config.horizon, remaining_budget or self.config.horizon)
         with self.engine.autocast():
+            goal_features = (self.engine.planning_features(self.goal['z'][None], height, width)
+                             if has_objects else self.goal['z'][None])
             for depth in range(horizon):
                 n = len(z)
-                z, h, _ = self.engine.predict(z.repeat_interleave(count, 0), h.repeat_interleave(count, 0),
-                                             actions.repeat(n, 1), height, width)
+                branch_choices = [choices] * n
+                branch_actions = actions.repeat(n, 1)
+                if depth and has_objects and bool(self.engine.model.dynamics.objects.gain):
+                    from .segmentation import imagined_candidates
+                    branch_choices = [imagined_candidates(choices, masks, rng) for masks in object_masks]
+                    branch_actions = self.engine.actions([a for branch in branch_choices for a in branch])
+                if object_masks is None:
+                    z, h, _ = self.engine.predict(z.repeat_interleave(count, 0), h.repeat_interleave(count, 0),
+                                                 branch_actions, height, width)
+                else:
+                    from .object_dynamics import probabilities as object_probabilities
+                    z, h, _, predicted_objects = self.engine.predict_objects(z.repeat_interleave(count, 0),
+                        h.repeat_interleave(count, 0), branch_actions, height, width,
+                        object_masks.repeat_interleave(count, 0))
+                    object_masks = object_probabilities(predicted_objects)
                 budgets = torch.full((len(z),), budget - depth - 1, device=z.device)
-                logits, log_costs = self.readout(z, h, self.goal['z'][None], self.goal['mask'],
+                features = self.engine.planning_features(z, height, width, object_masks) if has_objects else z
+                logits, log_costs = self.readout(features, h, goal_features, self.goal['mask'],
                                                  rows, columns, budgets)
                 if (not torch.isfinite(logits).all() or not torch.isfinite(log_costs).all()
                         or not torch.isfinite(z).all()):
@@ -229,7 +247,7 @@ class PathPlanner:
                     keep = rank_routes(probabilities, scores, rng, self.config.success_margin)[:self.config.beam]
                 selected_paths, selected_history, estimates = [], [], []
                 for index in keep:
-                    path = paths[index // count] + [choices[index % count]]
+                    path = paths[index // count] + [branch_choices[index // count][index % count]]
                     states = history[index // count] + [z[index].detach().clone()]
                     estimate = dict(success_probability=probabilities[index], successful_actions=scores[index],
                                     remaining_budget=budget, depth=depth + 1)
@@ -239,6 +257,8 @@ class PathPlanner:
                     if not self.config.leaf_only or depth + 1 == horizon:
                         routes.append((path, states, estimate))
                 z, h, paths, history = z[keep], h[keep], selected_paths, selected_history
+                if object_masks is not None:
+                    object_masks = object_masks[keep]
         winner = rank_routes([r[2]['success_probability'] for r in routes],
                              [r[2]['successful_actions'] for r in routes], rng, self.config.success_margin)[0]
         best_path, best_history, self.last_estimate = routes[winner]

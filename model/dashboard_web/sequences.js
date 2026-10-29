@@ -100,7 +100,7 @@ function phaseThresholds(data, key, label, color) {
     label:groups.size>1?`${label} · ${scope.join(', ')}`:label}));
 }
 const timingLabels = {collection_seconds:'Game',representation_seconds:'Representation',encode_seconds:'Encoding',
-  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',planning_seconds:'Goal and path heads',save_seconds:'Saving'};
+  predictor_seconds:'Predictor and memory',evaluation_seconds:'Measurement',drift_seconds:'Encoder drift',exploration_seconds:'Exploration head',planning_seconds:'Goal and path heads',object_seconds:'Object teacher and learning',save_seconds:'Saving'};
 function availableHistory(data) {
   const live=data.history||[], latest=live.at(-1)?.batch;
   if(!Number.isFinite(latest))return [];
@@ -150,6 +150,7 @@ function render(data) {
     :'Waiting for recorded batches.';
   renderTrend(data,all,rows);
   renderPlanning(data,rows,all);
+  renderObjects(data,rows);
   const training=data.measurement_source==='training_pre_update', control=data.phase_control;
   const frozen=Number.isInteger(control?.representation_frozen_at_batch);
   $('phase-status').textContent=control?`Phase: ${frozen?`Predictor · representation frozen after batch ${number(control.representation_frozen_at_batch,0)}`:control.phase==='predictor'?'Predictor · reduced representation LR':'Representation · predictor waiting'}${last.phase&&last.phase!==control.phase?' · Change takes effect next batch':''}`:'';
@@ -267,6 +268,19 @@ function draw(id, grid, mask) {
   for(let y=0;y<grid.length;y++)for(let x=0;x<grid[y].length;x++){
     const value=mask&&!mask[y]?.[x]?16:grid[y][x];ctx.fillStyle=typeof value==='string'?value:palette[value]||((x+y)%2?'#aaa':'#eee');ctx.fillRect(x,y,1,1);
   }
+}
+function renderObjects(data, rows) {
+  const state=data.objects, sample=data.object_sample;
+  $('objects-panel').hidden=!state;
+  if(!state)return;
+  $('objects-status').textContent=`${state.active?'Object residual active':'Warm-up · visual residual disabled'} · ${number(state.total_updates??0,0)} updates · ${number(state.samples??0,0)} sampled transitions · teacher ${number(state.teacher?.seconds??0,1)} s total / ${number(state.teacher?.calls??0,0)} frames · ${number(state.teacher?.cache_hits??0,0)} cache hits`;
+  $('objects-sample-info').textContent=sample?`${sample.game} · step ${sample.step} · first auxiliary fit pass, batch ${sample.batch}`:'Waiting for usable teacher masks.';
+  const labels=grid=>grid?.map(row=>row.map(value=>value===0?16:value));
+  draw('objects-before',sample?.before);draw('objects-actual',sample?.actual);
+  draw('objects-observed',labels(sample?.observed_masks));draw('objects-target',labels(sample?.actual_masks));
+  draw('objects-predicted',labels(sample?.predicted_masks));
+  chart('objects-iou',rows,[series('Current',r=>pct(r.objects?.observed_iou)),series('One step',r=>pct(r.objects?.mean_iou)),series('Three steps',r=>pct(r.objects?.rollout_iou))]);
+  chart('objects-loss',rows,[series('Object objective',r=>r.objects?.loss)]);
 }
 function renderPlanning(data, rows, all) {
   const state=data.planning;

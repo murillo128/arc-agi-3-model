@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "architecture_revision": "arc3-sequence-goal-path-fixed-click-v1",
+  "architecture_revision": "arc3-sequence-goal-path-optional-objects-v1",
   "name": "ARC-AGI-3 · World model, visual goals and success-first paths",
   "scope": "sequence_world_model_exploration_goal_and_path",
   "coverage": "partial",
@@ -48757,6 +48757,177 @@
       "references": [],
       "attributes": [],
       "description": "The goal head learns teacher palette/mask targets, balancing changed/unchanged goal pixels and included/excluded mask regions. PathValue uses real attempt success/failure within budget with BCE logits, plus successful-duration Smooth-L1 on log1p steps. Teacher-goal success uses teacher progress; learned-goal success uses real masked image matching and is reported separately from teacher/task progress and actual level wins. Interrupted attempts are censored. Independent AdamW optimizers (LR 1e-4) use detached current z/h and frozen goal encodings. The predictor continues training on real next frames; imagined branches never become verified training transitions."
+    },
+    {
+      "id": "objects.context",
+      "label": "Optional object dynamics",
+      "kind": "context",
+      "ports": [],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Opt-in extension, disabled in legacy checkpoints (object_slots=0). Frozen SAM 2.1 Tiny labels sampled real frames. A learned current-mask reader and causal future-mask predictor add zero-start residual features. Existing world, Goal and Path weights and optimizer moments are preserved. See docs/object-dynamics.md."
+    },
+    {
+      "id": "objects.real",
+      "label": "Real observations only",
+      "kind": "input",
+      "ports": [
+        {
+          "id": "frame",
+          "label": "frame",
+          "direction": "output",
+          "shape": null,
+          "value_type": "NativePaletteFrame [H,W]"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Current and later real frames are segmented separately. Future labels are targets only, never earlier predictor inputs."
+    },
+    {
+      "id": "objects.teacher",
+      "label": "Frozen SAM 2.1 Tiny",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "frame",
+          "label": "frame",
+          "direction": "input",
+          "shape": null,
+          "value_type": "NativePaletteFrame [H,W]"
+        },
+        {
+          "id": "masks",
+          "label": "masks",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Approximate instance masks [K,H,W] with confidence"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Official pretrained weights, offline asset and optional dependency. Uniform grid plus up to 32 small-region point prompts; native masks, multiscale capacity, bounded content cache and per-batch call allowance. No teacher call on imagined branches.",
+      "operation": "frozen_pretrained_segmentation"
+    },
+    {
+      "id": "objects.student",
+      "label": "Action-conditioned object dynamics",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "masks",
+          "label": "masks",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Optional current masks [K,H,W]"
+        },
+        {
+          "id": "state",
+          "label": "state",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Current spatial latent z and causal recurrent h"
+        },
+        {
+          "id": "action",
+          "label": "action",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Action features [12]"
+        },
+        {
+          "id": "future",
+          "label": "future",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Next mask logits and presence [K,H,W], [K]"
+        },
+        {
+          "id": "residual",
+          "label": "residual",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Latent residual and object context"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Native-grid convolution features, mask pooling, action/memory-conditioned affine transport and refinement; empty slots can discover new objects. One/three-step rollouts use their own predicted masks, latents and memory. Output projection and fusion gain start at zero. Enabled checkpoint tensors are bound here at export time.",
+      "operation": "causal_instance_dynamics"
+    },
+    {
+      "id": "objects.clicks",
+      "label": "Object click proposals",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "masks",
+          "label": "masks",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Current teacher masks or predicted future occupancy"
+        },
+        {
+          "id": "clicks",
+          "label": "clicks",
+          "direction": "output",
+          "shape": null,
+          "value_type": "Legal native click coordinates"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Interior points of masks, including non-convex shapes; existing learned change head scores real proposals. Preserve ordinary SDK actions and a uniform fallback. Predicted masks guide future-branch click locations after residual activation.",
+      "operation": "interior_point_proposals"
+    },
+    {
+      "id": "objects.loss",
+      "label": "Real-mask auxiliary supervision",
+      "kind": "operation",
+      "ports": [
+        {
+          "id": "target",
+          "label": "target",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Future real SAM masks and confidence"
+        },
+        {
+          "id": "predicted",
+          "label": "predicted",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Predicted masks and presence"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Permutation-aware assignment; per-object Dice and foreground/background-balanced BCE, confidence-weighted presence with weak unmatched negatives. Empty teacher output is unknown. Existing visual objective remains. No imagined transition becomes real training evidence.",
+      "operation": "matched_mask_loss"
+    },
+    {
+      "id": "objects.consumers",
+      "label": "Predictor, Path and Goal context",
+      "kind": "context",
+      "ports": [
+        {
+          "id": "residual",
+          "label": "residual",
+          "direction": "input",
+          "shape": null,
+          "value_type": "Zero-start object features"
+        }
+      ],
+      "parameter_ids": [],
+      "references": [],
+      "attributes": [],
+      "description": "Predictor receives a latent correction. Path and Goal receive the same additional object context in fitting and planning. Goal remains a final palette image with mask; existing real-progress supervision and masked goal completion are unchanged. Fusion stays disabled by default pending a useful teacher/learning audit."
     }
   ],
   "edges": [
@@ -61657,6 +61828,90 @@
       "target": {
         "node_id": "planning.action",
         "port_id": "action"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.real.frame__objects.teacher.frame",
+      "source": {
+        "node_id": "objects.real",
+        "port_id": "frame"
+      },
+      "target": {
+        "node_id": "objects.teacher",
+        "port_id": "frame"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.teacher.masks__objects.student.masks",
+      "source": {
+        "node_id": "objects.teacher",
+        "port_id": "masks"
+      },
+      "target": {
+        "node_id": "objects.student",
+        "port_id": "masks"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.teacher.masks__objects.clicks.masks",
+      "source": {
+        "node_id": "objects.teacher",
+        "port_id": "masks"
+      },
+      "target": {
+        "node_id": "objects.clicks",
+        "port_id": "masks"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.student.future__objects.clicks.masks",
+      "source": {
+        "node_id": "objects.student",
+        "port_id": "future"
+      },
+      "target": {
+        "node_id": "objects.clicks",
+        "port_id": "masks"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.teacher.masks__objects.loss.target",
+      "source": {
+        "node_id": "objects.teacher",
+        "port_id": "masks"
+      },
+      "target": {
+        "node_id": "objects.loss",
+        "port_id": "target"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.student.future__objects.loss.predicted",
+      "source": {
+        "node_id": "objects.student",
+        "port_id": "future"
+      },
+      "target": {
+        "node_id": "objects.loss",
+        "port_id": "predicted"
+      },
+      "kind": "data"
+    },
+    {
+      "id": "objects.student.residual__objects.consumers.residual",
+      "source": {
+        "node_id": "objects.student",
+        "port_id": "residual"
+      },
+      "target": {
+        "node_id": "objects.consumers",
+        "port_id": "residual"
       },
       "kind": "data"
     }
@@ -80973,5 +81228,5 @@
       ]
     }
   ],
-  "incomplete_reason": "All world-model, ChangeHead, VisualGoal and PathValue tensors are bound to the active sequence profile. The diagram details one neural invocation per module. Shared model calls during beam search, teacher scheduling, target construction, backpropagation and optimizers are summarized as control context, not an unrolled execution graph. This training package is not a portable Kaggle agent."
+  "incomplete_reason": "All world-model, ChangeHead, VisualGoal and PathValue tensors are bound to the active sequence profile. The diagram details one neural invocation per module. Shared model calls during beam search, teacher scheduling, target construction, backpropagation and optimizers are summarized as control context, not an unrolled execution graph. This training package is not a portable Kaggle agent. Optional object dynamics is documented as an inactive extension; LMEX binds its extra tensors only for object-enabled snapshots."
 }
