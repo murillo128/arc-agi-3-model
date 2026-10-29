@@ -91,11 +91,13 @@ it neither updates weights nor changes collection, losses, prompts or training
 configuration. Inspecting all instances fixes visibility of retained masks, but
 does not repair the teacher's uncovered regions.
 
-The six-call analysis command, from the coordination checkout with its existing
-environment and captured input file, is:
+The six-call analysis command uses the committed runtime's provider and the
+coordination checkout's existing environment and captured input file:
 
 ```sh
+inspection_repo=/usr/local/src/arc-agi-3-model
+inspection_runtime=/usr/local/src/arc-agi-3-model-runtime-mask-inspector-167
 CUDA_VISIBLE_DEVICES='' MPLCONFIGDIR=/tmp/mpl-sam-inspection-167 \
-  PYTHONPATH=.:src:artifacts/sam2-objects-162/deps:artifacts/sam2-objects-162/source \
-  .venv/bin/python artifacts/sam-mask-inspection-167/inspect_sam_masks.py
+  PYTHONPATH="$inspection_runtime:$inspection_runtime/src:$inspection_repo/artifacts/sam2-objects-162/deps:$inspection_repo/artifacts/sam2-objects-162/source" \
+  "$inspection_repo/.venv/bin/python" "$inspection_repo/artifacts/sam-mask-inspection-167/inspect_sam_masks.py"
 ```
