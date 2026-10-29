@@ -171,6 +171,10 @@ def stopping_reason(name, metrics, config):
             return 'no_change'
         if metrics['rollout_delta_error'] is None:
             return 'no_rollout_change'
+        if metrics['latest_delta_error'] is None:
+            return 'no_latest_change'
+        if metrics['latest_rollout_delta_error'] is None:
+            return 'no_latest_rollout_change'
         return 'threshold'
     if name == 'goal':
         passed = (metrics['color_error'] <= config.goal_color_threshold and
@@ -321,7 +325,8 @@ def fit(policy, name, deadline):
             raise
         finally:
             if best is not None and result['reason'] not in ('threshold', 'no_change',
-                                                           'insufficient_rollout_history', 'no_rollout_change'):
+                                                           'insufficient_rollout_history', 'no_rollout_change',
+                                                           'no_latest_change', 'no_latest_rollout_change'):
                 restore(policy.bank, groups, best)
                 result.update(final=best_measurement, restored_best=True)
             result['elapsed_seconds'] = time.monotonic() - started

@@ -88,7 +88,10 @@ With fewer than three eligible actions, it can finish one-step fitting and
 collect another observation, reporting `insufficient_rollout_history` with null
 rollout errors and `threshold_met=false`. With eligible windows but no changed
 pixels, it reports `no_change` (both horizons) or `no_rollout_change` (three-step
-union empty), with null errors and no claim of full convergence. A stage without
+union empty). Even when pooled errors pass, an empty latest transition or rollout
+union reports `no_latest_change` or `no_latest_rollout_change`, respectively.
+These stops retain null errors and `threshold_met=false`; any available failing
+error still requires fitting before stopping for incomplete evidence. A stage without
 usable data reports `no_data`; Goal without positive native evidence reports
 `no_progress`. None of these unavailable-data states delays collecting evidence.
 
