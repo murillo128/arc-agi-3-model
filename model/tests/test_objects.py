@@ -295,12 +295,14 @@ class ObjectTests(unittest.TestCase):
         saved = dict(kind='game_sequences', version=1, network=asdict(model.config), plan=plan,
                      weights=deepcopy(model.state_dict()), predictor_optimizer=adam.state_dict(),
                      representation_optimizer=dict(state={}), planning=dict(goal_updates=31),
+                     predictor_adaptations=[dict(kind='object_dynamics', batch=2)],
                      progress=dict(updates=8, batches=12), torch_rng=torch.get_rng_state(),
                      sequence_control=dict(representation_frozen_at_batch=1))
         target = deepcopy(plan); target['sequence_objects']['device'] = 'cuda:0'
         migrated = migrate(saved, SimpleNamespace(payload=target), change_teacher_device=True)
         for key in saved:
-            if key != 'plan': self.assertIs(migrated[key], saved[key], key)
+            if key not in ('plan', 'predictor_adaptations'): self.assertIs(migrated[key], saved[key], key)
+        self.assertEqual(migrated['predictor_adaptations'][:-1], saved['predictor_adaptations'])
         self.assertEqual(saved['plan']['sequence_objects']['device'], 'cpu')
         self.assertEqual(migrated['plan']['sequence_objects']['device'], 'cuda:0')
         self.assertEqual(migrated['predictor_adaptations'][-1]['kind'], 'object_teacher_device')

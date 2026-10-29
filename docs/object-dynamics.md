@@ -93,7 +93,12 @@ Labels are generated outside the world model's backward pass, but the model and
 Adam still occupy VRAM. Check actual memory before adoption; temporary residency
 does not guarantee that every GPU fits. Teacher timing includes transfer,
 synchronization and cleanup. Its report identifies inference device, precision
-and idle residency. CPU execution keeps its existing FP32 behavior.
+and idle residency. CPU execution keeps its existing FP32 behavior. The pinned
+SAM implementation also holds positional caches and rotary tensors outside
+registered buffers: these are cleared/offloaded explicitly. Positional warm-up
+is disabled for CUDA loading; upstream rotary initialization may briefly allocate
+on the selected GPU, but no live teacher tensors remain there when construction
+returns. The device probe measures its baseline before constructing SAM.
 No held-out game is needed for setup or the audit.
 
 Make a copy of the current training and initialization JSON files, preserving their

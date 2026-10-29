@@ -161,10 +161,26 @@ class SAM2Segmenter:
         from sam2.build_sam import build_sam2
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
         self.device = torch.device(device)
-        # Share the trainer's GPU only while an uncached label is being computed.
-        load_device = 'cpu' if self.device.type == 'cuda' else device
-        self.model = build_sam2('configs/sam2.1/sam2.1_hiera_t.yaml', str(checkpoint),
-                               device=load_device, apply_postprocessing=False).eval().requires_grad_(False)
+        cuda = self.device.type == 'cuda'
+        load_device = 'cpu' if cuda else device
+        overrides = [
+            '++model.image_encoder.neck.position_encoding.warmup_cache=false',
+            '++model.memory_encoder.position_encoding.warmup_cache=false',
+        ] if cuda else []
+        # Pinned SAM briefly initializes rotary tensors on the current GPU even
+        # with device='cpu'. Select the requested GPU and release them before return.
+        with torch.cuda.device(self.device) if cuda else nullcontext():
+            self.model = build_sam2('configs/sam2.1/sam2.1_hiera_t.yaml', str(checkpoint),
+                device=load_device, hydra_overrides_extra=overrides,
+                apply_postprocessing=False).eval().requires_grad_(False)
+            if cuda:
+                try:
+                    self._clear_cuda_caches()
+                finally:
+                    try:
+                        torch.cuda.synchronize(self.device)
+                    finally:
+                        torch.cuda.empty_cache()
         self.generator = SAM2AutomaticMaskGenerator(self.model, points_per_side=points_per_side,
             points_per_batch=16, pred_iou_thresh=.7, stability_score_thresh=.8, crop_n_layers=0)
         self.uniform_points = self.generator.point_grids[0].copy()
@@ -174,6 +190,17 @@ class SAM2Segmenter:
         self.seconds = 0.
         self.remaining = None
         self.deferred = 0
+
+    def _clear_cuda_caches(self):
+        # These two pinned SAM caches are not registered buffers: Module.to()
+        # does not move them, and predictor.reset_predictor() only clears features.
+        from sam2.modeling.position_encoding import PositionEmbeddingSine
+        from sam2.modeling.sam.transformer import RoPEAttention
+        for module in self.model.modules():
+            if isinstance(module, PositionEmbeddingSine):
+                module.cache.clear()
+            elif isinstance(module, RoPEAttention):
+                module.freqs_cis = module.freqs_cis.cpu()
 
     def segment(self, frame):
         if frame is None:
@@ -220,7 +247,10 @@ class SAM2Segmenter:
                 finally:
                     if cuda:
                         try:
-                            self.model.to('cpu')
+                            try:
+                                self.model.to('cpu')
+                            finally:
+                                self._clear_cuda_caches()
                         finally:
                             try:
                                 torch.cuda.synchronize(self.device)

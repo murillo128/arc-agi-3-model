@@ -31,13 +31,15 @@ def main():
     sample = report['object_sample']
     frame = np.asarray(sample['before'], dtype=np.uint8)
     device = torch.device(args.device)
-    teacher = SAM2Segmenter(config['checkpoint'], device=str(device),
-        capacity=report['network']['object_slots'], points_per_side=config['points_per_side'])
     baseline = 0
     if device.type == 'cuda':
         torch.cuda.synchronize(device)
         baseline = torch.cuda.memory_allocated(device)
         torch.cuda.reset_peak_memory_stats(device)  # This dedicated probe only.
+    teacher = SAM2Segmenter(config['checkpoint'], device=str(device),
+        capacity=report['network']['object_slots'], points_per_side=config['points_per_side'])
+    if device.type == 'cuda' and torch.cuda.memory_allocated(device) != baseline:
+        raise ValueError('SAM retained live GPU tensors after construction')
     start = time.perf_counter()
     labels = teacher.segment(frame)
     seconds = time.perf_counter()-start

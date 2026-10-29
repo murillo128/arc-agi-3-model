@@ -18,13 +18,23 @@ class TeacherDeviceTests(unittest.TestCase):
     @contextmanager
     def teacher(self, device='cuda:1', *, failure=None, bf16=True):
         events = []
-        state = SimpleNamespace(selected=None, features=None, failure=failure)
+        state = SimpleNamespace(selected=None, features=None, failure=failure, device=device)
+
+        class PositionEmbeddingSine(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.cache = {}
+
+        class RoPEAttention(torch.nn.Module):
+            pass
 
         class Model(torch.nn.Module):
             def __init__(self):
                 super().__init__()
                 self.weight = torch.nn.Parameter(torch.ones(1))
                 self.resident = 'cpu'
+                self.position = PositionEmbeddingSine()
+                self.rotary = RoPEAttention()
 
             def to(self, target):
                 self.resident = str(target)
@@ -35,9 +45,22 @@ class TeacherDeviceTests(unittest.TestCase):
 
         model = Model()
 
+        def cache_tensors():
+            # Plain tensors deliberately bypass Module.to(), as in pinned SAM.
+            model.position.cache[(4, 4)] = torch.ones(4, 4)
+            model.rotary.freqs_cis = torch.ones(2, dtype=torch.complex64)
+            state.cpu_freqs = model.rotary.freqs_cis.clone()
+            model.rotary.freqs_cis.cpu = lambda: state.cpu_freqs
+
         def build(config, checkpoint, **kwargs):
             events.append(('build', kwargs['device']))
             model.resident = str(kwargs['device'])
+            if device.startswith('cuda'):
+                self.assertEqual(state.selected, device)
+                self.assertEqual(kwargs['hydra_overrides_extra'], [
+                    '++model.image_encoder.neck.position_encoding.warmup_cache=false',
+                    '++model.memory_encoder.position_encoding.warmup_cache=false'])
+            cache_tensors()
             return model
 
         def reset():
@@ -60,6 +83,7 @@ class TeacherDeviceTests(unittest.TestCase):
             self.assertEqual(rgb.shape, (512, 512, 3))
             np.testing.assert_array_equal(rgb[128, 256], [255, 123, 204])
             state.features = object()
+            cache_tensors()
             if state.failure == 'generate':
                 raise RuntimeError('generate failed')
             if state.failure == 'labels':
@@ -107,7 +131,11 @@ class TeacherDeviceTests(unittest.TestCase):
             stack.enter_context(patch.dict(sys.modules, {
                 'sam2': SimpleNamespace(),
                 'sam2.build_sam': SimpleNamespace(build_sam2=build),
-                'sam2.automatic_mask_generator': SimpleNamespace(SAM2AutomaticMaskGenerator=automatic)}))
+                'sam2.automatic_mask_generator': SimpleNamespace(SAM2AutomaticMaskGenerator=automatic),
+                'sam2.modeling': SimpleNamespace(),
+                'sam2.modeling.position_encoding': SimpleNamespace(PositionEmbeddingSine=PositionEmbeddingSine),
+                'sam2.modeling.sam': SimpleNamespace(),
+                'sam2.modeling.sam.transformer': SimpleNamespace(RoPEAttention=RoPEAttention)}))
             stack.enter_context(patch('torch.cuda.device', cuda_device))
             stack.enter_context(patch('torch.cuda.is_available', return_value=True))
             support = stack.enter_context(patch('torch.cuda.is_bf16_supported', return_value=bf16))
@@ -129,11 +157,16 @@ class TeacherDeviceTests(unittest.TestCase):
         self.assertEqual(model.resident, 'cpu')
         self.assertIsNone(state.features)
         self.assertIsNone(state.selected)
+        if state.device.startswith('cuda'):
+            self.assertEqual(model.position.cache, {})
+            self.assertIs(model.rotary.freqs_cis, state.cpu_freqs)
 
     def test_cuda_is_cpu_resident_until_uncached_inference_then_releases_memory(self):
         with self.teacher() as (provider, model, generator, events, state, support):
-            self.assertEqual(events, [('build', 'cpu')], 'Construction must not touch CUDA')
+            self.assertIn(('build', 'cpu'), events)
+            self.assertEqual(events[-2:], [('sync', 'cuda:1'), ('empty_cache', 'cuda:1')])
             self.assert_idle(model, state)
+            events.clear()
             result = provider.segment(self.frame())
             expected = np.zeros((1, 4, 4), bool)
             expected[0, 1, 2] = True
