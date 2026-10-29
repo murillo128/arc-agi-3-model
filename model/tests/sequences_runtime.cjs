@@ -97,7 +97,13 @@ const text = id => nodes.get(id).textContent;
   assert.deepEqual(nodes.get('objects-learned').context.pixels.map(p=>p.color),['#666666','#aaa']);
   const extraction=nodes.get('objects-iou').children.filter(n=>n.class==='series-ema');
   assert.equal(extraction.length,2);
-  assert.equal(extraction[0].points,'680,188.04','EMA starts at the new pre-fit measurement, not legacy 90%');
+  assert.equal(extraction[0].points,'50,188.04','new measurements use the plot width, not an empty legacy history');
+  for(const id of ['objects-iou','objects-one-step','objects-three-step']) {
+    const batches=nodes.get(id).children.filter(n=>n.textContent.startsWith('Batch ')).map(n=>n.textContent);
+    assert.deepEqual(batches,['Batch 8','Batch 8'],`${id}: axis starts with split metrics, not legacy batch 7`);
+  }
+  assert.ok(nodes.get('objects-legacy-iou').children.some(n=>n.textContent==='Batch 7'),
+    'the legacy chart retains its own earlier history');
   vm.runInContext(`renderObjects({objects:{metric_version:2}},[{batch:9,objects:{metric_version:2,
     observed_iou:0,student_iou:null,sam_iou:.8,mean_iou:.99}}])`,context);
   assert.equal(nodes.get('objects-legacy').hidden,true);

@@ -285,13 +285,14 @@ function renderObjects(data, rows) {
   $('objects-learned-figure').hidden=!sample?.learned_current_masks;
   draw('objects-learned',labels(sample?.learned_current_masks));
   const split=r=>r.objects?.metric_version===2;
+  const splitRows=rows.filter(split);
   const metric=key=>r=>split(r)?pct(r.objects?.[key]):null;
   const limits=Number.isFinite(threshold)?[{value:threshold,label:'Student residual activation threshold',color:'#e9b86c'}]:[];
-  chart('objects-iou',rows,[series('Before fitting',metric('observed_iou'),{color:colors[0]}),
+  chart('objects-iou',splitRows,[series('Before fitting',metric('observed_iou'),{color:colors[0]}),
     series('After fitting · same observations',metric('observed_post_iou'),{color:colors[2]})],100,limits);
-  chart('objects-one-step',rows,[series('Student input',metric('student_iou'),{color:colors[0]}),
+  chart('objects-one-step',splitRows,[series('Student input',metric('student_iou'),{color:colors[0]}),
     series('SAM input',metric('sam_iou'),{color:colors[2]}),series('Copy SAM · no action',metric('copy_iou'),{color:colors[3]})],100,limits);
-  chart('objects-three-step',rows,[series('Student input',metric('student_rollout_iou'),{color:colors[0]}),
+  chart('objects-three-step',splitRows,[series('Student input',metric('student_rollout_iou'),{color:colors[0]}),
     series('SAM input',metric('sam_rollout_iou'),{color:colors[2]}),series('Copy SAM · no action',metric('copy_rollout_iou'),{color:colors[3]})],100,limits);
   const legacy=key=>r=>!split(r)?pct(r.objects?.[key]):null;
   $('objects-legacy').hidden=!rows.some(r=>!split(r)&&['observed_iou','mean_iou','rollout_iou'].some(key=>Number.isFinite(r.objects?.[key])));
