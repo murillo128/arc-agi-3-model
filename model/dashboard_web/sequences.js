@@ -270,16 +270,17 @@ function draw(id, grid, mask) {
   }
 }
 function renderObjects(data, rows) {
-  const state=data.objects, sample=data.object_sample;
+  const state=data.objects, sample=renderObjectInspector(data.object_sample);
   $('objects-panel').hidden=!state;
   if(!state)return;
-  $('objects-status').textContent=`${state.active?'Object residual active':'Warm-up · visual residual disabled'} · ${number(state.total_updates??0,0)} updates · ${number(state.samples??0,0)} sampled transitions · teacher ${number(state.teacher?.seconds??0,1)} s total / ${number(state.teacher?.calls??0,0)} frames · ${number(state.teacher?.cache_hits??0,0)} cache hits`;
-  $('objects-sample-info').textContent=sample?`${sample.game} · step ${sample.step} · first auxiliary fit pass, batch ${sample.batch}`:'Waiting for usable teacher masks.';
+  const threshold=pct(state.config?.activation_iou);
+  $('objects-status').textContent=`${state.active?'Object residual active':'Warm-up · visual residual disabled'} · ${number(state.total_updates??0,0)} updates · ${number(state.samples??0,0)} sampled transitions · teacher ${number(state.teacher?.seconds??0,1)} s total / ${number(state.teacher?.calls??0,0)} frames · ${number(state.teacher?.cache_hits??0,0)} cache hits${Number.isFinite(threshold)?` · activation requires current, one-step and three-step agreement ≥ ${number(threshold,1)}%, plus configured warm-up and activation enabled`:''}`;
   const labels=grid=>grid?.map(row=>row.map(value=>value===0?16:value));
   draw('objects-before',sample?.before);draw('objects-actual',sample?.actual);
   draw('objects-observed',labels(sample?.observed_masks));draw('objects-target',labels(sample?.actual_masks));
   draw('objects-predicted',labels(sample?.predicted_masks));
-  chart('objects-iou',rows,[series('Current',r=>pct(r.objects?.observed_iou)),series('One step',r=>pct(r.objects?.mean_iou)),series('Three steps',r=>pct(r.objects?.rollout_iou))]);
+  chart('objects-iou',rows,[series('Current student',r=>pct(r.objects?.observed_iou)),series('One-step prediction',r=>pct(r.objects?.mean_iou)),series('Three-step prediction',r=>pct(r.objects?.rollout_iou))],100,
+    Number.isFinite(threshold)?[{value:threshold,label:'Residual activation threshold',color:'#e9b86c'}]:[]);
   chart('objects-loss',rows,[series('Object objective',r=>r.objects?.loss)]);
 }
 function renderPlanning(data, rows, all) {

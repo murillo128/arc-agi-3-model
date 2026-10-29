@@ -1,5 +1,5 @@
 """Sparse teacher supervision on normal training sessions; never held-out data."""
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import math
 import random
 import time
@@ -10,6 +10,7 @@ import torch
 from .game_sequences import EncodedSessions, memory_inputs
 from .learning import visual_delta_loss
 from .object_dynamics import mask_loss, probabilities
+from .object_preview import instance_preview
 
 
 @dataclass(frozen=True)
@@ -162,7 +163,8 @@ class ObjectTrainer:
                         observed_loss, current_measure = mask_loss(current, masks, confidence)
                         # Both teacher-conditioned and student-conditioned dynamics
                         # are trained. During imagination only predictions survive.
-                        source = masks if rng.random() < .5 else probabilities(current)
+                        conditioning = 'sam' if rng.random() < .5 else 'student'
+                        source = masks if conditioning == 'sam' else probabilities(current)
                         actions = [e.actions([s.action]) for s in window]
                         future = object_rollout(e, z, h, actions, geometry, source, warmup=not bool(head.gain))
                         predicted, _, prediction = future[0]
@@ -193,11 +195,14 @@ class ObjectTrainer:
                         metrics['rollout_matched'] += rollout_measure['matched']
                         if rollout_measure['mean_iou'] is not None: rollouts.append(rollout_measure['mean_iou'])
                     if sample is None:
+                        predicted_masks = prediction[0][0].detach().sigmoid().float().cpu().numpy()
+                        predicted_presence = prediction[1][0].detach().sigmoid().float().cpu().numpy()
                         sample = dict(game=sessions[i].game, step=t, source='frozen SAM2 pseudo-labels',
+                            action=asdict(window[0].action), conditioning=conditioning,
                             before=window[0].before.final.tolist(), actual=window[0].after.final.tolist(),
                             observed_masks=label_image(before.masks), actual_masks=label_image(after.masks),
-                            predicted_masks=label_image(prediction[0][0].detach().sigmoid().float().cpu().numpy(),
-                                prediction[1][0].detach().sigmoid().float().cpu().numpy()))
+                            predicted_masks=label_image(predicted_masks, predicted_presence),
+                            instances=instance_preview(before, after, predicted_masks, predicted_presence))
             mean_iou = sum(ious)/len(ious) if ious else None
             observed_iou = sum(observed)/len(observed) if observed else None
             rollout_iou = sum(rollouts)/len(rollouts) if rollouts else None

@@ -46,6 +46,7 @@ const text = id => nodes.get(id).textContent;
   vm.runInContext(fs.readFileSync(path.join(assets,'chart-tools.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'sequence-trends.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets,'trajectory-viewer.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(assets,'object-inspector.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(assets, 'sequences.js'), 'utf8'), context);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(text('status'), 'Paused');
@@ -55,15 +56,16 @@ const text = id => nodes.get(id).textContent;
   assert.equal(nodes.get('goal-details').hidden,true);
   assert.equal(nodes.get('path-details').hidden,true);
   assert.equal(nodes.get('objects-panel').hidden,true);
-  vm.runInContext(`renderObjects({objects:{active:false,total_updates:4,samples:2,teacher:{calls:3,seconds:10,cache_hits:2}},
+  vm.runInContext(`renderObjects({objects:{active:false,total_updates:4,samples:2,config:{activation_iou:.55},teacher:{calls:3,seconds:10,cache_hits:2}},
     object_sample:{game:'mc01-v1',batch:7,step:1,before:[[0,1]],actual:[[1,0]],
       observed_masks:[[1,0]],actual_masks:[[0,1]],predicted_masks:[[0,2]]}},
     [{batch:7,objects:{mean_iou:.5,rollout_iou:.25,observed_iou:.75,loss:2}}])`,context);
   assert.equal(nodes.get('objects-panel').hidden,false);
   assert.match(text('objects-status'),/Warm-up · visual residual disabled/);
+  assert.match(text('objects-status'),/current, one-step and three-step agreement ≥ 55%/);
   assert.match(text('objects-sample-info'),/batch 7/);
   assert.deepEqual(nodes.get('objects-iou-legend').children.map(n=>n.textContent),
-    ['Current: 75','One step: 50','Three steps: 25']);
+    ['Current student: 75','One-step prediction: 50','Three-step prediction: 25','┄ Residual activation threshold: 55 %']);
   assert.equal(nodes.get('objects-predicted').context.pixels.at(-1).color,'#999999');
   vm.runInContext('renderObjects({},[])',context);
   assert.equal(nodes.get('objects-panel').hidden,true);
@@ -542,7 +544,7 @@ const text = id => nodes.get(id).textContent;
       location:{hash,search:'?archive=1',origin:'https://dashboard.test'},
       document:{getElementById:id=>bookmarkNodes.get(id),createElement:element,createElementNS:element},
       fetch:async()=>({ok:true,json:async()=>({sequences:{status:'waiting'},history_available:true})})});
-    for(const file of ['chart-tools.js','sequence-trends.js','trajectory-viewer.js','sequences.js'])
+    for(const file of ['chart-tools.js','sequence-trends.js','trajectory-viewer.js','object-inspector.js','sequences.js'])
       vm.runInContext(fs.readFileSync(path.join(assets,file),'utf8'),bookmark);
     await new Promise(resolve=>setImmediate(resolve));
     const section=hash.slice(1)||'path';
