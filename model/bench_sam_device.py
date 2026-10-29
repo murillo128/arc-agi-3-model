@@ -33,7 +33,15 @@ def main():
     device = torch.device(args.device)
     baseline = 0
     if device.type == 'cuda':
+        # cuBLAS retains its own workspace after the first GEMM. Warm it before
+        # the baseline so shared runtime memory is not mistaken for a SAM leak.
+        with torch.inference_mode():
+            warm = torch.ones(16, 16, device=device)
+            product = warm @ warm
+            del product, warm
         torch.cuda.synchronize(device)
+        with torch.cuda.device(device):
+            torch.cuda.empty_cache()
         baseline = torch.cuda.memory_allocated(device)
         torch.cuda.reset_peak_memory_stats(device)  # This dedicated probe only.
     teacher = SAM2Segmenter(config['checkpoint'], device=str(device),
