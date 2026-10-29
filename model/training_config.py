@@ -79,7 +79,7 @@ class TrainingPlan:
 
 def load_plan(path):
     path = Path(path).resolve()
-    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration', 'sequence_game_weights', 'sequence_planning'}, 'training config')
+    value = object_keys(read_json(path), {'version', 'phase', 'init_config', 'settings', 'thresholds', 'sdk', 'curriculum', 'sequence', 'sequence_control', 'sequence_exploration', 'sequence_game_weights', 'sequence_planning', 'sequence_objects'}, 'training config')
     if type(value.get('version')) is not int or value['version'] != 1:
         raise ValueError('Training configuration version must be 1')
     phase = value.get('phase', 'development')
@@ -176,6 +176,16 @@ def load_plan(path):
     if 'sequence' in value:
         payload['sequence'] = asdict(SequenceConfig(**object_keys(
             value['sequence'], SequenceConfig.__dataclass_fields__, 'sequence')))
+    if 'sequence_objects' in value:
+        from .object_training import ObjectTrainingConfig
+        if 'sequence' not in value or not initial['network'].get('object_slots'):
+            raise ValueError('sequence_objects requires sequences and an object-enabled network')
+        objects = ObjectTrainingConfig(**object_keys(value['sequence_objects'],
+            ObjectTrainingConfig.__dataclass_fields__, 'sequence_objects'))
+        payload['sequence_objects'] = asdict(objects)
+        payload['sequence_objects']['checkpoint'] = str((Path(path).resolve().parent / objects.checkpoint).resolve())
+    elif initial['network'].get('object_slots'):
+        raise ValueError('Object-enabled sequence training requires sequence_objects supervision')
     if 'sequence_game_weights' in value:
         from .sequence_sampling import game_weights
         if payload.get('sequence', {}).get('game_schedule') != 'shuffled':

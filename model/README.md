@@ -1,5 +1,11 @@
 # Modelo residual latente
 
+Optional [pretrained segmentation and object dynamics](../docs/object-dynamics.md)
+adds real-frame SAM pseudo-labels, object-directed clicks and one/three-step mask
+prediction. It supports copy-only migration, preserves existing weights and Adam
+states, and leaves visual fusion disabled until explicitly requested and warmed up.
+The linked audit records its current limits; production training stays unchanged.
+
 ## Frozen reconstruction audit
 
 `model.reconstruction_audit` measures encoder/decoder reconstruction separately

@@ -91,7 +91,8 @@ def build_notebook(seed: int = 0, max_actions: int | None = None, *, accelerator
         # Versioned Python only. The checkpoint remains a separately mounted
         # offline asset; no host path, training data or weights enter the notebook.
         names = ['__init__', 'checkpoint', 'config', 'data', 'learning', 'networks',
-                 'metrics', 'planning', 'goal_observation', 'path_planning', 'spatial_adapter']
+                 'metrics', 'planning', 'goal_observation', 'path_planning', 'spatial_adapter',
+                 'object_dynamics', 'segmentation']
         if adaptive:
             names += ['adaptation', 'adaptation_convergence', 'adaptation_heads', 'adaptation_checkpoint',
                       'adaptation_smoke', 'lora', 'sequence_exploration']

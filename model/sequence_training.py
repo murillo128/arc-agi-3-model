@@ -415,6 +415,17 @@ def run(args):
         control = (SequencePhaseControl(plan.stages, plan.settings,
             SequenceControlConfig(**plan.payload['sequence_control'])) if 'sequence_control' in plan.payload else None)
         explorer = ChangeExplorer(exploration) if exploration.policy == 'learned' else None
+        objects = None
+        if 'sequence_objects' in plan.payload:
+            from .segmentation import SAM2Segmenter
+            from .object_training import ObjectTrainer, ObjectTrainingConfig
+            object_config = ObjectTrainingConfig(**plan.payload['sequence_objects'])
+            provider = SAM2Segmenter(object_config.checkpoint, device=object_config.device,
+                capacity=engine.model.config.object_slots, cache_frames=object_config.cache_frames,
+                points_per_side=object_config.points_per_side)
+            objects = ObjectTrainer(engine, object_config, provider)
+            if explorer is not None:
+                explorer.segmenter = provider
         from .sequence_planning import SequencePlanning, SequencePlanningConfig
         planning = (SequencePlanning(engine, SequencePlanningConfig(**plan.payload['sequence_planning']),
                     explorer=explorer, seed=plan.settings['seed']) if 'sequence_planning' in plan.payload else None)
@@ -554,6 +565,8 @@ def run(args):
                     telemetry.start_batch(batches + 1)
                 if planning is not None:
                     planning.begin_capture(trajectories, batch=batches+1)
+                if objects is not None:
+                    objects.begin_collection()
                 sessions = collect_batch(factories, config, batches, plan.settings['seed'],
                                          exploration=exploration, explorer=explorer,
                                          game_weights=report['game_weights'], sampling_start_batch=sampling_start_batch, planning=planning)
@@ -597,6 +610,13 @@ def run(args):
                     synchronize(engine)
                     measured['evaluation_seconds'] = time.perf_counter() - evaluation_start
                 head_start = time.perf_counter()
+                if objects is not None and (control is None or control.phase == 'predictor'):
+                    measured['objects'], object_sample = objects.fit(learner, sessions)
+                    measured['object_seconds'] = measured['objects']['seconds']
+                    report['objects'] = dict(config=plan.payload['sequence_objects'], **measured['objects'])
+                    if object_sample is not None:
+                        report['object_sample'] = dict(object_sample, batch=batches+1)
+                    head_start = time.perf_counter()
                 head_metrics = explorer.fit(sessions) if explorer is not None else {}
                 measured['exploration_seconds'] = time.perf_counter() - head_start if explorer is not None else 0.
                 interaction_rows = [interaction_counts(session) for session in sessions]

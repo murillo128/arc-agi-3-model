@@ -161,6 +161,9 @@ class Dynamics(nn.Module):
             from .spatial_adapter import RotationAdapter
             # Append parameters so existing optimizer order remains unchanged.
             self.rotation_adapter = RotationAdapter(c)
+        if c.object_slots:
+            from .object_dynamics import ObjectDynamics
+            self.objects = ObjectDynamics(c)
 
     def advance(self, z, h, action):
         a = F.gelu(self.action_norm(self.action_embedding(action)))
@@ -168,7 +171,7 @@ class Dynamics(nn.Module):
         # path retains all spatial tokens unchanged.
         return self.cell(torch.cat((z.mean(1), a), -1), h), a
 
-    def forward(self, z, h, action, height=None, width=None):
+    def forward(self, z, h, action, height=None, width=None, *, objects=None, return_objects=False):
         h_next, a = self.advance(z, h, action)
         memory, action_token = self.memory_token(h_next), self.action_token(a)
         spatial = self.state_token(z) + self.roles[0]
@@ -194,7 +197,14 @@ class Dynamics(nn.Module):
             correction = (checkpoint(self.rotation_adapter, *args, use_reentrant=False)
                           if self.training else self.rotation_adapter(*args))
             delta = delta + self.config.residual_scale * correction
-        return z.float() + delta, h_next.float(), delta
+        segmentation = None
+        if self.config.object_slots:
+            if height is None or width is None:
+                raise ValueError('Object dynamics requires native frame geometry')
+            correction, segmentation = self.objects(z, h_next, action, height, width, objects)
+            delta = delta + self.config.residual_scale * correction
+        result = (z.float() + delta, h_next.float(), delta)
+        return (*result, segmentation) if return_objects else result
 
 
 class VisualDecoder(nn.Module):
@@ -248,6 +258,8 @@ class WorldModel(nn.Module):
         if config.rotation_adapter_width:
             nn.init.zeros_(self.dynamics.rotation_adapter.output.weight)
             nn.init.zeros_(self.dynamics.rotation_adapter.output.bias)
+        if config.object_slots:
+            self.dynamics.objects.reset_outputs()
 
     @staticmethod
     def _init(module):

@@ -54,6 +54,19 @@ const text = id => nodes.get(id).textContent;
   assert.equal(nodes.get('interaction-change-legend').children[0].textContent,'Changed actions %: —');
   assert.equal(nodes.get('goal-details').hidden,true);
   assert.equal(nodes.get('path-details').hidden,true);
+  assert.equal(nodes.get('objects-panel').hidden,true);
+  vm.runInContext(`renderObjects({objects:{active:false,total_updates:4,samples:2,teacher:{calls:3,seconds:10,cache_hits:2}},
+    object_sample:{game:'mc01-v1',batch:7,step:1,before:[[0,1]],actual:[[1,0]],
+      observed_masks:[[1,0]],actual_masks:[[0,1]],predicted_masks:[[0,2]]}},
+    [{batch:7,objects:{mean_iou:.5,rollout_iou:.25,observed_iou:.75,loss:2}}])`,context);
+  assert.equal(nodes.get('objects-panel').hidden,false);
+  assert.match(text('objects-status'),/Warm-up · visual residual disabled/);
+  assert.match(text('objects-sample-info'),/batch 7/);
+  assert.deepEqual(nodes.get('objects-iou-legend').children.map(n=>n.textContent),
+    ['Current: 75','One step: 50','Three steps: 25']);
+  assert.equal(nodes.get('objects-predicted').context.pixels.at(-1).color,'#999999');
+  vm.runInContext('renderObjects({},[])',context);
+  assert.equal(nodes.get('objects-panel').hidden,true);
   report.planning={goal_updates:16,path_updates:12,learned_probability:.125,
     config:{exploration:.25,horizon:2,beam:4}};
   report.history[0].planning={identity:'0',teacher_actions:8,episodes:2,censored:1,

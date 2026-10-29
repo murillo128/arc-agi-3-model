@@ -19,7 +19,7 @@ from safetensors.torch import save_file
 
 
 PRODUCER = 'arc3-lmex-sync'
-EXPORT_VERSION = 2  # Sequence goal/path tensors were absent from older packages.
+EXPORT_VERSION = 3  # Optional object tensors are bound for enabled checkpoints.
 
 
 def planning_export(saved, network):
@@ -170,7 +170,12 @@ def sync(checkpoint, architecture, model_root, model_id='arc3-delta-world-model'
                 config = json.loads((previous / 'config.json').read_text())
 
             (stage / 'config.json').write_text(json.dumps(config, indent=2, allow_nan=False) + '\n')
-            (stage / 'architecture.json').write_bytes(raw)
+            if config['network'].get('object_slots'):
+                from .object_architecture import bind_objects
+                expanded = bind_objects(json.loads(raw), config['network'])
+                (stage / 'architecture.json').write_text(json.dumps(expanded, indent=2) + '\n')
+            else:
+                (stage / 'architecture.json').write_bytes(raw)
             manifest = {'producer': PRODUCER, 'export_version': EXPORT_VERSION, 'checkpoint_stamp': source_stamp,
                         'architecture_sha256': digest}
             (stage / '.sync.json').write_text(json.dumps(manifest) + '\n')

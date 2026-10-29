@@ -1,4 +1,5 @@
 """Official transport commit boundary and isolated adaptive notebook execution."""
+from copy import deepcopy
 from dataclasses import asdict, replace
 import json
 import os
@@ -286,6 +287,127 @@ print(json.dumps(dict(id=action.id, data=action.data, h=policy.state.h.tolist())
                 with patch.object(subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'smoke')):
                     with self.assertRaises(subprocess.CalledProcessError):
                         exec(run_cell, {'source_root': package, 'sys': sys, 'subprocess': subprocess})
+            finally:
+                shutil.rmtree(package)
+
+    def test_generated_package_loads_legacy_and_active_object_bases_without_teacher(self):
+        from model.data import Action as ModelAction
+        from model.learning import Engine
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            asset = portable_spatial_base(root)
+            original = torch.load(asset, weights_only=True)
+            notebook = build_notebook(agent_checkpoint='/kaggle/input/probe/base.pt', adaptive=True)
+            scope = {}
+            exec(notebook['cells'][2]['source'], scope)
+            package = scope['source_root']
+            script = '''import json, socket, sys
+from pathlib import Path
+sys.meta_path = [finder for finder in sys.meta_path
+                 if not getattr(finder, '__module__', '').startswith('__editable__')]
+class NoTeacher:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'sam2', 'torchvision'}:
+            raise AssertionError('optional teacher dependency imported: ' + fullname)
+sys.meta_path.insert(0, NoTeacher())
+sys.path.insert(0, sys.argv[1])
+def offline(*args, **kwargs):
+    raise AssertionError('network forbidden')
+socket.socket.connect = offline
+socket.create_connection = offline
+import torch
+torch.set_num_threads(2)
+from model import adaptation_checkpoint
+from model.data import Action
+assert Path(adaptation_checkpoint.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
+engine = adaptation_checkpoint.load(sys.argv[2]).engine
+z = torch.arange(4 * engine.model.config.latent).reshape(1, 4, -1).float() / 100
+h = torch.zeros(1, engine.model.config.memory)
+with torch.no_grad():
+    prediction = engine.predict(z, h, engine.actions([Action(4)]), 8, 8)
+    context = engine.planning_features(z, 8, 8)
+objects = getattr(engine.model.dynamics, 'objects', None)
+adaptive_action = None
+if objects is not None:
+    import numpy as np
+    from model import adaptation
+    from model.data import Observation
+    assert Path(adaptation.__file__).resolve().is_relative_to(Path(sys.argv[1]).resolve())
+    config = adaptation.AdaptationConfig(stopping='steps', exploration=1.,
+        representation_steps=0, predictor_steps=0, goal_steps=0, path_steps=0)
+    policy = adaptation.load(sys.argv[2], config=config, seed=23)
+    observed = np.zeros((1, 8, 8), dtype=np.uint8)
+    observed[0, 2:4, 1:3] = 9
+    consumed = []
+    def record_goal(module, args, output):
+        consumed.append((args[0].detach().clone(), tuple(value.detach().clone() for value in output)))
+    handle = policy.runtime.goal.register_forward_hook(record_goal)
+    try:
+        adaptive_action = policy.choose_action(Observation(observed, (4,), 'NOT_FINISHED', 0, 5)).id
+    finally:
+        handle.remove()
+    assert len(consumed) == 1
+    state = policy.state
+    with policy.runtime.router.activate(policy.bank), torch.no_grad():
+        enriched = policy.runtime.engine.planning_features(state.z[None], *state.geometry)
+        expected_goal = policy.runtime.goal(enriched, state.h, *state.geometry)
+        raw_goal = policy.runtime.goal(state.z[None], state.h, *state.geometry)
+    assert any(not torch.equal(a, b) for a, b in zip(raw_goal, expected_goal)), 'Inactive Goal fixture'
+    torch.testing.assert_close(consumed[0][0], enriched, rtol=0, atol=0)
+    for actual, expected in zip(consumed[0][1], expected_goal):
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+print(json.dumps(dict(prediction=[value.tolist() for value in prediction], context=context.tolist(),
+    slots=engine.model.config.object_slots, width=engine.model.config.object_width,
+    updates=int(objects.updates) if objects is not None else None,
+    updates_dtype=str(objects.updates.dtype) if objects is not None else None,
+    gain=float(objects.gain) if objects is not None else None, adaptive_action=adaptive_action)))
+'''
+            try:
+                for variant in ('legacy', 'objects'):
+                    with self.subTest(variant=variant):
+                        payload = deepcopy(original)
+                        config = NetworkConfig(**payload['world']['network'])
+                        if variant == 'objects':
+                            config = replace(config, object_slots=3, object_width=4)
+                        reference = WorldModel(config).eval()
+                        weights = reference.state_dict()
+                        weights.update(payload['world']['weights'])
+                        reference.load_state_dict(weights, strict=True)
+                        if variant == 'legacy':
+                            for field in ('object_slots', 'object_width'):
+                                payload['world']['network'].pop(field)
+                        else:
+                            with torch.no_grad():
+                                reference.dynamics.objects.output.weight.fill_(.05)
+                                bias = reference.dynamics.objects.output.bias
+                                bias.copy_(torch.arange(bias.numel()).float() * .25)
+                                reference.dynamics.objects.gain.fill_(1.)
+                                reference.dynamics.objects.updates.fill_(7)
+                            payload['world']['network'] = asdict(config)
+                            payload['world']['weights'] = reference.state_dict()
+                        torch.save(payload, asset)
+                        engine = Engine(reference, TrainConfig(**payload['world']['learning']))
+                        z = torch.arange(4 * config.latent).reshape(1, 4, -1).float() / 100
+                        h = torch.zeros(1, config.memory)
+                        with torch.no_grad():
+                            expected = engine.predict(z, h, engine.actions([ModelAction(4)]), 8, 8)
+                            context = engine.planning_features(z, 8, 8)
+                        if variant == 'objects':
+                            self.assertFalse(torch.equal(context, z), 'Learned object correction must be active')
+                        process = subprocess.run([sys.executable, '-I', '-c', script, str(package), str(asset)],
+                                                 cwd=root, capture_output=True, text=True, timeout=60)
+                        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                        actual = json.loads(process.stdout)
+                        for wanted, received in zip(expected, actual['prediction']):
+                            torch.testing.assert_close(torch.tensor(received), wanted, rtol=0, atol=0)
+                        torch.testing.assert_close(torch.tensor(actual['context']), context, rtol=0, atol=0)
+                        self.assertEqual(actual['slots'], config.object_slots)
+                        self.assertEqual(actual['width'], config.object_width)
+                        self.assertEqual(actual['updates'], 7 if variant == 'objects' else None)
+                        self.assertEqual(actual['updates_dtype'], 'torch.int64' if variant == 'objects' else None)
+                        self.assertEqual(actual['gain'], 1. if variant == 'objects' else None)
+                        self.assertEqual(actual['adaptive_action'], 4 if variant == 'objects' else None)
             finally:
                 shutil.rmtree(package)
 

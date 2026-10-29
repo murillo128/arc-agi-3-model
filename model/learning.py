@@ -83,6 +83,7 @@ class Engine:
         self.fp8_layers = 0
         self._latent_cache_epoch = 0
         self._latent_caches = weakref.WeakSet()
+        self.segmenter = None
         if fp8:
             if self.device.type != 'cuda' or torch.cuda.get_device_capability(self.device) < (8, 9):
                 raise ValueError('FP8 requires CUDA compute capability >= 8.9')
@@ -121,6 +122,27 @@ class Engine:
 
     def actions(self, actions):
         return torch.tensor([a.features() for a in actions], device=self.device)
+
+    def object_masks(self, z, height, width, observation=None):
+        if not self.model.config.object_slots:
+            return None
+        if observation is not None and self.segmenter is not None:
+            labels = self.segmenter.segment(observation.final)
+            if labels is not None and len(labels.masks):
+                masks = torch.zeros(len(z), self.model.config.object_slots, height, width, device=self.device)
+                count = min(masks.shape[1], len(labels.masks))
+                masks[:, :count] = torch.tensor(np.array(labels.masks[:count]), device=self.device)
+                return masks
+        from .object_dynamics import probabilities
+        return probabilities(self.model.dynamics.objects.observe(z, height, width))
+
+    def predict_objects(self, z, h, action, height, width, masks):
+        return self.model.dynamics(z, h, action, height, width, objects=masks, return_objects=True)
+
+    def planning_features(self, z, height, width, masks=None):
+        if not self.model.config.object_slots:
+            return z
+        return z + self.model.dynamics.objects.context(z, height, width, masks)
 
     def encode(self, observations, training=False, prepared=None):
         return self.model.encode(observations, self.spatial, self.config.frame_chunk,
